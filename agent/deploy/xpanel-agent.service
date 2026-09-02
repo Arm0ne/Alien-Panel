@@ -1,0 +1,21 @@
+[Unit]
+Description=X-Panel central management agent
+After=network-online.target xpanel.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=xpanel-agent
+Group=xpanel-agent
+ExecStart=/usr/local/bin/xpanel-agent --config /etc/xpanel-agent/agent.yaml
+Restart=on-failure
+RestartSec=10s
+EnvironmentFile=-/etc/xpanel-agent/agent.env
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/xpanel-agent
+
+[Install]
+WantedBy=multi-user.target

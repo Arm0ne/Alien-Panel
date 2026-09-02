@@ -33,11 +33,12 @@
 - 已实现 Dashboard、用户、节点、线路、出口 IP、财务和同步事件只读 API；
 - 已固定统一响应 `{ code, msg, data }`、Bearer Session、过期码 `9999` 和未授权码 `8888`；
 - 已加入 OpenAPI 草稿、启动说明和认证/列表集成测试；
+- Agent 基础工程已建立：YAML/环境变量配置、X-Panel Session Cookie 登录、401 单次重登录、失败退避、中央 Bearer 客户端、请求 ID/时间戳和 systemd 部署文件；
 - Agent 注册、心跳、完整同步和写 API 仍未实现。
 
 下一步优先级：
 
-1. Agent 窗口实现 X-Panel Session 登录、版本探测和只读同步；
+1. Agent 窗口实现 Inbound/Client/状态/累计流量映射、版本探测和只读同步；
 2. 前端窗口基于同一契约补齐用户详情、节点详情及线路/财务/事件写操作；
 3. 联调窗口用脱敏节点响应验证字段映射、到期状态和流量累计口径；
 4. 后端窗口补齐 Agent 接收、同步幂等和快照落库。
@@ -147,7 +148,7 @@
 |---|---|---|---|---|
 | W3-01 | 初始化 Agent Go 工程 | Agent 开发 | W1-06 | 静态二进制 |
 | W3-02 | 实现 YAML 配置和环境变量覆盖 | Agent 开发 | W3-01 | 配置加载器 |
-| W3-03 | 实现 HTTPS 客户端、Token 和请求签名 | Agent 开发 | W2-04 | Central client |
+| W3-03 | 实现 HTTPS 客户端、Token、时间戳和请求 ID | Agent 开发 | W2-04 | Central client |
 | W3-04 | 实现 X-Panel Session 登录 | Agent 开发 | W1-04 | XPanel client |
 | W3-05 | 实现 401 重新登录和退避 | Agent 开发 | W3-04 | 会话管理器 |
 | W3-06 | 建立不同 Base Path 的测试夹具 | 测试/后端 | W1-04 | Fixture 数据 |
