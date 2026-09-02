@@ -578,11 +578,11 @@ POST /agent/v1/sync
 
 一次同步未发现 Inbound 时：
 
-1. 设置 missing_since；
-2. 写入 inbound_missing 事件；
-3. 不立即删除业务用户和历史数据；
-4. 连续三次同步仍未发现时标记为 archived；
-5. 管理员确认后才执行逻辑删除。
+1. 仅在成功的完整快照中设置 `missing_since`、增加 `missing_sync_count`；首次写入 `inbound_missing` 事件；
+2. 不立即删除业务用户和历史数据；
+3. 连续三次成功完整快照仍未发现时，写入 `inbound_archived` 事件并在中央库标记为 archived；
+4. 同步失败、部分失败或节点离线均不增加缺失计数；重新出现时清除缺失时间、计数和中央归档标记；
+5. 归档仅影响中央展示状态，不会修改 X-Panel，也不会物理删除中央的业务关联、Client 或历史流量快照。
 
 ## 9. X-Panel 采集适配
 

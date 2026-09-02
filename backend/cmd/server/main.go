@@ -40,6 +40,10 @@ func main() {
 		logger.Error("initialize http server", "error", err)
 		os.Exit(1)
 	}
+	maintenanceContext, stopMaintenance := context.WithCancel(context.Background())
+	defer stopMaintenance()
+	go server.RunMaintenance(maintenanceContext, cfg.MaintenanceInterval)
+
 	httpServer := &http.Server{
 		Addr:              cfg.ListenAddress,
 		Handler:           server.Handler(),
@@ -60,6 +64,7 @@ func main() {
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
 	<-stop
+	stopMaintenance()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()

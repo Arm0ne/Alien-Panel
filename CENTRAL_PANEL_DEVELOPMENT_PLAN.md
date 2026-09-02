@@ -37,14 +37,16 @@
 - Agent 采集侧已建立：Inbound/Client 字段兼容映射、`up/down/all_time` 累计流量读取、节点状态解析、标准化 `config_hash`、心跳和完整同步 payload，以及按 `sync_interval` 运行的可取消任务循环；
 - 中央侧 Agent 注册、Bearer 节点认证、心跳接收、完整同步事务、Inbound/Client/流量快照落库和 `sync_id` 幂等已实现；
 - 已实现累计流量回退检测与 `traffic_reset` 事件、按相邻快照差值计算日/月流量，以及查询时的用户到期和节点离线状态刷新；
-- 业务写 API、独立后台任务调度、Inbound 缺失三次归档和更细的流量核对脚本仍未实现。
+- 已实现独立后台任务，服务启动即刷新、随后按配置周期更新用户到期状态和节点在线状态；
+- 已实现 Inbound 连续三次成功完整同步缺失才归档的保护机制，并写入 `inbound_missing`、`inbound_archived` 事件；归档保留中央业务关联、Client 与历史快照；
+- 已实现只读 `traffic-check` 命令，按 Dashboard 同一快照算法核对指定时间段的流量和重置基线。
 
 下一步优先级：
 
-1. 联调窗口用脱敏节点响应验证不同 X-Panel 版本的字段映射、到期状态和流量累计口径；
-2. 后端窗口补齐独立后台任务、Inbound 缺失三次归档和流量核对脚本；
+1. 收集真实但脱敏的 X-Panel `/panel/api/inbounds/list`、`/panel/api/server/status` 响应，用测试夹具验证不同版本的字段映射；
+2. 使用这些夹具扩展 Agent 适配器和兼容性测试，确认 Inbound/Client、到期时间和累计流量的实际口径；
 3. 前端窗口基于同一契约补齐用户详情、节点详情及线路/财务/事件写操作；
-4. 运维窗口在测试节点执行 Agent systemd 灰度安装和重启恢复演练。
+4. 在有公网 IP 的测试环境部署中央服务和 Agent，执行 systemd 灰度、重启恢复、真实流量核对与 HTTPS 连通性测试。
 
 ## 2. 里程碑总览
 

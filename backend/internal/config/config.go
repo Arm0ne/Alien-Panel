@@ -15,6 +15,7 @@ type Config struct {
 	AdminPassword          string
 	AgentRegistrationToken string
 	SessionTTL             time.Duration
+	MaintenanceInterval    time.Duration
 	CorsOrigins            []string
 	AllowInsecureCookie    bool
 }
@@ -27,6 +28,7 @@ func Load() (Config, error) {
 		AdminPassword:          os.Getenv("XPANEL_ADMIN_PASSWORD"),
 		AgentRegistrationToken: os.Getenv("XPANEL_AGENT_REGISTRATION_TOKEN"),
 		SessionTTL:             durationOrDefault("XPANEL_SESSION_TTL", 24*time.Hour),
+		MaintenanceInterval:    durationOrDefault("XPANEL_MAINTENANCE_INTERVAL", time.Minute),
 		CorsOrigins:            splitCSV(envOrDefault("XPANEL_CORS_ORIGINS", "http://localhost:9527,http://127.0.0.1:9527")),
 		AllowInsecureCookie:    boolOrDefault("XPANEL_ALLOW_INSECURE_COOKIE", true),
 	}

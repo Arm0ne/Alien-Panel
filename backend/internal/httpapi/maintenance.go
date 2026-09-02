@@ -1,11 +1,38 @@
 package httpapi
 
-import "time"
+import (
+	"context"
+	"time"
+)
 
 const (
-	userExpiringWindow = 7 * 24 * time.Hour
-	nodeOfflineAfter   = 5 * time.Minute
+	userExpiringWindow         = 7 * 24 * time.Hour
+	nodeOfflineAfter           = 5 * time.Minute
+	missingInboundArchiveAfter = 3
 )
+
+// RunMaintenance keeps time-based operational states current even when no
+// administrator is opening dashboard or list pages. It never removes data;
+// Inbound archival is handled transactionally during a successful node sync.
+func (s *Server) RunMaintenance(ctx context.Context, interval time.Duration) {
+	if interval <= 0 {
+		interval = time.Minute
+	}
+	run := func() {
+		s.refreshOperationalStatuses(time.Now().UTC())
+	}
+	run()
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			run()
+		}
+	}
+}
 
 func (s *Server) refreshOperationalStatuses(now time.Time) {
 	nowText := now.UTC().Format(time.RFC3339Nano)

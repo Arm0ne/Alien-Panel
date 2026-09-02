@@ -7,3 +7,4 @@
 /backend/*.db-shm
 /backend/*.db-wal
 /backend/*.exe
+/backend/*.log

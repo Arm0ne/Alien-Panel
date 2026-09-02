@@ -213,9 +213,9 @@ func (s *Server) agentSync(w http.ResponseWriter, r *http.Request) {
 	for _, inbound := range payload.Inbounds {
 		remoteInboundID := strconv.FormatInt(inbound.RemoteID, 10)
 		expiry := epochString(inbound.ExpiryTime)
-		_, err := tx.Exec(`INSERT INTO inbounds (id, node_id, remote_inbound_id, tag, remark, protocol, port, listen, enable, expiry_time, up, down, all_time, client_count, config_hash, first_seen_at, last_seen_at, missing_since, deleted_at)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL)
-ON CONFLICT(node_id, remote_inbound_id) DO UPDATE SET tag = excluded.tag, remark = excluded.remark, protocol = excluded.protocol, port = excluded.port, listen = excluded.listen, enable = excluded.enable, expiry_time = excluded.expiry_time, up = excluded.up, down = excluded.down, all_time = excluded.all_time, client_count = excluded.client_count, config_hash = excluded.config_hash, last_seen_at = excluded.last_seen_at, missing_since = NULL, deleted_at = NULL`,
+		_, err := tx.Exec(`INSERT INTO inbounds (id, node_id, remote_inbound_id, tag, remark, protocol, port, listen, enable, expiry_time, up, down, all_time, client_count, config_hash, first_seen_at, last_seen_at, missing_since, missing_sync_count, deleted_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, 0, NULL)
+ON CONFLICT(node_id, remote_inbound_id) DO UPDATE SET tag = excluded.tag, remark = excluded.remark, protocol = excluded.protocol, port = excluded.port, listen = excluded.listen, enable = excluded.enable, expiry_time = excluded.expiry_time, up = excluded.up, down = excluded.down, all_time = excluded.all_time, client_count = excluded.client_count, config_hash = excluded.config_hash, last_seen_at = excluded.last_seen_at, missing_since = NULL, missing_sync_count = 0, deleted_at = NULL`,
 			newID(), principal.NodeID, remoteInboundID, inbound.Tag, inbound.Remark, inbound.Protocol, inbound.Port, inbound.Listen, boolInt(inbound.Enable), expiry, inbound.Up, inbound.Down, inbound.AllTime, len(inbound.Clients), inbound.ConfigHash, observedAt.Format(time.RFC3339Nano), observedAt.Format(time.RFC3339Nano))
 		if err != nil {
 			s.failSync(w, tx, syncRunID, fmt.Errorf("upsert inbound %s: %w", remoteInboundID, err))
@@ -261,8 +261,8 @@ ON CONFLICT(node_id, inbound_id, remote_client_id) DO UPDATE SET email = exclude
 			return
 		}
 	}
-	if _, err := tx.Exec(`UPDATE inbounds SET missing_since = COALESCE(missing_since, ?) WHERE node_id = ? AND deleted_at IS NULL AND (last_seen_at IS NULL OR last_seen_at < ?)`, observedAt.Format(time.RFC3339Nano), principal.NodeID, observedAt.Format(time.RFC3339Nano)); err != nil {
-		s.failSync(w, tx, syncRunID, fmt.Errorf("mark missing inbounds: %w", err))
+	if err := s.markMissingAndArchiveInbounds(tx, principal.NodeID, observedAt); err != nil {
+		s.failSync(w, tx, syncRunID, fmt.Errorf("mark or archive missing inbounds: %w", err))
 		return
 	}
 	if _, err := tx.Exec(`UPDATE nodes SET health_status = ?, xpanel_version = CASE WHEN ? <> '' THEN ? ELSE xpanel_version END, xray_version = CASE WHEN ? <> '' THEN ? ELSE xray_version END, last_seen_at = ?, updated_at = ? WHERE id = ?`, healthStatus(payload.Status.XrayRunning), payload.Status.XPanelVersion, payload.Status.XPanelVersion, payload.Status.XrayVersion, payload.Status.XrayVersion, observedAt.Format(time.RFC3339Nano), now, principal.NodeID); err != nil {
@@ -278,6 +278,69 @@ ON CONFLICT(node_id, inbound_id, remote_client_id) DO UPDATE SET email = exclude
 		return
 	}
 	writeSuccess(w, map[string]any{"sync_id": payload.SyncID, "status": "success", "inboundCount": len(payload.Inbounds), "clientCount": clientCount, "idempotent": false})
+}
+
+func (s *Server) markMissingAndArchiveInbounds(tx *sql.Tx, nodeID string, observedAt time.Time) error {
+	observedAtText := observedAt.UTC().Format(time.RFC3339Nano)
+	rows, err := tx.Query(`SELECT id, remote_inbound_id, COALESCE(tag, ''), missing_sync_count
+FROM inbounds
+WHERE node_id = ? AND deleted_at IS NULL AND (last_seen_at IS NULL OR last_seen_at < ?)`, nodeID, observedAtText)
+	if err != nil {
+		return fmt.Errorf("find missing inbounds: %w", err)
+	}
+
+	type missingInbound struct {
+		id              string
+		remoteID        string
+		tag             string
+		oldMissingCount int
+	}
+	missing := make([]missingInbound, 0)
+	for rows.Next() {
+		var inbound missingInbound
+		if err := rows.Scan(&inbound.id, &inbound.remoteID, &inbound.tag, &inbound.oldMissingCount); err != nil {
+			_ = rows.Close()
+			return fmt.Errorf("read missing inbound: %w", err)
+		}
+		missing = append(missing, inbound)
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return fmt.Errorf("iterate missing inbounds: %w", err)
+	}
+	if err := rows.Close(); err != nil {
+		return fmt.Errorf("close missing inbound query: %w", err)
+	}
+
+	if _, err := tx.Exec(`UPDATE inbounds
+SET missing_since = COALESCE(missing_since, ?), missing_sync_count = missing_sync_count + 1
+WHERE node_id = ? AND deleted_at IS NULL AND (last_seen_at IS NULL OR last_seen_at < ?)`, observedAtText, nodeID, observedAtText); err != nil {
+		return fmt.Errorf("mark missing inbounds: %w", err)
+	}
+
+	for _, inbound := range missing {
+		label := inbound.remoteID
+		if inbound.tag != "" {
+			label += " (" + inbound.tag + ")"
+		}
+		if inbound.oldMissingCount == 0 {
+			if _, err := tx.Exec(`INSERT INTO node_events (id, node_id, event_type, severity, message, created_at) VALUES (?, ?, 'inbound_missing', 'warning', ?, ?)`,
+				newID(), nodeID, "Inbound "+label+" was absent from a successful snapshot; it will be archived only after three consecutive missing snapshots", observedAtText); err != nil {
+				return fmt.Errorf("record inbound missing %s: %w", inbound.remoteID, err)
+			}
+		}
+		if inbound.oldMissingCount+1 < missingInboundArchiveAfter {
+			continue
+		}
+		if _, err := tx.Exec(`UPDATE inbounds SET deleted_at = ? WHERE id = ? AND deleted_at IS NULL`, observedAtText, inbound.id); err != nil {
+			return fmt.Errorf("archive inbound %s: %w", inbound.remoteID, err)
+		}
+		if _, err := tx.Exec(`INSERT INTO node_events (id, node_id, event_type, severity, message, created_at) VALUES (?, ?, 'inbound_archived', 'warning', ?, ?)`,
+			newID(), nodeID, "Inbound "+label+" was absent from three consecutive successful snapshots and was archived; historical data was retained", observedAtText); err != nil {
+			return fmt.Errorf("record inbound archive %s: %w", inbound.remoteID, err)
+		}
+	}
+	return nil
 }
 
 func detectTrafficReset(tx *sql.Tx, inboundID string, observedAt time.Time, allTime int64) (bool, error) {

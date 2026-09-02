@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -187,6 +188,68 @@ func TestAgentRegistrationHeartbeatAndIdempotentSync(t *testing.T) {
 	}
 	if nodes != 1 || inbounds != 1 || clients != 1 || snapshots != 1 || resetSnapshots != 1 || resetEvents != 1 || syncRuns != 1 {
 		t.Fatalf("stored rows nodes=%d inbounds=%d clients=%d snapshots=%d resetSnapshots=%d resetEvents=%d syncRuns=%d", nodes, inbounds, clients, snapshots, resetSnapshots, resetEvents, syncRuns)
+	}
+}
+
+func TestInboundIsArchivedAfterThreeConsecutiveMissingSyncs(t *testing.T) {
+	server, database := testServer(t)
+	ts := httptest.NewServer(server.Handler())
+	defer ts.Close()
+
+	now := time.Now().UTC()
+	nowText := now.Format(time.RFC3339Nano)
+	if _, err := database.Exec(`INSERT INTO nodes (id, node_key, name, type, health_status, created_at, updated_at) VALUES ('archive-node', 'archive-node', 'Archive Node', 'relay', 'online', ?, ?)`, nowText, nowText); err != nil {
+		t.Fatalf("create node: %v", err)
+	}
+	const nodeToken = "archive-node-token"
+	if _, err := database.Exec(`INSERT INTO node_credentials (id, node_id, token_hash, last_rotated_at, created_at) VALUES ('archive-credential', 'archive-node', ?, ?, ?)`, hashToken(nodeToken), nowText, nowText); err != nil {
+		t.Fatalf("create node credential: %v", err)
+	}
+
+	initial := map[string]any{
+		"node_key": "archive-node", "sync_id": "archive-initial", "observed_at": nowText,
+		"status": map[string]any{"xray_running": true},
+		"inbounds": []any{map[string]any{
+			"remote_id": 88, "tag": "archive-me", "protocol": "vless", "port": 443,
+			"enable": true, "all_time": 100, "config_hash": "archive-hash", "clients": []any{},
+		}},
+	}
+	if result := doJSON(t, ts.Client(), http.MethodPost, ts.URL+"/api/agent/v1/sync", nodeToken, initial); result["code"] != successCode {
+		t.Fatalf("initial sync response = %#v", result)
+	}
+
+	for count := 1; count <= missingInboundArchiveAfter; count++ {
+		observedAt := now.Add(time.Duration(count) * time.Minute).Format(time.RFC3339Nano)
+		missing := map[string]any{
+			"node_key": "archive-node", "sync_id": "archive-missing-" + strconv.Itoa(count), "observed_at": observedAt,
+			"status": map[string]any{"xray_running": true}, "inbounds": []any{},
+		}
+		if result := doJSON(t, ts.Client(), http.MethodPost, ts.URL+"/api/agent/v1/sync", nodeToken, missing); result["code"] != successCode {
+			t.Fatalf("missing sync %d response = %#v", count, result)
+		}
+
+		var missingCount int
+		var deletedAt sql.NullString
+		if err := database.QueryRow(`SELECT missing_sync_count, deleted_at FROM inbounds WHERE node_id = 'archive-node' AND remote_inbound_id = '88'`).Scan(&missingCount, &deletedAt); err != nil {
+			t.Fatalf("read inbound after missing sync %d: %v", count, err)
+		}
+		if missingCount != count {
+			t.Fatalf("missing count after sync %d = %d", count, missingCount)
+		}
+		if count < missingInboundArchiveAfter && deletedAt.Valid {
+			t.Fatalf("inbound archived too early after %d missing syncs", count)
+		}
+		if count == missingInboundArchiveAfter && !deletedAt.Valid {
+			t.Fatalf("inbound was not archived after %d missing syncs", count)
+		}
+	}
+
+	var archivedEvents int
+	if err := database.QueryRow(`SELECT COUNT(*) FROM node_events WHERE node_id = 'archive-node' AND event_type = 'inbound_archived'`).Scan(&archivedEvents); err != nil {
+		t.Fatalf("count archive events: %v", err)
+	}
+	if archivedEvents != 1 {
+		t.Fatalf("archive event count = %d, want 1", archivedEvents)
 	}
 }
 
