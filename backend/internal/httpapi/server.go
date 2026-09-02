@@ -200,6 +200,7 @@ func (s *Server) getUserInfo(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) dashboard(w http.ResponseWriter, _ *http.Request) {
+	s.refreshOperationalStatuses(time.Now().UTC())
 	var response struct {
 		GeneratedAt string `json:"generatedAt"`
 		Nodes       struct {
@@ -239,13 +240,17 @@ func (s *Server) dashboard(w http.ResponseWriter, _ *http.Request) {
 			return
 		}
 	}
-	startToday := time.Now().UTC().Truncate(24 * time.Hour).Format(time.RFC3339Nano)
-	startMonth := time.Now().UTC().AddDate(0, 0, -30).Format(time.RFC3339Nano)
-	if err := s.db.QueryRow(`SELECT COALESCE(SUM(up + down), 0) FROM traffic_snapshots WHERE collected_at >= ?`, startToday).Scan(&response.Traffic.TodayBytes); err != nil {
+	now := time.Now().UTC()
+	startToday := now.Truncate(24 * time.Hour)
+	startMonth := now.AddDate(0, 0, -30)
+	var err error
+	response.Traffic.TodayBytes, err = s.trafficDeltaSince(startToday, now)
+	if err != nil {
 		writeFailure(w, http.StatusInternalServerError, internalErrorCode, "could not read traffic summary")
 		return
 	}
-	if err := s.db.QueryRow(`SELECT COALESCE(SUM(up + down), 0) FROM traffic_snapshots WHERE collected_at >= ?`, startMonth).Scan(&response.Traffic.MonthBytes); err != nil {
+	response.Traffic.MonthBytes, err = s.trafficDeltaSince(startMonth, now)
+	if err != nil {
 		writeFailure(w, http.StatusInternalServerError, internalErrorCode, "could not read traffic summary")
 		return
 	}
@@ -258,7 +263,37 @@ func (s *Server) dashboard(w http.ResponseWriter, _ *http.Request) {
 	writeSuccess(w, response)
 }
 
+func (s *Server) trafficDeltaSince(start, end time.Time) (int64, error) {
+	rows, err := s.db.Query(`SELECT t.all_time, t.reset_detected,
+COALESCE((SELECT p.all_time FROM traffic_snapshots p WHERE p.inbound_id = t.inbound_id AND p.collected_at < t.collected_at ORDER BY p.collected_at DESC LIMIT 1), -1)
+FROM traffic_snapshots t WHERE t.collected_at >= ? AND t.collected_at < ?`, start.Format(time.RFC3339Nano), end.Format(time.RFC3339Nano))
+	if err != nil {
+		return 0, err
+	}
+	defer rows.Close()
+	var total int64
+	for rows.Next() {
+		var current, previous int64
+		var resetDetected int
+		if err := rows.Scan(&current, &resetDetected, &previous); err != nil {
+			return 0, err
+		}
+		if resetDetected == 1 || current < previous {
+			total += current
+			continue
+		}
+		if previous < 0 {
+			// The first sample is a baseline; without an earlier point its
+			// period usage cannot be determined yet.
+			continue
+		}
+		total += current - previous
+	}
+	return total, rows.Err()
+}
+
 func (s *Server) users(w http.ResponseWriter, r *http.Request) {
+	s.refreshOperationalStatuses(time.Now().UTC())
 	query := parseListQuery(r)
 	where := []string{"1 = 1"}
 	args := make([]any, 0, 6)
@@ -313,6 +348,7 @@ ORDER BY CASE WHEN u.expiry_time IS NULL THEN 1 ELSE 0 END, u.expiry_time ASC LI
 }
 
 func (s *Server) nodes(w http.ResponseWriter, r *http.Request) {
+	s.refreshOperationalStatuses(time.Now().UTC())
 	query := parseListQuery(r)
 	where := []string{"1 = 1"}
 	args := make([]any, 0, 4)
@@ -478,6 +514,7 @@ type financeResponse struct {
 }
 
 func (s *Server) finance(w http.ResponseWriter, r *http.Request) {
+	s.refreshOperationalStatuses(time.Now().UTC())
 	period := r.URL.Query().Get("period")
 	if period == "" {
 		period = time.Now().UTC().Format("2006-01")

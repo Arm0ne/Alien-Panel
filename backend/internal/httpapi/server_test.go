@@ -161,21 +161,113 @@ func TestAgentRegistrationHeartbeatAndIdempotentSync(t *testing.T) {
 	if duplicate["code"] != successCode || duplicate["data"].(map[string]any)["idempotent"] != true {
 		t.Fatalf("duplicate sync response = %#v", duplicate)
 	}
+	payload["sync_id"] = "relay-agent-1-sync-002"
+	payload["observed_at"] = "2026-09-02T12:01:00Z"
+	payload["inbounds"].([]any)[0].(map[string]any)["up"] = 50
+	payload["inbounds"].([]any)[0].(map[string]any)["down"] = 50
+	payload["inbounds"].([]any)[0].(map[string]any)["all_time"] = 100
+	resetSync := doJSON(t, ts.Client(), http.MethodPost, ts.URL+"/api/agent/v1/sync", nodeToken, payload)
+	if resetSync["code"] != successCode {
+		t.Fatalf("reset sync response = %#v", resetSync)
+	}
 
-	var nodes, inbounds, clients, snapshots, syncRuns int
+	var nodes, inbounds, clients, snapshots, resetSnapshots, resetEvents, syncRuns int
 	for query, target := range map[string]*int{
 		"SELECT COUNT(*) FROM nodes WHERE node_key = 'relay-agent-1'":             &nodes,
 		"SELECT COUNT(*) FROM inbounds WHERE remote_inbound_id = '15'":            &inbounds,
 		"SELECT COUNT(*) FROM clients WHERE remote_client_id = 'client-a'":        &clients,
 		"SELECT COUNT(*) FROM traffic_snapshots WHERE all_time = 300":             &snapshots,
+		"SELECT COUNT(*) FROM traffic_snapshots WHERE reset_detected = 1":         &resetSnapshots,
+		"SELECT COUNT(*) FROM node_events WHERE event_type = 'traffic_reset'":     &resetEvents,
 		"SELECT COUNT(*) FROM sync_runs WHERE sync_id = 'relay-agent-1-sync-001'": &syncRuns,
 	} {
 		if err := database.QueryRow(query).Scan(target); err != nil {
 			t.Fatalf("query %q: %v", query, err)
 		}
 	}
-	if nodes != 1 || inbounds != 1 || clients != 1 || snapshots != 1 || syncRuns != 1 {
-		t.Fatalf("stored rows nodes=%d inbounds=%d clients=%d snapshots=%d syncRuns=%d", nodes, inbounds, clients, snapshots, syncRuns)
+	if nodes != 1 || inbounds != 1 || clients != 1 || snapshots != 1 || resetSnapshots != 1 || resetEvents != 1 || syncRuns != 1 {
+		t.Fatalf("stored rows nodes=%d inbounds=%d clients=%d snapshots=%d resetSnapshots=%d resetEvents=%d syncRuns=%d", nodes, inbounds, clients, snapshots, resetSnapshots, resetEvents, syncRuns)
+	}
+}
+
+func TestDashboardUsesTrafficDeltas(t *testing.T) {
+	server, database := testServer(t)
+	now := time.Now().UTC()
+	created := now.Format(time.RFC3339Nano)
+	first := now.Add(-2 * time.Hour).Format(time.RFC3339Nano)
+	second := now.Add(-time.Hour).Format(time.RFC3339Nano)
+	statements := []struct {
+		query string
+		args  []any
+	}{
+		{`INSERT INTO nodes (id, node_key, name, type, health_status, created_at, updated_at) VALUES ('traffic-node', 'traffic-node', 'Traffic Node', 'relay', 'online', ?, ?)`, []any{created, created}},
+		{`INSERT INTO inbounds (id, node_id, remote_inbound_id, tag, first_seen_at, last_seen_at) VALUES ('traffic-inbound', 'traffic-node', '15', 'user-15', ?, ?)`, []any{first, second}},
+		{`INSERT INTO traffic_snapshots (id, node_id, inbound_id, collected_at, up, down, all_time, source) VALUES ('traffic-s1', 'traffic-node', 'traffic-inbound', ?, 40, 60, 100, 'xpanel')`, []any{first}},
+		{`INSERT INTO traffic_snapshots (id, node_id, inbound_id, collected_at, up, down, all_time, source) VALUES ('traffic-s2', 'traffic-node', 'traffic-inbound', ?, 100, 150, 250, 'xpanel')`, []any{second}},
+	}
+	for _, statement := range statements {
+		if _, err := database.Exec(statement.query, statement.args...); err != nil {
+			t.Fatalf("seed traffic data: %v", err)
+		}
+	}
+	ts := httptest.NewServer(server.Handler())
+	defer ts.Close()
+	login := doJSON(t, ts.Client(), http.MethodPost, ts.URL+"/api/auth/login", "", map[string]string{"userName": "admin", "password": "test-password"})
+	token := login["data"].(map[string]any)["token"].(string)
+	dashboard := doJSON(t, ts.Client(), http.MethodGet, ts.URL+"/api/dashboard", token, nil)
+	if dashboard["code"] != successCode {
+		t.Fatalf("dashboard response = %#v", dashboard)
+	}
+	traffic := dashboard["data"].(map[string]any)["traffic"].(map[string]any)
+	if traffic["todayBytes"] != float64(150) || traffic["monthBytes"] != float64(150) {
+		t.Fatalf("traffic = %#v, want delta 150", traffic)
+	}
+}
+
+func TestOperationalStatusRefresh(t *testing.T) {
+	server, database := testServer(t)
+	now := time.Now().UTC()
+	nowText := now.Format(time.RFC3339Nano)
+	oldText := now.Add(-10 * time.Minute).Format(time.RFC3339Nano)
+	expiredText := now.Add(-time.Hour).Format(time.RFC3339Nano)
+	expiringText := now.Add(24 * time.Hour).Format(time.RFC3339Nano)
+	activeText := now.Add(30 * 24 * time.Hour).Format(time.RFC3339Nano)
+	statements := []struct {
+		query string
+		args  []any
+	}{
+		{`INSERT INTO users (id, display_name, status, expiry_time, created_at, updated_at) VALUES ('expired-user', 'Expired', 'active', ?, ?, ?)`, []any{expiredText, nowText, nowText}},
+		{`INSERT INTO users (id, display_name, status, expiry_time, created_at, updated_at) VALUES ('expiring-user', 'Expiring', 'active', ?, ?, ?)`, []any{expiringText, nowText, nowText}},
+		{`INSERT INTO users (id, display_name, status, expiry_time, created_at, updated_at) VALUES ('active-user', 'Active', 'active', ?, ?, ?)`, []any{activeText, nowText, nowText}},
+		{`INSERT INTO nodes (id, node_key, name, type, health_status, last_seen_at, created_at, updated_at) VALUES ('stale-node', 'stale-node', 'Stale', 'relay', 'online', ?, ?, ?)`, []any{oldText, nowText, nowText}},
+	}
+	for _, statement := range statements {
+		if _, err := database.Exec(statement.query, statement.args...); err != nil {
+			t.Fatalf("seed status data: %v", err)
+		}
+	}
+	ts := httptest.NewServer(server.Handler())
+	defer ts.Close()
+	login := doJSON(t, ts.Client(), http.MethodPost, ts.URL+"/api/auth/login", "", map[string]string{"userName": "admin", "password": "test-password"})
+	token := login["data"].(map[string]any)["token"].(string)
+	_ = doJSON(t, ts.Client(), http.MethodGet, ts.URL+"/api/dashboard", token, nil)
+	var expiredStatus, expiringStatus, activeStatus, nodeStatus string
+	queries := []struct {
+		query  string
+		target *string
+	}{
+		{"SELECT status FROM users WHERE id = 'expired-user'", &expiredStatus},
+		{"SELECT status FROM users WHERE id = 'expiring-user'", &expiringStatus},
+		{"SELECT status FROM users WHERE id = 'active-user'", &activeStatus},
+		{"SELECT health_status FROM nodes WHERE id = 'stale-node'", &nodeStatus},
+	}
+	for _, item := range queries {
+		if err := database.QueryRow(item.query).Scan(item.target); err != nil {
+			t.Fatalf("query status: %v", err)
+		}
+	}
+	if expiredStatus != "expired" || expiringStatus != "expiring" || activeStatus != "active" || nodeStatus != "offline" {
+		t.Fatalf("statuses expired=%s expiring=%s active=%s node=%s", expiredStatus, expiringStatus, activeStatus, nodeStatus)
 	}
 }
 

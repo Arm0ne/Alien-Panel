@@ -226,6 +226,18 @@ ON CONFLICT(node_id, remote_inbound_id) DO UPDATE SET tag = excluded.tag, remark
 			s.failSync(w, tx, syncRunID, fmt.Errorf("find inbound %s: %w", remoteInboundID, err))
 			return
 		}
+		resetDetected, err := detectTrafficReset(tx, inboundID, observedAt, inbound.AllTime)
+		if err != nil {
+			s.failSync(w, tx, syncRunID, fmt.Errorf("check traffic reset %s: %w", remoteInboundID, err))
+			return
+		}
+		if resetDetected {
+			_, err := tx.Exec(`INSERT INTO node_events (id, node_id, event_type, severity, message, created_at) VALUES (?, ?, 'traffic_reset', 'warning', ?, ?)`, newID(), principal.NodeID, "Inbound "+remoteInboundID+" cumulative traffic moved backwards; a new baseline was recorded", now)
+			if err != nil {
+				s.failSync(w, tx, syncRunID, fmt.Errorf("record traffic reset %s: %w", remoteInboundID, err))
+				return
+			}
+		}
 		for _, client := range inbound.Clients {
 			if strings.TrimSpace(client.RemoteID) == "" {
 				continue
@@ -240,7 +252,11 @@ ON CONFLICT(node_id, inbound_id, remote_client_id) DO UPDATE SET email = exclude
 				return
 			}
 		}
-		if _, err := tx.Exec(`INSERT OR IGNORE INTO traffic_snapshots (id, node_id, inbound_id, collected_at, up, down, all_time, source, reset_detected, sync_run_id) VALUES (?, ?, ?, ?, ?, ?, ?, 'xpanel', 0, ?)`, newID(), principal.NodeID, inboundID, observedAt.Format(time.RFC3339Nano), inbound.Up, inbound.Down, inbound.AllTime, syncRunID); err != nil {
+		resetFlag := 0
+		if resetDetected {
+			resetFlag = 1
+		}
+		if _, err := tx.Exec(`INSERT OR IGNORE INTO traffic_snapshots (id, node_id, inbound_id, collected_at, up, down, all_time, source, reset_detected, sync_run_id) VALUES (?, ?, ?, ?, ?, ?, ?, 'xpanel', ?, ?)`, newID(), principal.NodeID, inboundID, observedAt.Format(time.RFC3339Nano), inbound.Up, inbound.Down, inbound.AllTime, resetFlag, syncRunID); err != nil {
 			s.failSync(w, tx, syncRunID, fmt.Errorf("save traffic snapshot %s: %w", remoteInboundID, err))
 			return
 		}
@@ -262,6 +278,18 @@ ON CONFLICT(node_id, inbound_id, remote_client_id) DO UPDATE SET email = exclude
 		return
 	}
 	writeSuccess(w, map[string]any{"sync_id": payload.SyncID, "status": "success", "inboundCount": len(payload.Inbounds), "clientCount": clientCount, "idempotent": false})
+}
+
+func detectTrafficReset(tx *sql.Tx, inboundID string, observedAt time.Time, allTime int64) (bool, error) {
+	var previous int64
+	err := tx.QueryRow(`SELECT all_time FROM traffic_snapshots WHERE inbound_id = ? AND collected_at < ? ORDER BY collected_at DESC LIMIT 1`, inboundID, observedAt.Format(time.RFC3339Nano)).Scan(&previous)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return allTime < previous, nil
 }
 
 func (s *Server) failSync(w http.ResponseWriter, tx *sql.Tx, syncRunID string, err error) error {
