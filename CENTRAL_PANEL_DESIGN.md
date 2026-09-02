@@ -746,6 +746,8 @@ POST /inbounds/updateClient/:clientId
 
 用户详情抽屉显示 Client/Email 设备列表、Inbound 流量趋势、最近同步、线路和出口 IP 配置归属。
 
+当前实现补充：用户详情接口已先提供最近 30 条累计流量快照和 `resetDetected` 标识，页面以轻量列表展示；业务字段编辑仅写中央数据库并记录审计日志，X-Panel/Xray 字段保持只读。
+
 ### 12.3 节点页面
 
 显示节点类型、区域、IP、在线状态、CPU、内存、磁盘、Xray/X-Panel 版本、用户数、总流量、月成本和最后同步时间。

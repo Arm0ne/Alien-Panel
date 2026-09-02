@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"strconv"
 	"strings"
@@ -24,6 +25,7 @@ const (
 	successCode       = "0000"
 	unauthorizedCode  = "8888"
 	validationCode    = "4000"
+	notFoundCode      = "4040"
 	internalErrorCode = "5000"
 )
 
@@ -41,6 +43,7 @@ type principal struct {
 }
 
 type principalContextKey struct{}
+type requestIDContextKey struct{}
 
 func NewServer(cfg config.Config, database *sql.DB, logger *slog.Logger) (*Server, error) {
 	if logger == nil {
@@ -73,6 +76,8 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /api/auth/getUserInfo", s.requireAuth(http.HandlerFunc(s.getUserInfo)))
 	mux.Handle("GET /api/dashboard", s.requireAuth(http.HandlerFunc(s.dashboard)))
 	mux.Handle("GET /api/users", s.requireAuth(http.HandlerFunc(s.users)))
+	mux.Handle("GET /api/users/{id}", s.requireAuth(http.HandlerFunc(s.userDetail)))
+	mux.Handle("PATCH /api/users/{id}", s.requireAuth(http.HandlerFunc(s.updateUser)))
 	mux.Handle("GET /api/nodes", s.requireAuth(http.HandlerFunc(s.nodes)))
 	mux.Handle("GET /api/routes", s.requireAuth(http.HandlerFunc(s.routes)))
 	mux.Handle("GET /api/exit-ips", s.requireAuth(http.HandlerFunc(s.exitIPs)))
@@ -345,6 +350,237 @@ ORDER BY CASE WHEN u.expiry_time IS NULL THEN 1 ELSE 0 END, u.expiry_time ASC LI
 		})
 	}
 	writeSuccess(w, pageResponse(items, total, query))
+}
+
+type updateUserRequest struct {
+	DisplayName *string  `json:"displayName"`
+	MonthlyFee  *float64 `json:"monthlyFee"`
+	Currency    *string  `json:"currency"`
+	Notes       *string  `json:"notes"`
+}
+
+// userDetail exposes the central business fields beside X-Panel's read-only
+// Inbound and Client snapshot. It does not return X-Panel credentials or a
+// complete Xray configuration.
+func (s *Server) userDetail(w http.ResponseWriter, r *http.Request) {
+	s.refreshOperationalStatuses(time.Now().UTC())
+	id := strings.TrimSpace(r.PathValue("id"))
+	if id == "" {
+		writeFailure(w, http.StatusBadRequest, validationCode, "user id is required")
+		return
+	}
+	result, err := s.readUserDetail(id)
+	if errors.Is(err, sql.ErrNoRows) {
+		writeFailure(w, http.StatusNotFound, notFoundCode, "user not found")
+		return
+	}
+	if err != nil {
+		s.logger.Error("read user detail", "user_id", id, "error", err)
+		writeFailure(w, http.StatusInternalServerError, internalErrorCode, "could not read user detail")
+		return
+	}
+	writeSuccess(w, result)
+}
+
+// updateUser only changes central-owned business metadata. X-Panel-owned
+// expiry, enable state, clients, and traffic remain sync-only fields.
+func (s *Server) updateUser(w http.ResponseWriter, r *http.Request) {
+	id := strings.TrimSpace(r.PathValue("id"))
+	if id == "" {
+		writeFailure(w, http.StatusBadRequest, validationCode, "user id is required")
+		return
+	}
+	var payload updateUserRequest
+	if err := decodeJSON(r, &payload); err != nil {
+		writeFailure(w, http.StatusBadRequest, validationCode, "invalid user update payload")
+		return
+	}
+	if payload.DisplayName == nil && payload.MonthlyFee == nil && payload.Currency == nil && payload.Notes == nil {
+		writeFailure(w, http.StatusBadRequest, validationCode, "at least one editable field is required")
+		return
+	}
+
+	var displayName, currency, notes string
+	var monthlyFee float64
+	if err := s.db.QueryRow(`SELECT display_name, monthly_fee, currency, COALESCE(notes, '') FROM users WHERE id = ?`, id).Scan(&displayName, &monthlyFee, &currency, &notes); errors.Is(err, sql.ErrNoRows) {
+		writeFailure(w, http.StatusNotFound, notFoundCode, "user not found")
+		return
+	} else if err != nil {
+		s.logger.Error("read user for update", "user_id", id, "error", err)
+		writeFailure(w, http.StatusInternalServerError, internalErrorCode, "could not update user")
+		return
+	}
+	before := map[string]any{"displayName": displayName, "monthlyFee": monthlyFee, "currency": currency, "notes": notes}
+	if payload.DisplayName != nil {
+		displayName = strings.TrimSpace(*payload.DisplayName)
+		if displayName == "" || len([]rune(displayName)) > 120 {
+			writeFailure(w, http.StatusBadRequest, validationCode, "displayName must contain 1 to 120 characters")
+			return
+		}
+	}
+	if payload.MonthlyFee != nil {
+		if *payload.MonthlyFee < 0 || *payload.MonthlyFee > 100000000 || *payload.MonthlyFee != *payload.MonthlyFee {
+			writeFailure(w, http.StatusBadRequest, validationCode, "monthlyFee must be a non-negative number")
+			return
+		}
+		monthlyFee = *payload.MonthlyFee
+	}
+	if payload.Currency != nil {
+		currency = strings.ToUpper(strings.TrimSpace(*payload.Currency))
+		if currency != "CNY" {
+			writeFailure(w, http.StatusBadRequest, validationCode, "currency currently supports CNY only")
+			return
+		}
+	}
+	if payload.Notes != nil {
+		notes = strings.TrimSpace(*payload.Notes)
+		if len([]rune(notes)) > 2000 {
+			writeFailure(w, http.StatusBadRequest, validationCode, "notes must be at most 2000 characters")
+			return
+		}
+	}
+
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	if _, err := s.db.Exec(`UPDATE users SET display_name = ?, monthly_fee = ?, currency = ?, notes = ?, updated_at = ? WHERE id = ?`, displayName, monthlyFee, currency, nullableDBString(notes), now, id); err != nil {
+		s.logger.Error("update user business fields", "user_id", id, "error", err)
+		writeFailure(w, http.StatusInternalServerError, internalErrorCode, "could not update user")
+		return
+	}
+	after := map[string]any{"displayName": displayName, "monthlyFee": monthlyFee, "currency": currency, "notes": notes}
+	s.writeAuditLog(r, "user.update", "user", id, before, after)
+	result, err := s.readUserDetail(id)
+	if err != nil {
+		s.logger.Error("read updated user", "user_id", id, "error", err)
+		writeFailure(w, http.StatusInternalServerError, internalErrorCode, "user updated but could not read result")
+		return
+	}
+	writeSuccess(w, result)
+}
+
+func (s *Server) readUserDetail(id string) (map[string]any, error) {
+	var userID, displayName, status, currency, notes, expiry, inboundID, inboundRemoteID, inboundTag, inboundRemark, protocol, nodeID, nodeName, nodeType, lastSeen string
+	var monthlyFee float64
+	var port, clientCount int
+	var enabled int
+	var up, down, allTime int64
+	err := s.db.QueryRow(`SELECT u.id, u.display_name, u.status, u.monthly_fee, u.currency, COALESCE(u.notes, ''), COALESCE(u.expiry_time, ''),
+COALESCE(i.id, ''), COALESCE(i.remote_inbound_id, ''), COALESCE(i.tag, ''), COALESCE(i.remark, ''), COALESCE(i.protocol, ''), COALESCE(i.port, 0), COALESCE(i.enable, 0),
+COALESCE(i.client_count, 0), COALESCE(i.up, 0), COALESCE(i.down, 0), COALESCE(i.all_time, 0), COALESCE(i.last_seen_at, ''),
+COALESCE(n.id, ''), COALESCE(n.name, ''), COALESCE(n.type, '')
+FROM users u
+LEFT JOIN user_inbounds ui ON ui.user_id = u.id AND ui.is_primary = 1 AND ui.active_to IS NULL
+LEFT JOIN inbounds i ON i.id = ui.inbound_id
+LEFT JOIN nodes n ON n.id = i.node_id
+WHERE u.id = ?`, id).Scan(&userID, &displayName, &status, &monthlyFee, &currency, &notes, &expiry,
+		&inboundID, &inboundRemoteID, &inboundTag, &inboundRemark, &protocol, &port, &enabled, &clientCount, &up, &down, &allTime, &lastSeen,
+		&nodeID, &nodeName, &nodeType)
+	if err != nil {
+		return nil, err
+	}
+	result := map[string]any{
+		"id": userID, "displayName": displayName, "status": status, "monthlyFee": monthlyFee, "currency": currency,
+		"notes": nullableString(notes), "expiresAt": nullableString(expiry),
+		"inbound": map[string]any{
+			"id": nullableString(inboundID), "remoteId": nullableString(inboundRemoteID), "tag": nullableString(inboundTag),
+			"remark": nullableString(inboundRemark), "protocol": nullableString(protocol), "port": port, "enabled": enabled == 1,
+			"clientCount": clientCount, "up": up, "down": down, "allTime": allTime, "lastSeenAt": nullableString(lastSeen),
+		},
+		"node": map[string]any{"id": nullableString(nodeID), "name": nullableString(nodeName), "type": nullableString(nodeType)},
+	}
+	clients := make([]map[string]any, 0)
+	if inboundID != "" {
+		rows, err := s.db.Query(`SELECT remote_client_id, COALESCE(email, ''), enable, COALESCE(expiry_time, ''), up, down, all_time, COALESCE(last_online, ''), COALESCE(last_seen_at, '')
+FROM clients WHERE inbound_id = ? ORDER BY email ASC, remote_client_id ASC`, inboundID)
+		if err != nil {
+			return nil, err
+		}
+		for rows.Next() {
+			var remoteID, email, clientExpiry, lastOnline, clientLastSeen string
+			var clientEnabled int
+			var clientUp, clientDown, clientAllTime int64
+			if err := rows.Scan(&remoteID, &email, &clientEnabled, &clientExpiry, &clientUp, &clientDown, &clientAllTime, &lastOnline, &clientLastSeen); err != nil {
+				_ = rows.Close()
+				return nil, err
+			}
+			clients = append(clients, map[string]any{
+				"remoteId": remoteID, "email": nullableString(email), "enabled": clientEnabled == 1,
+				"expiresAt": nullableString(clientExpiry), "up": clientUp, "down": clientDown, "allTime": clientAllTime,
+				"lastOnlineAt": nullableString(lastOnline), "lastSeenAt": nullableString(clientLastSeen),
+			})
+		}
+		if err := rows.Err(); err != nil {
+			_ = rows.Close()
+			return nil, err
+		}
+		if err := rows.Close(); err != nil {
+			return nil, err
+		}
+	}
+	result["clients"] = clients
+
+	routes := make([]map[string]any, 0)
+	rows, err := s.db.Query(`SELECT r.id, r.name, COALESCE(relay.name, ''), COALESCE(landing.name, ''), COALESCE(r.landing_inbound_tag, ''), r.enabled
+FROM user_routes ur
+JOIN routes r ON r.id = ur.route_id
+LEFT JOIN nodes relay ON relay.id = r.relay_node_id
+LEFT JOIN nodes landing ON landing.id = r.landing_node_id
+WHERE ur.user_id = ? AND ur.active_to IS NULL
+ORDER BY ur.is_primary DESC, r.name ASC`, userID)
+	if err != nil {
+		return nil, err
+	}
+	for rows.Next() {
+		var routeID, routeName, relayName, landingName, landingInboundTag string
+		var routeEnabled int
+		if err := rows.Scan(&routeID, &routeName, &relayName, &landingName, &landingInboundTag, &routeEnabled); err != nil {
+			_ = rows.Close()
+			return nil, err
+		}
+		routes = append(routes, map[string]any{
+			"id": routeID, "name": routeName, "relayNodeName": nullableString(relayName), "landingNodeName": nullableString(landingName),
+			"landingInboundTag": nullableString(landingInboundTag), "enabled": routeEnabled == 1,
+		})
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return nil, err
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	result["routes"] = routes
+	traffic, err := s.readUserTraffic(inboundID)
+	if err != nil {
+		return nil, err
+	}
+	result["traffic"] = traffic
+	return result, nil
+}
+
+func (s *Server) readUserTraffic(inboundID string) ([]map[string]any, error) {
+	items := make([]map[string]any, 0)
+	if inboundID == "" {
+		return items, nil
+	}
+	rows, err := s.db.Query(`SELECT collected_at, up, down, all_time, reset_detected
+FROM traffic_snapshots WHERE inbound_id = ? ORDER BY collected_at DESC LIMIT 30`, inboundID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var collectedAt string
+		var up, down, allTime int64
+		var resetDetected int
+		if err := rows.Scan(&collectedAt, &up, &down, &allTime, &resetDetected); err != nil {
+			return nil, err
+		}
+		items = append(items, map[string]any{
+			"collectedAt": collectedAt, "up": up, "down": down, "allTime": allTime,
+			"resetDetected": resetDetected == 1,
+		})
+	}
+	return items, rows.Err()
 }
 
 func (s *Server) nodes(w http.ResponseWriter, r *http.Request) {
@@ -643,7 +879,7 @@ func (s *Server) withRequestID(next http.Handler) http.Handler {
 			requestID = newID()
 		}
 		w.Header().Set("X-Request-ID", requestID)
-		next.ServeHTTP(w, r)
+		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), requestIDContextKey{}, requestID)))
 	})
 }
 
@@ -717,6 +953,65 @@ func nullableString(value string) any {
 		return nil
 	}
 	return value
+}
+
+// nullableDBString preserves the distinction between an empty optional value
+// and a populated one in SQLite. API consumers still receive null for either
+// an unset or intentionally cleared note.
+func nullableDBString(value string) any {
+	if value == "" {
+		return nil
+	}
+	return value
+}
+
+// writeAuditLog is deliberately best-effort: a completed business-field
+// update must not be rolled back merely because its auxiliary audit write
+// fails. It is only called after the central database update succeeds.
+func (s *Server) writeAuditLog(r *http.Request, action, resourceType, resourceID string, before, after any) {
+	beforeJSON, err := json.Marshal(before)
+	if err != nil {
+		s.logger.Warn("encode audit before state", "action", action, "resource_id", resourceID, "error", err)
+		return
+	}
+	afterJSON, err := json.Marshal(after)
+	if err != nil {
+		s.logger.Warn("encode audit after state", "action", action, "resource_id", resourceID, "error", err)
+		return
+	}
+
+	var adminUserID any
+	if current, ok := r.Context().Value(principalContextKey{}).(principal); ok && current.UserID != "" {
+		adminUserID = current.UserID
+	}
+	var requestID any
+	if value, ok := r.Context().Value(requestIDContextKey{}).(string); ok && value != "" {
+		requestID = value
+	}
+	var ip any
+	if value := clientIP(r.RemoteAddr); value != "" {
+		ip = value
+	}
+
+	if _, err := s.db.Exec(`INSERT INTO audit_logs (id, admin_user_id, action, resource_type, resource_id, request_id, before_json, after_json, ip, created_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		newID(), adminUserID, action, resourceType, resourceID, requestID, string(beforeJSON), string(afterJSON), ip, time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+		s.logger.Warn("write audit log", "action", action, "resource_type", resourceType, "resource_id", resourceID, "error", err)
+	}
+}
+
+func clientIP(remoteAddr string) string {
+	remoteAddr = strings.TrimSpace(remoteAddr)
+	if remoteAddr == "" {
+		return ""
+	}
+	if host, _, err := net.SplitHostPort(remoteAddr); err == nil {
+		return host
+	}
+	if net.ParseIP(remoteAddr) != nil {
+		return remoteAddr
+	}
+	return ""
 }
 
 func isExpired(value string) bool {

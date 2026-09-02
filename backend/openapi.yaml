@@ -107,6 +107,46 @@ paths:
         - $ref: '#/components/parameters/NodeId'
       responses:
         '200': { description: Paginated users }
+  /users/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema: { type: string }
+    get:
+      summary: Read a business user and its read-only X-Panel snapshots
+      description: >-
+        One relay Inbound represents one business user. Client / Email entries
+        are device credentials and are not independently billable users.
+      responses:
+        '200':
+          description: User detail, including Inbound, Client, node, and assigned-route snapshots
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EnvelopeUserDetail'
+        '404': { description: User not found }
+    patch:
+      summary: Update central-owned business fields of a user
+      description: >-
+        Only displayName, monthlyFee, currency, and notes are editable here.
+        X-Panel-owned expiry, enable state, Clients, and traffic are never
+        written back to X-Panel by this endpoint.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateUserRequest'
+      responses:
+        '200':
+          description: Updated user detail
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EnvelopeUserDetail'
+        '400': { description: Validation failed }
+        '404': { description: User not found }
   /nodes:
     get:
       summary: Node list
@@ -226,6 +266,92 @@ components:
             token: { type: string }
             refreshToken: { type: string }
             expiresAt: { type: string, format: date-time }
+    UpdateUserRequest:
+      type: object
+      minProperties: 1
+      properties:
+        displayName: { type: string, minLength: 1, maxLength: 120 }
+        monthlyFee: { type: number, minimum: 0, maximum: 100000000 }
+        currency:
+          type: string
+          description: CNY is currently the only supported reporting currency.
+          enum: [CNY]
+        notes: { type: string, maxLength: 2000 }
+    EnvelopeUserDetail:
+      type: object
+      required: [code, msg, data]
+      properties:
+        code: { type: string, example: '0000' }
+        msg: { type: string, example: ok }
+        data: { $ref: '#/components/schemas/UserDetail' }
+    UserDetail:
+      type: object
+      required: [id, displayName, status, monthlyFee, currency, inbound, node, clients, routes, traffic]
+      properties:
+        id: { type: string }
+        displayName: { type: string }
+        status: { type: string, enum: [active, expiring, expired, disabled, unknown] }
+        monthlyFee: { type: number }
+        currency: { type: string, enum: [CNY] }
+        notes: { type: [string, 'null'] }
+        expiresAt: { type: [string, 'null'], format: date-time }
+        inbound:
+          type: object
+          properties:
+            id: { type: [string, 'null'] }
+            remoteId: { type: [string, 'null'] }
+            tag: { type: [string, 'null'] }
+            remark: { type: [string, 'null'] }
+            protocol: { type: [string, 'null'] }
+            port: { type: integer }
+            enabled: { type: boolean }
+            clientCount: { type: integer }
+            up: { type: integer, format: int64 }
+            down: { type: integer, format: int64 }
+            allTime: { type: integer, format: int64 }
+            lastSeenAt: { type: [string, 'null'], format: date-time }
+        node:
+          type: object
+          properties:
+            id: { type: [string, 'null'] }
+            name: { type: [string, 'null'] }
+            type: { type: [string, 'null'], enum: [relay, landing, unknown, 'null'] }
+        clients:
+          type: array
+          items:
+            type: object
+            properties:
+              remoteId: { type: string }
+              email: { type: [string, 'null'] }
+              enabled: { type: boolean }
+              expiresAt: { type: [string, 'null'], format: date-time }
+              up: { type: integer, format: int64 }
+              down: { type: integer, format: int64 }
+              allTime: { type: integer, format: int64 }
+              lastOnlineAt: { type: [string, 'null'], format: date-time }
+              lastSeenAt: { type: [string, 'null'], format: date-time }
+        routes:
+          type: array
+          items:
+            type: object
+            properties:
+              id: { type: string }
+              name: { type: string }
+              relayNodeName: { type: [string, 'null'] }
+              landingNodeName: { type: [string, 'null'] }
+              landingInboundTag: { type: [string, 'null'] }
+              enabled: { type: boolean }
+        traffic:
+          type: array
+          description: The 30 most recent read-only cumulative X-Panel snapshots.
+          items:
+            type: object
+            properties:
+              collectedAt: { type: string, format: date-time }
+              up: { type: integer, format: int64 }
+              down: { type: integer, format: int64 }
+              allTime: { type: integer, format: int64 }
+              resetDetected: { type: boolean }
     AgentRegisterRequest:
       type: object
       required: [node_key, node_name]

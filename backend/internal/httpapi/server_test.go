@@ -93,6 +93,105 @@ func TestProtectedEndpointsRejectMissingToken(t *testing.T) {
 	}
 }
 
+func TestUserDetailAndBusinessFieldUpdate(t *testing.T) {
+	server, database := testServer(t)
+	ts := httptest.NewServer(server.Handler())
+	defer ts.Close()
+
+	unauthorized := httptest.NewRecorder()
+	server.Handler().ServeHTTP(unauthorized, httptest.NewRequest(http.MethodGet, "/api/users/user-detail", nil))
+	if unauthorized.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthorized detail status = %d, want %d", unauthorized.Code, http.StatusUnauthorized)
+	}
+
+	now := time.Now().UTC()
+	nowText := now.Format(time.RFC3339Nano)
+	expiryText := now.AddDate(0, 1, 0).Format(time.RFC3339Nano)
+	statements := []struct {
+		query string
+		args  []any
+	}{
+		{`INSERT INTO nodes (id, node_key, name, type, health_status, created_at, updated_at) VALUES ('detail-relay', 'detail-relay', '东京线路机', 'relay', 'online', ?, ?)`, []any{nowText, nowText}},
+		{`INSERT INTO nodes (id, node_key, name, type, health_status, created_at, updated_at) VALUES ('detail-landing', 'detail-landing', '东京落地机', 'landing', 'online', ?, ?)`, []any{nowText, nowText}},
+		{`INSERT INTO users (id, display_name, status, monthly_fee, currency, notes, expiry_time, created_at, updated_at) VALUES ('user-detail', '原始名称', 'active', 30, 'CNY', '原始备注', ?, ?, ?)`, []any{expiryText, nowText, nowText}},
+		{`INSERT INTO inbounds (id, node_id, remote_inbound_id, user_id, kind, tag, remark, protocol, port, enable, client_count, up, down, all_time, first_seen_at, last_seen_at) VALUES ('inbound-detail', 'detail-relay', '37', 'user-detail', 'user', 'reality-user-37', 'X-Panel 原始备注', 'vless', 443, 1, 2, 100, 200, 300, ?, ?)`, []any{nowText, nowText}},
+		{`INSERT INTO user_inbounds (id, user_id, inbound_id, is_primary, active_from) VALUES ('mapping-detail', 'user-detail', 'inbound-detail', 1, ?)`, []any{nowText}},
+		{`INSERT INTO clients (id, node_id, inbound_id, remote_client_id, email, enable, up, down, all_time) VALUES ('client-detail-1', 'detail-relay', 'inbound-detail', 'phone-uuid', 'phone@example.com', 1, 10, 20, 30)`, nil},
+		{`INSERT INTO clients (id, node_id, inbound_id, remote_client_id, email, enable, up, down, all_time) VALUES ('client-detail-2', 'detail-relay', 'inbound-detail', 'laptop-uuid', 'laptop@example.com', 1, 30, 40, 70)`, nil},
+		{`INSERT INTO traffic_snapshots (id, node_id, inbound_id, collected_at, up, down, all_time, source, reset_detected) VALUES ('traffic-detail-1', 'detail-relay', 'inbound-detail', ?, 100, 200, 300, 'xpanel', 0)`, []any{nowText}},
+		{`INSERT INTO traffic_snapshots (id, node_id, inbound_id, collected_at, up, down, all_time, source, reset_detected) VALUES ('traffic-detail-2', 'detail-relay', 'inbound-detail', ?, 10, 20, 30, 'xpanel', 1)`, []any{now.Add(time.Minute).Format(time.RFC3339Nano)}},
+		{`INSERT INTO routes (id, name, relay_node_id, landing_node_id, landing_inbound_tag, enabled, created_at, updated_at) VALUES ('route-detail', '东京优化线路', 'detail-relay', 'detail-landing', 'ss-tokyo', 1, ?, ?)`, []any{nowText, nowText}},
+		{`INSERT INTO user_routes (id, user_id, route_id, is_primary, active_from) VALUES ('route-mapping-detail', 'user-detail', 'route-detail', 1, ?)`, []any{nowText}},
+	}
+	for _, statement := range statements {
+		if _, err := database.Exec(statement.query, statement.args...); err != nil {
+			t.Fatalf("seed user detail data: %v", err)
+		}
+	}
+
+	login := doJSON(t, ts.Client(), http.MethodPost, ts.URL+"/api/auth/login", "", map[string]string{"userName": "admin", "password": "test-password"})
+	token := login["data"].(map[string]any)["token"].(string)
+	detail := doJSON(t, ts.Client(), http.MethodGet, ts.URL+"/api/users/user-detail", token, nil)
+	if detail["code"] != successCode {
+		t.Fatalf("user detail response = %#v", detail)
+	}
+	detailData := detail["data"].(map[string]any)
+	traffic := detailData["traffic"].([]any)
+	if detailData["displayName"] != "原始名称" || detailData["inbound"].(map[string]any)["tag"] != "reality-user-37" || len(detailData["clients"].([]any)) != 2 || len(detailData["routes"].([]any)) != 1 || len(traffic) != 2 || traffic[0].(map[string]any)["resetDetected"] != true {
+		t.Fatalf("unexpected user detail = %#v", detailData)
+	}
+
+	negative := doJSON(t, ts.Client(), http.MethodPatch, ts.URL+"/api/users/user-detail", token, map[string]any{"monthlyFee": -1})
+	if negative["code"] != validationCode {
+		t.Fatalf("negative fee response = %#v", negative)
+	}
+
+	updated := doJSONWithRequestID(t, ts.Client(), http.MethodPatch, ts.URL+"/api/users/user-detail", token, "user-detail-update-test", map[string]any{
+		"displayName": "中央业务名称", "monthlyFee": 68.5, "currency": "CNY", "notes": "只在中央面板维护",
+	})
+	if updated["code"] != successCode || updated["data"].(map[string]any)["displayName"] != "中央业务名称" {
+		t.Fatalf("update response = %#v", updated)
+	}
+
+	var displayName, currency string
+	var monthlyFee float64
+	var notes sql.NullString
+	if err := database.QueryRow(`SELECT display_name, monthly_fee, currency, notes FROM users WHERE id = 'user-detail'`).Scan(&displayName, &monthlyFee, &currency, &notes); err != nil {
+		t.Fatalf("read updated business fields: %v", err)
+	}
+	if displayName != "中央业务名称" || monthlyFee != 68.5 || currency != "CNY" || !notes.Valid || notes.String != "只在中央面板维护" {
+		t.Fatalf("updated business fields = name=%q fee=%v currency=%q notes=%#v", displayName, monthlyFee, currency, notes)
+	}
+
+	var requestID, beforeJSON, afterJSON string
+	if err := database.QueryRow(`SELECT request_id, before_json, after_json FROM audit_logs WHERE action = 'user.update' AND resource_id = 'user-detail'`).Scan(&requestID, &beforeJSON, &afterJSON); err != nil {
+		t.Fatalf("read audit log: %v", err)
+	}
+	if requestID != "user-detail-update-test" || !strings.Contains(beforeJSON, "原始名称") || !strings.Contains(afterJSON, "中央业务名称") {
+		t.Fatalf("unexpected audit record request_id=%q before=%s after=%s", requestID, beforeJSON, afterJSON)
+	}
+
+	// A later relay snapshot may refresh X-Panel-owned expiry/status, but must
+	// never overwrite central-operated customer metadata.
+	tx, err := database.Begin()
+	if err != nil {
+		t.Fatalf("begin relay sync transaction: %v", err)
+	}
+	if err := server.ensureRelayInboundUser(tx, "relay", "inbound-detail", "37", agentInboundPayload{Enable: true, Remark: "X-Panel changed this"}, expiryText, now.Add(time.Minute)); err != nil {
+		_ = tx.Rollback()
+		t.Fatalf("refresh relay user: %v", err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatalf("commit relay sync transaction: %v", err)
+	}
+	if err := database.QueryRow(`SELECT display_name, monthly_fee, currency, notes FROM users WHERE id = 'user-detail'`).Scan(&displayName, &monthlyFee, &currency, &notes); err != nil {
+		t.Fatalf("read business fields after relay sync: %v", err)
+	}
+	if displayName != "中央业务名称" || monthlyFee != 68.5 || currency != "CNY" || !notes.Valid || notes.String != "只在中央面板维护" {
+		t.Fatalf("relay sync overwrote business fields: name=%q fee=%v currency=%q notes=%#v", displayName, monthlyFee, currency, notes)
+	}
+}
+
 func TestAgentRegistrationHeartbeatAndIdempotentSync(t *testing.T) {
 	server, database := testServer(t)
 	ts := httptest.NewServer(server.Handler())
@@ -389,6 +488,11 @@ func TestListEndpointsWithData(t *testing.T) {
 
 func doJSON(t *testing.T, client *http.Client, method, url, token string, payload any) map[string]any {
 	t.Helper()
+	return doJSONWithRequestID(t, client, method, url, token, "", payload)
+}
+
+func doJSONWithRequestID(t *testing.T, client *http.Client, method, url, token, requestID string, payload any) map[string]any {
+	t.Helper()
 	var body io.Reader
 	if payload != nil {
 		encoded, err := json.Marshal(payload)
@@ -406,6 +510,9 @@ func doJSON(t *testing.T, client *http.Client, method, url, token string, payloa
 	}
 	if token != "" {
 		request.Header.Set("Authorization", "Bearer "+token)
+	}
+	if requestID != "" {
+		request.Header.Set("X-Request-ID", requestID)
 	}
 	response, err := client.Do(request)
 	if err != nil {

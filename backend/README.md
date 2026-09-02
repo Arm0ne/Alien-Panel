@@ -51,11 +51,17 @@ go build ./cmd/traffic-check
 }
 ```
 
-当前已实现健康检查、管理员登录/刷新/退出、当前管理员信息、Dashboard 和各业务只读列表。Agent 端点包括：
+当前已实现健康检查、管理员登录/刷新/退出、当前管理员信息、Dashboard、各业务只读列表，以及用户详情和中央业务字段编辑。Agent 端点包括：
 
 - `POST /api/agent/v1/register`（注册节点并签发节点 Token）；
 - `POST /api/agent/v1/heartbeat`（Bearer 节点 Token）；
 - `POST /api/agent/v1/sync`（Bearer 节点 Token，按 `sync_id` 幂等写入 Inbound、Client 和流量快照）。
+
+用户详情接口：
+
+- `GET /api/users/{id}` 返回业务用户、主 Inbound、Client/Email 设备、节点和已分配线路的只读快照；
+- `PATCH /api/users/{id}` 仅更新中央维护的 `displayName`、`monthlyFee`、`currency`（当前仅支持 `CNY`）和 `notes`，并写入 `audit_logs`；
+- 用户详情页不会修改 X-Panel/Xray，也不会写入 X-Panel 的到期、启用、Client 或流量字段。
 
 Agent Token 只以哈希形式保存在 `node_credentials`，注册响应中的明文 Token 仅返回一次。业务字段写 API 和更细的报表聚合按开发进度表继续实现。
 
