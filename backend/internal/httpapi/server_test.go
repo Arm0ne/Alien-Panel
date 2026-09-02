@@ -158,6 +158,9 @@ func TestAgentRegistrationHeartbeatAndIdempotentSync(t *testing.T) {
 	if syncResponse["code"] != successCode || syncResponse["data"].(map[string]any)["status"] != "success" {
 		t.Fatalf("sync response = %#v", syncResponse)
 	}
+	if _, err := database.Exec(`UPDATE users SET display_name = '运营名称', monthly_fee = 99, notes = 'central-only'`); err != nil {
+		t.Fatalf("seed central business fields: %v", err)
+	}
 	duplicate := doJSON(t, ts.Client(), http.MethodPost, ts.URL+"/api/agent/v1/sync", nodeToken, payload)
 	if duplicate["code"] != successCode || duplicate["data"].(map[string]any)["idempotent"] != true {
 		t.Fatalf("duplicate sync response = %#v", duplicate)
@@ -167,15 +170,18 @@ func TestAgentRegistrationHeartbeatAndIdempotentSync(t *testing.T) {
 	payload["inbounds"].([]any)[0].(map[string]any)["up"] = 50
 	payload["inbounds"].([]any)[0].(map[string]any)["down"] = 50
 	payload["inbounds"].([]any)[0].(map[string]any)["all_time"] = 100
+	payload["inbounds"].([]any)[0].(map[string]any)["remark"] = "X-Panel changed remark"
 	resetSync := doJSON(t, ts.Client(), http.MethodPost, ts.URL+"/api/agent/v1/sync", nodeToken, payload)
 	if resetSync["code"] != successCode {
 		t.Fatalf("reset sync response = %#v", resetSync)
 	}
 
-	var nodes, inbounds, clients, snapshots, resetSnapshots, resetEvents, syncRuns int
+	var nodes, inbounds, users, userInboundMappings, clients, snapshots, resetSnapshots, resetEvents, syncRuns int
 	for query, target := range map[string]*int{
 		"SELECT COUNT(*) FROM nodes WHERE node_key = 'relay-agent-1'":             &nodes,
 		"SELECT COUNT(*) FROM inbounds WHERE remote_inbound_id = '15'":            &inbounds,
+		"SELECT COUNT(*) FROM users":                                              &users,
+		"SELECT COUNT(*) FROM user_inbounds":                                      &userInboundMappings,
 		"SELECT COUNT(*) FROM clients WHERE remote_client_id = 'client-a'":        &clients,
 		"SELECT COUNT(*) FROM traffic_snapshots WHERE all_time = 300":             &snapshots,
 		"SELECT COUNT(*) FROM traffic_snapshots WHERE reset_detected = 1":         &resetSnapshots,
@@ -186,8 +192,17 @@ func TestAgentRegistrationHeartbeatAndIdempotentSync(t *testing.T) {
 			t.Fatalf("query %q: %v", query, err)
 		}
 	}
-	if nodes != 1 || inbounds != 1 || clients != 1 || snapshots != 1 || resetSnapshots != 1 || resetEvents != 1 || syncRuns != 1 {
-		t.Fatalf("stored rows nodes=%d inbounds=%d clients=%d snapshots=%d resetSnapshots=%d resetEvents=%d syncRuns=%d", nodes, inbounds, clients, snapshots, resetSnapshots, resetEvents, syncRuns)
+	if nodes != 1 || inbounds != 1 || users != 1 || userInboundMappings != 1 || clients != 1 || snapshots != 1 || resetSnapshots != 1 || resetEvents != 1 || syncRuns != 1 {
+		t.Fatalf("stored rows nodes=%d inbounds=%d users=%d userInboundMappings=%d clients=%d snapshots=%d resetSnapshots=%d resetEvents=%d syncRuns=%d", nodes, inbounds, users, userInboundMappings, clients, snapshots, resetSnapshots, resetEvents, syncRuns)
+	}
+	var displayName, notes string
+	var monthlyFee float64
+	var userExpiry sql.NullString
+	if err := database.QueryRow(`SELECT display_name, monthly_fee, notes, expiry_time FROM users`).Scan(&displayName, &monthlyFee, &notes, &userExpiry); err != nil {
+		t.Fatalf("read business user: %v", err)
+	}
+	if displayName != "运营名称" || monthlyFee != 99 || notes != "central-only" || !userExpiry.Valid {
+		t.Fatalf("business fields were not preserved or expiry missing: name=%q fee=%v notes=%q expiry=%v", displayName, monthlyFee, notes, userExpiry)
 	}
 }
 

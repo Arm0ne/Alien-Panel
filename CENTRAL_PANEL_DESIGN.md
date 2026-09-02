@@ -112,6 +112,8 @@
 
 同一用户在手机、电脑和平板上有三个 Client 时，中央仍只统计一个用户，设备数量显示为 3。
 
+已登记为 `relay` 的线路机完成成功快照后，中央会为每个新发现的业务 Inbound 自动创建一个业务用户和一条一对一关联。初始名称依次取 X-Panel `remark`、`tag`、`Inbound <remote_id>`；后续同步只更新 X-Panel 权威字段（启用状态、到期时间、流量和 Client），不会覆盖中央维护的名称、月费、币种和备注。
+
 X-Panel 的 email 在本地数据库中具有唯一性，但中央不使用 email 作为主键。中央远程资源唯一键为：
 
 ~~~text
@@ -126,6 +128,8 @@ node_id + remote_inbound_id + remote_client_id
 - user：线路机上的业务用户 Inbound；
 - infrastructure：落地机 SS 入站、管理入站、API 入站等基础设施；
 - unknown：新发现但尚未人工确认的 Inbound。
+
+线路机的新 Inbound 默认归为 `user` 并建立业务用户；落地机新 Inbound 保持 `unknown`，待运营人员确认后可标记为 `infrastructure`。已标记为 `infrastructure` 的线路机 Inbound 不会被后续同步自动创建成用户。
 
 第一版不自动从 Xray 路由规则推断用户归属。
 
@@ -667,7 +671,7 @@ delta = current.all_time - previous.all_time
 
 ### 11.1 第一版只读模式
 
-第一版用户来源为 X-Panel Inbound。中央可编辑：
+第一版用户来源为线路机 X-Panel Inbound。成功同步时会自动建立一对一业务用户关联；中央可编辑：
 
 - 业务名称；
 - 月费；

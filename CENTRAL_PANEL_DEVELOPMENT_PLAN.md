@@ -36,6 +36,7 @@
 - Agent 基础工程已建立：YAML/环境变量配置、X-Panel Session Cookie 登录、401 单次重登录、失败退避、中央 Bearer 客户端、请求 ID/时间戳和 systemd 部署文件；
 - Agent 采集侧已建立：Inbound/Client 字段兼容映射、`up/down/all_time` 累计流量读取、节点状态解析、标准化 `config_hash`、心跳和完整同步 payload，以及按 `sync_interval` 运行的可取消任务循环；
 - 中央侧 Agent 注册、Bearer 节点认证、心跳接收、完整同步事务、Inbound/Client/流量快照落库和 `sync_id` 幂等已实现；
+- 已实现线路机 Inbound 到中央业务用户的一对一自动映射；同步仅刷新 X-Panel 权威字段，不覆盖中央录入的名称、月费、币种和备注；
 - 已实现累计流量回退检测与 `traffic_reset` 事件、按相邻快照差值计算日/月流量，以及查询时的用户到期和节点离线状态刷新；
 - 已实现独立后台任务，服务启动即刷新、随后按配置周期更新用户到期状态和节点在线状态；
 - 已实现 Inbound 连续三次成功完整同步缺失才归档的保护机制，并写入 `inbound_missing`、`inbound_archived` 事件；归档保留中央业务关联、Client 与历史快照；

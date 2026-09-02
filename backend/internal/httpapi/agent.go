@@ -208,11 +208,21 @@ func (s *Server) agentSync(w http.ResponseWriter, r *http.Request) {
 		writeFailure(w, http.StatusInternalServerError, internalErrorCode, "could not create sync run")
 		return
 	}
+	var nodeType string
+	if err := tx.QueryRow(`SELECT type FROM nodes WHERE id = ?`, principal.NodeID).Scan(&nodeType); err != nil {
+		s.failSync(w, tx, syncRunID, fmt.Errorf("read node type: %w", err))
+		return
+	}
 
 	clientCount := 0
 	for _, inbound := range payload.Inbounds {
 		remoteInboundID := strconv.FormatInt(inbound.RemoteID, 10)
-		expiry := epochString(inbound.ExpiryTime)
+		expiryText := ""
+		var expiry any
+		if inbound.ExpiryTime > 0 {
+			expiryText = time.Unix(inbound.ExpiryTime, 0).UTC().Format(time.RFC3339Nano)
+			expiry = expiryText
+		}
 		_, err := tx.Exec(`INSERT INTO inbounds (id, node_id, remote_inbound_id, tag, remark, protocol, port, listen, enable, expiry_time, up, down, all_time, client_count, config_hash, first_seen_at, last_seen_at, missing_since, missing_sync_count, deleted_at)
 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, 0, NULL)
 ON CONFLICT(node_id, remote_inbound_id) DO UPDATE SET tag = excluded.tag, remark = excluded.remark, protocol = excluded.protocol, port = excluded.port, listen = excluded.listen, enable = excluded.enable, expiry_time = excluded.expiry_time, up = excluded.up, down = excluded.down, all_time = excluded.all_time, client_count = excluded.client_count, config_hash = excluded.config_hash, last_seen_at = excluded.last_seen_at, missing_since = NULL, missing_sync_count = 0, deleted_at = NULL`,
@@ -224,6 +234,10 @@ ON CONFLICT(node_id, remote_inbound_id) DO UPDATE SET tag = excluded.tag, remark
 		var inboundID string
 		if err := tx.QueryRow(`SELECT id FROM inbounds WHERE node_id = ? AND remote_inbound_id = ?`, principal.NodeID, remoteInboundID).Scan(&inboundID); err != nil {
 			s.failSync(w, tx, syncRunID, fmt.Errorf("find inbound %s: %w", remoteInboundID, err))
+			return
+		}
+		if err := s.ensureRelayInboundUser(tx, nodeType, inboundID, remoteInboundID, inbound, expiryText, observedAt); err != nil {
+			s.failSync(w, tx, syncRunID, fmt.Errorf("ensure business user for inbound %s: %w", remoteInboundID, err))
 			return
 		}
 		resetDetected, err := detectTrafficReset(tx, inboundID, observedAt, inbound.AllTime)
@@ -278,6 +292,84 @@ ON CONFLICT(node_id, inbound_id, remote_client_id) DO UPDATE SET email = exclude
 		return
 	}
 	writeSuccess(w, map[string]any{"sync_id": payload.SyncID, "status": "success", "inboundCount": len(payload.Inbounds), "clientCount": clientCount, "idempotent": false})
+}
+
+// ensureRelayInboundUser establishes the first-version business rule that one
+// relay-node Inbound is one central business user. It deliberately never
+// overwrites business fields maintained in the central panel (name, fee,
+// currency, notes); X-Panel remains authoritative only for Inbound state and
+// expiry. Landing-node and explicitly infrastructure-classified Inbounds stay
+// outside the business-user list.
+func (s *Server) ensureRelayInboundUser(tx *sql.Tx, nodeType, inboundID, remoteInboundID string, inbound agentInboundPayload, expiryText string, observedAt time.Time) error {
+	if nodeType != "relay" {
+		return nil
+	}
+
+	var userID, kind string
+	if err := tx.QueryRow(`SELECT COALESCE(user_id, ''), kind FROM inbounds WHERE id = ?`, inboundID).Scan(&userID, &kind); err != nil {
+		return fmt.Errorf("read inbound classification: %w", err)
+	}
+	if kind == "infrastructure" {
+		return nil
+	}
+	if kind == "unknown" {
+		if _, err := tx.Exec(`UPDATE inbounds SET kind = 'user' WHERE id = ?`, inboundID); err != nil {
+			return fmt.Errorf("classify relay inbound as user: %w", err)
+		}
+	}
+
+	now := observedAt.UTC().Format(time.RFC3339Nano)
+	status := statusFromInbound(inbound, observedAt)
+	var expiry any
+	if expiryText != "" {
+		expiry = expiryText
+	}
+	if userID == "" {
+		userID = newID()
+		if _, err := tx.Exec(`INSERT INTO users (id, display_name, status, expiry_time, created_at, updated_at)
+VALUES (?, ?, ?, ?, ?, ?)`, userID, inboundDisplayName(inbound, remoteInboundID), status, expiry, now, now); err != nil {
+			return fmt.Errorf("create business user: %w", err)
+		}
+		if _, err := tx.Exec(`UPDATE inbounds SET user_id = ?, kind = 'user' WHERE id = ?`, userID, inboundID); err != nil {
+			return fmt.Errorf("link inbound to business user: %w", err)
+		}
+	} else if _, err := tx.Exec(`UPDATE users
+SET expiry_time = ?, status = CASE WHEN status = 'disabled' THEN 'disabled' ELSE ? END, updated_at = ?
+WHERE id = ?`, expiry, status, now, userID); err != nil {
+		return fmt.Errorf("refresh business user state: %w", err)
+	}
+	if _, err := tx.Exec(`INSERT OR IGNORE INTO user_inbounds (id, user_id, inbound_id, is_primary, active_from)
+VALUES (?, ?, ?, 1, ?)`, newID(), userID, inboundID, now); err != nil {
+		return fmt.Errorf("save business user mapping: %w", err)
+	}
+	return nil
+}
+
+func inboundDisplayName(inbound agentInboundPayload, remoteInboundID string) string {
+	if value := strings.TrimSpace(inbound.Remark); value != "" {
+		return value
+	}
+	if value := strings.TrimSpace(inbound.Tag); value != "" {
+		return value
+	}
+	return "Inbound " + remoteInboundID
+}
+
+func statusFromInbound(inbound agentInboundPayload, observedAt time.Time) string {
+	if !inbound.Enable {
+		return "disabled"
+	}
+	if inbound.ExpiryTime <= 0 {
+		return "active"
+	}
+	expiresAt := time.Unix(inbound.ExpiryTime, 0).UTC()
+	if !expiresAt.After(observedAt.UTC()) {
+		return "expired"
+	}
+	if !expiresAt.After(observedAt.UTC().Add(userExpiringWindow)) {
+		return "expiring"
+	}
+	return "active"
 }
 
 func (s *Server) markMissingAndArchiveInbounds(tx *sql.Tx, nodeID string, observedAt time.Time) error {

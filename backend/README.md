@@ -59,6 +59,8 @@ go build ./cmd/traffic-check
 
 Agent Token 只以哈希形式保存在 `node_credentials`，注册响应中的明文 Token 仅返回一次。业务字段写 API 和更细的报表聚合按开发进度表继续实现。
 
+已登记为 `relay` 的节点成功同步后，中央会将每个新发现的 Inbound 自动建立为一个业务用户，并关联其 Client/Email 设备。同步只更新来自 X-Panel 的 Inbound、到期、流量和设备字段，不会覆盖中央维护的业务名称、月费、币种和备注。落地节点的 Inbound 不会自动创建业务用户。
+
 ## 节点同步和 Inbound 归档
 
 每次成功的完整 Agent 同步都会将本次未出现的 Inbound 标记为缺失；首次缺失会写入 `inbound_missing` 事件。仅当同一个 Inbound 连续三次成功完整同步均缺失时，中央库才把它标记为归档并写入 `inbound_archived` 事件。
