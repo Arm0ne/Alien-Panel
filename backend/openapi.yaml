@@ -1,0 +1,187 @@
+openapi: 3.1.0
+info:
+  title: X-Panel Central API
+  version: 0.1.0
+  description: Central read model and operations API for multi-node X-Panel deployments.
+servers:
+  - url: http://127.0.0.1:8090/api
+security:
+  - bearerAuth: []
+paths:
+  /auth/login:
+    post:
+      security: []
+      summary: Administrator login
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+      responses:
+        '200':
+          description: Login result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EnvelopeLoginToken'
+  /auth/refreshToken:
+    post:
+      security: []
+      summary: Rotate a refresh token
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [refreshToken]
+              properties:
+                refreshToken: { type: string }
+      responses:
+        '200': { description: Refreshed token }
+  /auth/me:
+    get:
+      summary: Current administrator
+      responses:
+        '200': { description: Current user }
+  /auth/getUserInfo:
+    get:
+      summary: Frontend-compatible current administrator endpoint
+      responses:
+        '200': { description: Current user }
+  /auth/logout:
+    post:
+      summary: Revoke current session
+      responses:
+        '200': { description: Logout result }
+  /dashboard:
+    get:
+      summary: Operations overview
+      responses:
+        '200': { description: Dashboard summary }
+  /users:
+    get:
+      summary: Inbound-based user list
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+        - $ref: '#/components/parameters/Keyword'
+        - $ref: '#/components/parameters/Status'
+        - $ref: '#/components/parameters/NodeId'
+      responses:
+        '200': { description: Paginated users }
+  /nodes:
+    get:
+      summary: Node list
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+        - $ref: '#/components/parameters/Keyword'
+        - $ref: '#/components/parameters/Status'
+        - $ref: '#/components/parameters/NodeType'
+      responses:
+        '200': { description: Paginated nodes }
+  /routes:
+    get:
+      summary: Route relationship list
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+        - $ref: '#/components/parameters/Keyword'
+        - $ref: '#/components/parameters/Status'
+      responses:
+        '200': { description: Paginated routes }
+  /exit-ips:
+    get:
+      summary: Exit IP asset list
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+        - $ref: '#/components/parameters/Keyword'
+        - $ref: '#/components/parameters/Status'
+      responses:
+        '200': { description: Paginated exit IPs }
+  /costs/summary:
+    get:
+      summary: Monthly finance summary
+      parameters:
+        - name: period
+          in: query
+          schema: { type: string, pattern: '^\\d{4}-\\d{2}$' }
+      responses:
+        '200': { description: Finance summary }
+  /events:
+    get:
+      summary: Synchronization and anomaly events
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+        - $ref: '#/components/parameters/Keyword'
+        - $ref: '#/components/parameters/Severity'
+      responses:
+        '200': { description: Paginated events }
+  /health/live:
+    get:
+      security: []
+      summary: Liveness check
+      responses:
+        '200': { description: Process is alive }
+  /health/ready:
+    get:
+      security: []
+      summary: Readiness check
+      responses:
+        '200': { description: Database is ready }
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+  parameters:
+    Page:
+      name: page
+      in: query
+      schema: { type: integer, minimum: 1, default: 1 }
+    PageSize:
+      name: page_size
+      in: query
+      schema: { type: integer, minimum: 1, maximum: 200, default: 50 }
+    Keyword:
+      name: keyword
+      in: query
+      schema: { type: string }
+    Status:
+      name: status
+      in: query
+      schema: { type: string }
+    NodeId:
+      name: node_id
+      in: query
+      schema: { type: string }
+    NodeType:
+      name: node_type
+      in: query
+      schema: { type: string, enum: [relay, landing, unknown] }
+    Severity:
+      name: severity
+      in: query
+      schema: { type: string, enum: [info, warning, error] }
+  schemas:
+    LoginRequest:
+      type: object
+      required: [userName, password]
+      properties:
+        userName: { type: string }
+        password: { type: string, format: password }
+    EnvelopeLoginToken:
+      type: object
+      properties:
+        code: { type: string, example: '0000' }
+        msg: { type: string, example: ok }
+        data:
+          type: object
+          properties:
+            token: { type: string }
+            refreshToken: { type: string }
+            expiresAt: { type: string, format: date-time }

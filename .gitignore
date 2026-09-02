@@ -1,0 +1,9 @@
+# The frontend keeps its own upstream-based Git history.
+/frontend/
+
+# Runtime data and local build artifacts.
+/backend/data/
+/backend/*.db
+/backend/*.db-shm
+/backend/*.db-wal
+/backend/*.exe
