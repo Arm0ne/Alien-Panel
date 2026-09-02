@@ -502,6 +502,8 @@ POST /agent/v1/register
 
 请求包含 Node Key、名称、节点类型、主机名、Agent 版本和本机 X-Panel 地址。中央返回中央 Node ID、正式 Token 和同步策略。正式 Token 只显示一次。
 
+生产环境的注册请求必须额外携带部署侧保存的 `X-Agent-Registration-Token` 引导密钥；引导密钥只用于首次注册/轮换，不作为节点同步 Bearer Token。中央只在注册响应中返回一次正式节点 Token，后续仅保存其哈希。
+
 ### 8.2 心跳
 
 ~~~text

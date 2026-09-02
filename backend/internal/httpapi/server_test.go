@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -27,10 +28,11 @@ func testServer(t *testing.T) (*Server, *sql.DB) {
 		t.Fatalf("migrate database: %v", err)
 	}
 	server, err := NewServer(config.Config{
-		AdminUsername: "admin",
-		AdminPassword: "test-password",
-		SessionTTL:    time.Hour,
-		CorsOrigins:   []string{"http://localhost:9527"},
+		AdminUsername:          "admin",
+		AdminPassword:          "test-password",
+		AgentRegistrationToken: "bootstrap-secret",
+		SessionTTL:             time.Hour,
+		CorsOrigins:            []string{"http://localhost:9527"},
 	}, database, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
 		database.Close()
@@ -87,6 +89,93 @@ func TestProtectedEndpointsRejectMissingToken(t *testing.T) {
 	server.Handler().ServeHTTP(recorder, request)
 	if recorder.Code != http.StatusUnauthorized {
 		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusUnauthorized)
+	}
+}
+
+func TestAgentRegistrationHeartbeatAndIdempotentSync(t *testing.T) {
+	server, database := testServer(t)
+	ts := httptest.NewServer(server.Handler())
+	defer ts.Close()
+
+	unauthorizedRegistration := doJSON(t, ts.Client(), http.MethodPost, ts.URL+"/api/agent/v1/register", "", map[string]any{
+		"node_key": "relay-agent-unauthorized", "node_name": "unauthorized",
+	})
+	if unauthorizedRegistration["code"] != unauthorizedCode {
+		t.Fatalf("registration without bootstrap token = %#v", unauthorizedRegistration)
+	}
+
+	registrationRequest, err := http.NewRequest(http.MethodPost, ts.URL+"/api/agent/v1/register", strings.NewReader(`{"node_key":"relay-agent-1","node_name":"线路机 Agent 1","node_type":"relay","hostname":"relay-1.example","panel_base_path":"/","agent_version":"0.1.0"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	registrationRequest.Header.Set("Content-Type", "application/json")
+	registrationRequest.Header.Set("X-Agent-Registration-Token", "bootstrap-secret")
+	registrationResponse, err := ts.Client().Do(registrationRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer registrationResponse.Body.Close()
+	var registration map[string]any
+	if err := json.NewDecoder(registrationResponse.Body).Decode(&registration); err != nil {
+		t.Fatal(err)
+	}
+	/*
+		Registration is intentionally tested with a separate header because the
+		bootstrap token is not a node credential and must never become a Bearer
+		token.
+	*/
+	if registration["code"] != successCode {
+		t.Fatalf("registration response = %#v", registration)
+	}
+	registrationData := registration["data"].(map[string]any)
+	nodeToken := registrationData["token"].(string)
+	if nodeToken == "" {
+		t.Fatal("registration returned empty node token")
+	}
+
+	observedAt := "2026-09-02T12:00:00Z"
+	heartbeat := doJSON(t, ts.Client(), http.MethodPost, ts.URL+"/api/agent/v1/heartbeat", nodeToken, map[string]any{
+		"node_key": "relay-agent-1", "observed_at": observedAt,
+		"status": map[string]any{"xray_running": true, "xray_version": "26.6.27", "xpanel_version": "2.4.0"},
+	})
+	if heartbeat["code"] != successCode {
+		t.Fatalf("heartbeat response = %#v", heartbeat)
+	}
+
+	payload := map[string]any{
+		"node_key": "relay-agent-1", "sync_id": "relay-agent-1-sync-001", "observed_at": observedAt,
+		"status": map[string]any{"xray_running": true, "xray_version": "26.6.27", "xpanel_version": "2.4.0"},
+		"inbounds": []any{map[string]any{
+			"remote_id": 15, "tag": "user-15", "remark": "Customer A", "protocol": "vless", "port": 443,
+			"enable": true, "expiry_time": 1792022400, "up": 100, "down": 200, "all_time": 300,
+			"config_hash": "hash-1", "clients": []any{
+				map[string]any{"remote_id": "client-a", "email": "phone", "enable": true, "all_time": 300},
+			},
+		}},
+	}
+	syncResponse := doJSON(t, ts.Client(), http.MethodPost, ts.URL+"/api/agent/v1/sync", nodeToken, payload)
+	if syncResponse["code"] != successCode || syncResponse["data"].(map[string]any)["status"] != "success" {
+		t.Fatalf("sync response = %#v", syncResponse)
+	}
+	duplicate := doJSON(t, ts.Client(), http.MethodPost, ts.URL+"/api/agent/v1/sync", nodeToken, payload)
+	if duplicate["code"] != successCode || duplicate["data"].(map[string]any)["idempotent"] != true {
+		t.Fatalf("duplicate sync response = %#v", duplicate)
+	}
+
+	var nodes, inbounds, clients, snapshots, syncRuns int
+	for query, target := range map[string]*int{
+		"SELECT COUNT(*) FROM nodes WHERE node_key = 'relay-agent-1'":             &nodes,
+		"SELECT COUNT(*) FROM inbounds WHERE remote_inbound_id = '15'":            &inbounds,
+		"SELECT COUNT(*) FROM clients WHERE remote_client_id = 'client-a'":        &clients,
+		"SELECT COUNT(*) FROM traffic_snapshots WHERE all_time = 300":             &snapshots,
+		"SELECT COUNT(*) FROM sync_runs WHERE sync_id = 'relay-agent-1-sync-001'": &syncRuns,
+	} {
+		if err := database.QueryRow(query).Scan(target); err != nil {
+			t.Fatalf("query %q: %v", query, err)
+		}
+	}
+	if nodes != 1 || inbounds != 1 || clients != 1 || snapshots != 1 || syncRuns != 1 {
+		t.Fatalf("stored rows nodes=%d inbounds=%d clients=%d snapshots=%d syncRuns=%d", nodes, inbounds, clients, snapshots, syncRuns)
 	}
 }
 

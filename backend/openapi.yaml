@@ -8,6 +8,42 @@ servers:
 security:
   - bearerAuth: []
 paths:
+  /agent/v1/register:
+    post:
+      security: []
+      summary: Register a node agent and issue a node token
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AgentRegisterRequest'
+      parameters:
+        - $ref: '#/components/parameters/AgentRegistrationToken'
+      responses:
+        '200': { description: Registration result }
+  /agent/v1/heartbeat:
+    post:
+      summary: Receive a node heartbeat
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AgentHeartbeatRequest'
+      responses:
+        '200': { description: Heartbeat accepted }
+  /agent/v1/sync:
+    post:
+      summary: Receive an idempotent node snapshot
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AgentSyncRequest'
+      responses:
+        '200': { description: Snapshot accepted }
   /auth/login:
     post:
       security: []
@@ -167,6 +203,11 @@ components:
       name: severity
       in: query
       schema: { type: string, enum: [info, warning, error] }
+    AgentRegistrationToken:
+      name: X-Agent-Registration-Token
+      in: header
+      required: true
+      schema: { type: string, format: password }
   schemas:
     LoginRequest:
       type: object
@@ -185,3 +226,70 @@ components:
             token: { type: string }
             refreshToken: { type: string }
             expiresAt: { type: string, format: date-time }
+    AgentRegisterRequest:
+      type: object
+      required: [node_key, node_name]
+      properties:
+        node_key: { type: string }
+        node_name: { type: string }
+        node_type: { type: string, enum: [relay, landing, unknown] }
+        hostname: { type: string }
+        panel_base_path: { type: string }
+        agent_version: { type: string }
+        xpanel_version: { type: string }
+        xray_version: { type: string }
+    AgentStatus:
+      type: object
+      properties:
+        xray_running: { type: boolean }
+        xray_version: { type: string }
+        xpanel_version: { type: string }
+    AgentHeartbeatRequest:
+      type: object
+      required: [node_key, observed_at, status]
+      properties:
+        node_key: { type: string }
+        observed_at: { type: string, format: date-time }
+        status: { $ref: '#/components/schemas/AgentStatus' }
+    AgentClient:
+      type: object
+      required: [remote_id]
+      properties:
+        remote_id: { type: string }
+        email: { type: string }
+        enable: { type: boolean }
+        expiry_time: { type: integer, format: int64 }
+        up: { type: integer, format: int64 }
+        down: { type: integer, format: int64 }
+        all_time: { type: integer, format: int64 }
+        last_online: { type: integer, format: int64 }
+    AgentInbound:
+      type: object
+      required: [remote_id]
+      properties:
+        remote_id: { type: integer, format: int64 }
+        tag: { type: string }
+        remark: { type: string }
+        protocol: { type: string }
+        port: { type: integer }
+        listen: { type: string }
+        enable: { type: boolean }
+        expiry_time: { type: integer, format: int64 }
+        up: { type: integer, format: int64 }
+        down: { type: integer, format: int64 }
+        all_time: { type: integer, format: int64 }
+        config_hash: { type: string }
+        clients:
+          type: array
+          items: { $ref: '#/components/schemas/AgentClient' }
+    AgentSyncRequest:
+      type: object
+      required: [node_key, sync_id, observed_at, status, inbounds]
+      properties:
+        node_key: { type: string }
+        sync_id: { type: string }
+        observed_at: { type: string, format: date-time }
+        status: { $ref: '#/components/schemas/AgentStatus' }
+        inbounds:
+          type: array
+          items: { $ref: '#/components/schemas/AgentInbound' }

@@ -21,6 +21,14 @@ type Client struct {
 	http    *http.Client
 }
 
+func (client *Client) Heartbeat(ctx context.Context, payload any) error {
+	return client.PostJSON(ctx, "/agent/v1/heartbeat", payload, nil)
+}
+
+func (client *Client) Sync(ctx context.Context, payload any, result any) error {
+	return client.PostJSON(ctx, "/agent/v1/sync", payload, result)
+}
+
 func NewClient(baseURL, token string, timeout time.Duration) (*Client, error) {
 	if strings.TrimSpace(baseURL) == "" {
 		return nil, fmt.Errorf("central URL is required")

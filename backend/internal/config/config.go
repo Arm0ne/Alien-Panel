@@ -9,24 +9,26 @@ import (
 )
 
 type Config struct {
-	ListenAddress       string
-	DatabasePath        string
-	AdminUsername       string
-	AdminPassword       string
-	SessionTTL          time.Duration
-	CorsOrigins         []string
-	AllowInsecureCookie bool
+	ListenAddress          string
+	DatabasePath           string
+	AdminUsername          string
+	AdminPassword          string
+	AgentRegistrationToken string
+	SessionTTL             time.Duration
+	CorsOrigins            []string
+	AllowInsecureCookie    bool
 }
 
 func Load() (Config, error) {
 	cfg := Config{
-		ListenAddress:       envOrDefault("XPANEL_LISTEN", ":8090"),
-		DatabasePath:        envOrDefault("XPANEL_DATABASE", "./data/panel.db"),
-		AdminUsername:       envOrDefault("XPANEL_ADMIN_USER", "admin"),
-		AdminPassword:       os.Getenv("XPANEL_ADMIN_PASSWORD"),
-		SessionTTL:          durationOrDefault("XPANEL_SESSION_TTL", 24*time.Hour),
-		CorsOrigins:         splitCSV(envOrDefault("XPANEL_CORS_ORIGINS", "http://localhost:9527,http://127.0.0.1:9527")),
-		AllowInsecureCookie: boolOrDefault("XPANEL_ALLOW_INSECURE_COOKIE", true),
+		ListenAddress:          envOrDefault("XPANEL_LISTEN", ":8090"),
+		DatabasePath:           envOrDefault("XPANEL_DATABASE", "./data/panel.db"),
+		AdminUsername:          envOrDefault("XPANEL_ADMIN_USER", "admin"),
+		AdminPassword:          os.Getenv("XPANEL_ADMIN_PASSWORD"),
+		AgentRegistrationToken: os.Getenv("XPANEL_AGENT_REGISTRATION_TOKEN"),
+		SessionTTL:             durationOrDefault("XPANEL_SESSION_TTL", 24*time.Hour),
+		CorsOrigins:            splitCSV(envOrDefault("XPANEL_CORS_ORIGINS", "http://localhost:9527,http://127.0.0.1:9527")),
+		AllowInsecureCookie:    boolOrDefault("XPANEL_ALLOW_INSECURE_COOKIE", true),
 	}
 
 	if cfg.AdminPassword == "" {

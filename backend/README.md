@@ -8,6 +8,7 @@ PowerShell：
 
 ```powershell
 $env:XPANEL_ADMIN_PASSWORD = 'replace-with-a-long-secret'
+$env:XPANEL_AGENT_REGISTRATION_TOKEN = 'replace-with-a-separate-bootstrap-secret'
 $env:XPANEL_DATABASE = './data/panel.db'
 go run ./cmd/server
 ```
@@ -22,6 +23,7 @@ go run ./cmd/server
 | `XPANEL_DATABASE` | `./data/panel.db` | SQLite 数据库路径 |
 | `XPANEL_ADMIN_USER` | `admin` | 首次启动创建的管理员用户名 |
 | `XPANEL_ADMIN_PASSWORD` | 无默认值 | 必填，首次启动创建管理员密码 |
+| `XPANEL_AGENT_REGISTRATION_TOKEN` | 无默认值 | Agent 首次注册接口的引导密钥；未配置时注册接口保持禁用 |
 | `XPANEL_SESSION_TTL` | `24h` | Session 有效期 |
 | `XPANEL_CORS_ORIGINS` | localhost:9527 | 允许的前端来源，逗号分隔 |
 
@@ -46,4 +48,10 @@ go build ./cmd/server
 }
 ```
 
-当前已实现健康检查、管理员登录/刷新/退出、当前管理员信息、Dashboard 和各业务只读列表。Agent 注册、心跳、完整同步以及业务写 API 按开发进度表在后续阶段加入。
+当前已实现健康检查、管理员登录/刷新/退出、当前管理员信息、Dashboard 和各业务只读列表。Agent 端点包括：
+
+- `POST /api/agent/v1/register`（注册节点并签发节点 Token）；
+- `POST /api/agent/v1/heartbeat`（Bearer 节点 Token）；
+- `POST /api/agent/v1/sync`（Bearer 节点 Token，按 `sync_id` 幂等写入 Inbound、Client 和流量快照）。
+
+Agent Token 只以哈希形式保存在 `node_credentials`，注册响应中的明文 Token 仅返回一次。业务字段写 API、流量重置检测和更细的聚合任务按开发进度表继续实现。
