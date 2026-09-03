@@ -16,7 +16,7 @@
 
 ## 2. 项目背景与目标
 
-当前每台线路机和落地机都独立安装 X-Panel 与 Xray。线路机使用 Reality 入站，连接落地机的 SS 入站；落地机通过 Xray 路由和多个出站提供不同公网出口 IP。单台机器内的配置和查看并不复杂，但节点数量增长后，逐台登录面板检查用户、到期时间、流量和成本会产生明显的运营负担。
+当前每台线路机和落地机都独立安装 X-Panel 与 Xray。线路机使用 Reality 入站，通常连接落地机的 SS 入站；部分线路也可直接使用线路机公网 IP，另有独立购买的 S5 出口。落地机仍可通过 Xray 路由和多个出站提供不同公网出口 IP。单台机器内的配置和查看并不复杂，但节点数量增长后，逐台登录面板检查用户、到期时间、流量和成本会产生明显的运营负担。
 
 本项目建设一个轻量中央面板，集中展示和汇总现有节点数据，同时保留 X-Panel 作为每台服务器的本地配置管理者。
 
@@ -27,7 +27,7 @@
 - 一个用户的多个 Email/Client 只作为多个设备凭证；
 - 直接读取 X-Panel 已累计的 Inbound 流量，不读取或清零 Xray Counter；
 - 查看用户到期时间、启用状态、客户端数量和最近活动；
-- 维护线路机、落地机、落地机 SS 入站和出口 IP 的关系；
+- 维护线路机、落地机、落地机 SS 入站以及节点/外部出口 IP 的关系；
 - 录入服务器、带宽和出口 IP 成本；
 - 录入用户月费并计算收入、成本和预计毛利润；
 - 支持节点离线、接口异常、流量重置和本地配置漂移提示；
@@ -79,7 +79,7 @@
 - 用户到期状态和筛选；
 - Client 数量和设备详情；
 - 线路机到落地机关系；
-- 落地机出口 IP 资产；
+- 线路机/落地机节点公网出口和独立 S5 出口资产；
 - 节点、出口 IP 和用户月费录入；
 - 总览、用户、节点、线路与成本四类页面；
 - 日/月流量快照和趋势；
@@ -159,6 +159,16 @@ X-Panel 的 onlines 基于采样增量，不是严格实时连接列表。页面
 中央可统计“配置归属用户数”：绑定到某条线路且该线路允许使用某出口 IP 的有效用户数。
 
 现有共享 SS 入站和随机 Xray 路由无法证明某个用户在某个时刻实际使用了哪一个出口 IP。因此页面必须使用“配置归属用户数”措辞，不得宣称“实际使用用户数”。
+
+出口资产不再假设全部属于落地机，统一按来源建模：
+
+- `source_type=node`：节点公网出口，`owner_node_id` 可指向线路机或落地机；线路绑定时用 `scope=relay` 表示线路机直出，用 `scope=landing` 表示落地机出口；
+- `source_type=s5`：独立购买的 S5 出口，不属于任何 VPS，`owner_node_id` 为空，只能以 `scope=external` 绑定线路；
+- `landing_node_id` 保留为旧 API/数据兼容字段，仅对落地机资产回填，不作为新的归属判断依据；
+- 绑定接口按线路两端节点和来源类型做强校验，禁止跨节点或将 S5 当作节点出口绑定；
+- `scope` 是线路出口池的配置维度；若同一节点组合下需要让不同用户分别走线路机直出或落地机，应建立两条逻辑线路并分别分配用户，避免把两种出口混在同一池中随机使用；
+- 用户实际分配通过 `user_routes` 完成：用户选择一条启用线路模板；`route_exit_ip_id` 有值时固定到该线路绑定的出口 IP，为空时按该线路启用出口池权重分配。线路机由用户主 Inbound 自动确定，落地机、落地 Inbound 和出口位置由线路模板统一维护；此配置属于中央运营配置，不会直接改写 X-Panel/Xray；
+- 中央只维护 S5 资产、成本和线路关系，不保存明文账号密码；实际认证凭据应使用加密 Secret 或节点本地 Secret 引用。
 
 ### 5.6 财务口径
 
@@ -290,6 +300,7 @@ nodes
 - node_key
 - name
 - type                 -- relay / landing
+- deleted_at           -- soft-deletion timestamp; hidden from active management
 - hostname
 - public_ip
 - region
@@ -314,6 +325,8 @@ node_credentials
 ~~~
 
 中央只保存 Node Token 的哈希。X-Panel 用户名和密码只保存在节点 Agent 本地配置中。
+
+节点的 `public_ip` 仅表示节点主公网/管理地址；节点可拥有多个出口资产，统一记录在 `exit_ips`，通过 `owner_node_id` 归属线路机或落地机。接入向导允许一次提交多个 IPv4/IPv6 地址，创建节点与出口资产在同一事务中完成；出口资产的服务商、成本、有效期和备注在出口 IP 页面维护。
 
 ### 7.2 用户、Inbound 和 Client
 
@@ -403,13 +416,16 @@ user_routes
 - id
 - user_id
 - route_id
+- route_exit_ip_id (nullable; fixed route-exit binding, null means route pool)
 - is_primary
 - active_from
 - active_to
 
 exit_ips
 - id
-- landing_node_id
+- source_type (node / s5)
+- owner_node_id (nullable; relay or landing)
+- landing_node_id (legacy nullable alias)
 - ip
 - family
 - provider
@@ -424,6 +440,7 @@ route_exit_ips
 - id
 - route_id
 - exit_ip_id
+- scope (relay / landing / external)
 - allocation_weight
 - enabled
 
@@ -755,7 +772,7 @@ POST /inbounds/updateClient/:clientId
 节点详情显示：
 
 - Inbound 列表；
-- 落地机出口 IP；
+- 节点拥有的公网出口 IP（线路机直出或落地机出口）；
 - 最近同步错误；
 - 最近状态历史。
 
@@ -767,7 +784,8 @@ POST /inbounds/updateClient/:clientId
 - 落地机；
 - 线路机 Outbound Tag；
 - 落地机 SS Inbound；
-- 出口 IP；
+- 出口 IP 来源（线路机、落地机或独立 S5）；
+- 出口位置（线路机直出、落地机出口或外部 S5）；
 - 出口 IP 月成本；
 - 线路有效用户数；
 - 线路备注。
@@ -818,6 +836,8 @@ GET  /api/dashboard
 GET  /api/users
 GET  /api/users/:id
 PATCH /api/users/:id
+PUT  /api/users/:id/route
+DELETE /api/users/:id/route
 GET  /api/nodes
 GET  /api/nodes/:id
 PATCH /api/nodes/:id

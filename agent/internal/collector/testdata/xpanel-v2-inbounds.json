@@ -1,0 +1,20 @@
+{
+  "success": true,
+  "data": {
+    "list": [
+      {
+        "id": "202",
+        "name": "customer-v2",
+        "scheme": "vmess",
+        "port": 8443,
+        "enabled": "true",
+        "upload": "12",
+        "download": "34",
+        "settings": "{\"clients\":[{\"email\":\"v2-laptop\",\"enable\":\"1\"}]}",
+        "clientTraffic": [
+          {"email": "v2-laptop", "upload": "5", "download": "8", "total": "13", "lastOnline": "1791000100"}
+        ]
+      }
+    ]
+  }
+}

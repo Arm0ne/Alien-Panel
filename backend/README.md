@@ -1,5 +1,8 @@
 # X-Panel Central Backend
 
+中央服务部署、节点接入、故障排查、备份恢复和灰度回滚请参阅项目根目录的
+[`OPERATIONS_RUNBOOK.md`](../OPERATIONS_RUNBOOK.md)。
+
 这是中央管理面板的 Go 后端骨架。它只保存中央业务数据，使用 X-Panel API 的同步数据，不修改 X-Panel/Xray 源码，也不调用 Xray 的 reset 统计接口。
 
 ## 本地启动
@@ -13,7 +16,7 @@ $env:XPANEL_DATABASE = './data/panel.db'
 go run ./cmd/server
 ```
 
-默认监听 `:8090`。前端开发环境已配置为 `http://127.0.0.1:8090/api`。
+默认监听 `:8090`。本地前端开发环境已配置为 `http://localhost:8090/api`；在 Windows 上可避免本机其他程序占用 IPv4 回环地址时的冲突。
 
 常用配置：
 
@@ -39,6 +42,29 @@ go build ./cmd/traffic-check
 
 数据库使用 SQLite WAL，迁移文件位于 `internal/db/migrations/`，服务启动时自动执行且按版本幂等。
 
+数据库运维命令位于 `cmd/db-maintenance`：
+
+```powershell
+go run ./cmd/db-maintenance backup --database .\data\panel.db --backup-dir .\data\backups --retention 14
+go run ./cmd/db-maintenance verify --path .\data\backups\panel-20260903T010203Z.sqlite3
+go run ./cmd/db-maintenance migrate --database .\data\panel.db --backup-dir .\data\backups
+go run ./cmd/db-maintenance restore --source .\data\backups\panel-20260903T010203Z.sqlite3 --database .\data\panel.db --yes
+```
+
+`backup` 使用 SQLite `VACUUM INTO` 生成不依赖 WAL/SHM 的一致性快照，默认保留
+14 个版本；`verify` 执行 `integrity_check` 和 `foreign_key_check`；`migrate`
+会在已有数据库升级前自动备份，然后执行内置幂等迁移。恢复前必须停止中央服务，
+`restore` 会先生成 `panel-pre-restore-*.sqlite3` 安全快照并在替换后再次校验。
+
+本地联调可写入一组可重复的模拟业务数据（不会覆盖非 `demo-*` 记录）：
+
+```powershell
+go run ./cmd/seed-demo --database .\data\panel.db
+```
+
+该命令包含模拟线路机、落地机、线路、出口 IP、一个用户、两个 Client 和流量快照，
+用于验证用户详情、业务字段编辑、设备、线路和流量展示；公网或生产数据库不要执行。
+
 ## API
 
 接口草稿见 [`openapi.yaml`](./openapi.yaml)。所有响应统一为：
@@ -51,17 +77,51 @@ go build ./cmd/traffic-check
 }
 ```
 
-当前已实现健康检查、管理员登录/刷新/退出、当前管理员信息、Dashboard、各业务只读列表，以及用户详情和中央业务字段编辑。Agent 端点包括：
+当前已实现健康检查、管理员登录/刷新/退出、当前管理员信息、Dashboard、各业务列表、用户详情和中央业务字段编辑、节点详情和同步请求，以及线路关系 CRUD。Agent 端点包括：
 
 - `POST /api/agent/v1/register`（注册节点并签发节点 Token）；
 - `POST /api/agent/v1/heartbeat`（Bearer 节点 Token）；
 - `POST /api/agent/v1/sync`（Bearer 节点 Token，按 `sync_id` 幂等写入 Inbound、Client 和流量快照）。
 
+节点页面接口：
+
+- `POST /api/nodes` 由管理员创建中央节点记录并生成一次性显示的 Agent Token；`nodeKey` 可省略，中央会生成稳定的 `node-<random>` 标识并写入 Agent 配置模板；Token 只保存哈希，X-Panel 用户名和密码只应放在 Agent 节点本机配置中；
+- `PATCH /api/nodes/{id}` 修改节点元数据或启用状态。停用后该节点的 Agent heartbeat、完整同步和立即同步请求都会被拒绝，重新启用后恢复认证；兼容的 Agent register 流程不会覆盖管理员的停用状态；
+- `DELETE /api/nodes/{id}` 为保留历史的软删除：节点从活动列表隐藏、所有 Agent Token 立即撤销，节点 Inbound/Client/流量/成本等历史数据保留；节点仍被线路或出口 IP 资产引用时返回 `409`，需先解除关联；删除后不能再用旧 Node Key 注册原节点；
+- `POST /api/nodes` 的 `exitIps` 可传入最多 100 个 IPv4/IPv6 地址，创建时作为该节点的出口 IP 资产原子写入；`publicIp` 仍表示节点主公网/管理地址，不替代出口资产列表。出口 IP 的服务商、成本、有效期和备注可在出口 IP 页面补充；
+- `GET /api/nodes/{id}` 返回节点元数据、Inbound、该节点拥有的公网出口 IP（线路机和落地机）、最近同步运行和状态事件；
+- `POST /api/nodes/{id}/sync` 写入一次立即同步请求事件并返回 `queued`。中央服务不反向调用 X-Panel，节点 Agent 会在下一次周期同步中执行。
+- `GET /api/nodes/{id}/costs` 查询节点成本记录；`POST /api/nodes/{id}/costs` 录入节点月成本；`PATCH /api/nodes/{id}/costs/{costId}` 修改成本类别、金额和备注。生效日期属于历史版本，不能在编辑时改动；日期变化应新增一条成本记录。
+- 节点详情中的成本记录按生效日期展示，财务汇总按所选月份与有效区间计算节点成本。
+- `GET /api/costs/summary?period=YYYY-MM` 返回有效用户数、用户月费收入、节点/出口 IP/其他成本和预计毛利润。收入按统计月份计算：用户需在该月结束前创建、统计月开始时尚未到期且未停用；不使用当前状态筛选历史月份。成本按月份半开区间与记录有效区间求交集，避免下月生效成本提前计入。
+- 线路和出口 IP 列表/详情返回“配置归属用户数”：仅统计当前有效且未停用用户；出口 IP 还要求线路、出口 IP 资产和绑定均为启用状态。
+- 管理员 Bearer 写请求若携带 Origin/Referer，必须匹配 `XPANEL_CORS_ORIGINS`；无浏览器来源头的 CLI 客户端仍可使用。当前认证不使用 Cookie，因此这是面向未来 Cookie 迁移的纵深 CSRF 防护。
+- refresh token 为单次使用并在轮换时撤销旧会话；管理员 logout 会撤销当前会话；同一 Agent 重新注册会撤销该节点旧 Token。所有受保护接口均检查会话/节点凭据、有效期和启用状态。
+- 分页接口统一返回 `dataAt`（最新成功同步时间；尚无成功同步时为 `null`），总览和财务汇总也返回同一数据时间，供前端判断数据延迟或过期。
+- 用户列表回归保证按 Inbound 聚合为一行；同一 Email 出现在不同节点时仍属于不同业务用户，Client 数仅统计该 Inbound 的设备凭证。
+
 用户详情接口：
 
 - `GET /api/users/{id}` 返回业务用户、主 Inbound、Client/Email 设备、节点和已分配线路的只读快照；
 - `PATCH /api/users/{id}` 仅更新中央维护的 `displayName`、`monthlyFee`、`currency`（当前仅支持 `CNY`）和 `notes`，并写入 `audit_logs`；
+- `PUT /api/users/{id}/route` 将一个启用的线路模板分配给用户；可选 `routeExitIpId` 固定到该线路已绑定的某个出口 IP，省略时按线路出口池权重分配；`DELETE /api/users/{id}/route` 解除当前线路并保留历史关系；这些操作只更新中央配置，不会直接改写 X-Panel/Xray；
 - 用户详情页不会修改 X-Panel/Xray，也不会写入 X-Panel 的到期、启用、Client 或流量字段。
+
+线路关系接口：
+
+- `GET /api/routes/{id}` 返回线路机、落地机、Outbound/Inbound 标签、有效期和绑定统计；
+- `POST /api/routes`、`PATCH /api/routes/{id}` 创建或更新线路关系，并校验节点类型、落地 Inbound 归属及日期范围；
+- `DELETE /api/routes/{id}` 仅允许删除没有用户或出口 IP 绑定的线路；有绑定时返回 `409`，应先停用线路。
+- `GET /api/routes/{id}/exit-ips` 查询线路已绑定的出口 IP；
+- `POST /api/routes/{id}/exit-ips` 按 `scope` 绑定出口：`relay` 只能绑定该线路线路机直出、`landing` 只能绑定该线路落地机、`external` 只能绑定独立 S5；省略 `scope` 时按资产归属兼容推断；重复或跨节点绑定会被拒绝；
+- `scope` 属于线路出口池；如果不同用户需要分别走线路机直出和落地机出口，应建立两条逻辑线路后分别分配用户，不要把两种出口混在同一线路池；
+- `PATCH /api/routes/{id}/exit-ips/{exitIpId}` 更新绑定权重和启用状态，`DELETE` 解绑；绑定变更会刷新线路和出口 IP 的配置归属统计并写入审计日志。
+
+出口 IP 接口：
+
+- `GET /api/exit-ips/{id}` 返回地址、协议族、来源类型、所属节点/独立 S5、成本、有效期和配置归属用户数；旧 `landingNodeId` 字段保留兼容；
+- `POST /api/exit-ips`、`PATCH /api/exit-ips/{id}` 创建或更新 IPv4/IPv6 出口 IP 资产。`sourceType=node` 时用 `ownerNodeId` 指向线路机或落地机，`sourceType=s5` 表示独立购买的 S5（不绑定节点）；旧 `landingNodeId` 请求仍兼容为落地机资产。接口校验来源、地址族、成本和日期范围；
+- `DELETE /api/exit-ips/{id}` 仅允许删除没有线路绑定的资产；有绑定时返回 `409`，应先停用出口 IP。
 
 Agent Token 只以哈希形式保存在 `node_credentials`，注册响应中的明文 Token 仅返回一次。业务字段写 API 和更细的报表聚合按开发进度表继续实现。
 

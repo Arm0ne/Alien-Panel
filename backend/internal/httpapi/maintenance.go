@@ -47,7 +47,7 @@ WHERE status IN ('unknown', 'active', 'expiring', 'expired')`, nowText, expiring
 	}
 	offlineBefore := now.UTC().Add(-nodeOfflineAfter).Format(time.RFC3339Nano)
 	if _, err := s.db.Exec(`UPDATE nodes SET health_status = 'offline', updated_at = ?
-WHERE enabled = 1 AND last_seen_at IS NOT NULL AND last_seen_at < ? AND health_status IN ('online', 'degraded', 'unknown')`, nowText, offlineBefore); err != nil {
+WHERE deleted_at IS NULL AND enabled = 1 AND last_seen_at IS NOT NULL AND last_seen_at < ? AND health_status IN ('online', 'degraded', 'unknown')`, nowText, offlineBefore); err != nil {
 		s.logger.Warn("refresh node health statuses", "error", err)
 	}
 }

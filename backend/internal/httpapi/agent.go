@@ -32,9 +32,14 @@ type agentRegisterRequest struct {
 }
 
 type agentStatusPayload struct {
-	XrayRunning   bool   `json:"xray_running"`
-	XrayVersion   string `json:"xray_version"`
-	XPanelVersion string `json:"xpanel_version"`
+	XrayRunning   bool    `json:"xray_running"`
+	XrayVersion   string  `json:"xray_version"`
+	XPanelVersion string  `json:"xpanel_version"`
+	CPUUsage      float64 `json:"cpu_usage"`
+	MemoryUsed    int64   `json:"memory_used"`
+	MemoryTotal   int64   `json:"memory_total"`
+	DiskUsed      int64   `json:"disk_used"`
+	DiskTotal     int64   `json:"disk_total"`
 }
 
 type agentHeartbeatRequest struct {
@@ -106,14 +111,21 @@ func (s *Server) agentRegister(w http.ResponseWriter, r *http.Request) {
 	defer tx.Rollback()
 
 	var nodeID string
-	err = tx.QueryRow(`SELECT id FROM nodes WHERE node_key = ?`, strings.TrimSpace(payload.NodeKey)).Scan(&nodeID)
+	var deletedAt string
+	err = tx.QueryRow(`SELECT id, COALESCE(deleted_at, '') FROM nodes WHERE node_key = ?`, strings.TrimSpace(payload.NodeKey)).Scan(&nodeID, &deletedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		nodeID = newID()
 		_, err = tx.Exec(`INSERT INTO nodes (id, node_key, name, type, hostname, panel_base_path, agent_version, xpanel_version, xray_version, enabled, health_status, created_at, updated_at)
 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 'unknown', ?, ?)`, nodeID, strings.TrimSpace(payload.NodeKey), strings.TrimSpace(payload.NodeName), nodeType,
 			strings.TrimSpace(payload.Hostname), strings.TrimSpace(payload.PanelBasePath), strings.TrimSpace(payload.AgentVersion), strings.TrimSpace(payload.XPanelVersion), strings.TrimSpace(payload.XrayVersion), now, now)
 	} else if err == nil {
-		_, err = tx.Exec(`UPDATE nodes SET name = ?, type = ?, hostname = ?, panel_base_path = ?, agent_version = ?, xpanel_version = ?, xray_version = ?, enabled = 1, updated_at = ? WHERE id = ?`,
+		if deletedAt != "" {
+			writeFailure(w, http.StatusConflict, validationCode, "node has been deleted; create a new node record before registering the Agent")
+			return
+		}
+		// Registration refreshes Agent-owned metadata but must not override an
+		// administrator's explicit disabled state. Re-enable through PATCH /api/nodes/{id}.
+		_, err = tx.Exec(`UPDATE nodes SET name = ?, type = ?, hostname = ?, panel_base_path = ?, agent_version = ?, xpanel_version = ?, xray_version = ?, updated_at = ? WHERE id = ?`,
 			strings.TrimSpace(payload.NodeName), nodeType, strings.TrimSpace(payload.Hostname), strings.TrimSpace(payload.PanelBasePath), strings.TrimSpace(payload.AgentVersion), strings.TrimSpace(payload.XPanelVersion), strings.TrimSpace(payload.XrayVersion), now, nodeID)
 	}
 	if err != nil {
@@ -279,7 +291,9 @@ ON CONFLICT(node_id, inbound_id, remote_client_id) DO UPDATE SET email = exclude
 		s.failSync(w, tx, syncRunID, fmt.Errorf("mark or archive missing inbounds: %w", err))
 		return
 	}
-	if _, err := tx.Exec(`UPDATE nodes SET health_status = ?, xpanel_version = CASE WHEN ? <> '' THEN ? ELSE xpanel_version END, xray_version = CASE WHEN ? <> '' THEN ? ELSE xray_version END, last_seen_at = ?, updated_at = ? WHERE id = ?`, healthStatus(payload.Status.XrayRunning), payload.Status.XPanelVersion, payload.Status.XPanelVersion, payload.Status.XrayVersion, payload.Status.XrayVersion, observedAt.Format(time.RFC3339Nano), now, principal.NodeID); err != nil {
+	if _, err := tx.Exec(`UPDATE nodes SET health_status = ?, xpanel_version = CASE WHEN ? <> '' THEN ? ELSE xpanel_version END, xray_version = CASE WHEN ? <> '' THEN ? ELSE xray_version END,
+cpu_usage = ?, memory_used = ?, memory_total = ?, disk_used = ?, disk_total = ?, last_seen_at = ?, updated_at = ? WHERE id = ?`, healthStatus(payload.Status.XrayRunning), payload.Status.XPanelVersion, payload.Status.XPanelVersion, payload.Status.XrayVersion, payload.Status.XrayVersion,
+		payload.Status.CPUUsage, nullableMetric(payload.Status.MemoryUsed), nullableMetric(payload.Status.MemoryTotal), nullableMetric(payload.Status.DiskUsed), nullableMetric(payload.Status.DiskTotal), observedAt.Format(time.RFC3339Nano), now, principal.NodeID); err != nil {
 		s.failSync(w, tx, syncRunID, fmt.Errorf("update node after sync: %w", err))
 		return
 	}
@@ -457,8 +471,17 @@ func (s *Server) failSync(w http.ResponseWriter, tx *sql.Tx, syncRunID string, e
 
 func (s *Server) updateNodeHeartbeat(nodeID string, observedAt time.Time, status agentStatusPayload) error {
 	now := time.Now().UTC().Format(time.RFC3339Nano)
-	_, err := s.db.Exec(`UPDATE nodes SET health_status = ?, xpanel_version = CASE WHEN ? <> '' THEN ? ELSE xpanel_version END, xray_version = CASE WHEN ? <> '' THEN ? ELSE xray_version END, last_seen_at = ?, updated_at = ? WHERE id = ?`, healthStatus(status.XrayRunning), status.XPanelVersion, status.XPanelVersion, status.XrayVersion, status.XrayVersion, observedAt.Format(time.RFC3339Nano), now, nodeID)
+	_, err := s.db.Exec(`UPDATE nodes SET health_status = ?, xpanel_version = CASE WHEN ? <> '' THEN ? ELSE xpanel_version END, xray_version = CASE WHEN ? <> '' THEN ? ELSE xray_version END,
+cpu_usage = ?, memory_used = ?, memory_total = ?, disk_used = ?, disk_total = ?, last_seen_at = ?, updated_at = ? WHERE id = ?`, healthStatus(status.XrayRunning), status.XPanelVersion, status.XPanelVersion, status.XrayVersion, status.XrayVersion,
+		status.CPUUsage, nullableMetric(status.MemoryUsed), nullableMetric(status.MemoryTotal), nullableMetric(status.DiskUsed), nullableMetric(status.DiskTotal), observedAt.Format(time.RFC3339Nano), now, nodeID)
 	return err
+}
+
+func nullableMetric(value int64) any {
+	if value <= 0 {
+		return nil
+	}
+	return value
 }
 
 func (s *Server) requireAgent(next http.Handler) http.Handler {
@@ -471,7 +494,7 @@ func (s *Server) requireAgent(next http.Handler) http.Handler {
 		token := strings.TrimSpace(strings.TrimPrefix(header, "Bearer "))
 		var principal agentPrincipal
 		var revokedAt sql.NullString
-		err := s.db.QueryRow(`SELECT n.id, n.node_key, c.revoked_at FROM node_credentials c JOIN nodes n ON n.id = c.node_id WHERE c.token_hash = ? AND n.enabled = 1`, hashToken(token)).Scan(&principal.NodeID, &principal.NodeKey, &revokedAt)
+		err := s.db.QueryRow(`SELECT n.id, n.node_key, c.revoked_at FROM node_credentials c JOIN nodes n ON n.id = c.node_id WHERE c.token_hash = ? AND n.enabled = 1 AND n.deleted_at IS NULL`, hashToken(token)).Scan(&principal.NodeID, &principal.NodeKey, &revokedAt)
 		if err != nil || revokedAt.Valid {
 			writeFailure(w, http.StatusUnauthorized, unauthorizedCode, "node authentication required")
 			return

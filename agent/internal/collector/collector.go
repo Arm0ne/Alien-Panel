@@ -141,7 +141,7 @@ func ParseStatus(payload json.RawMessage) (Status, error) {
 		XrayRunning:   boolField(object, "xray_running", "xrayRunning", "xray_status", "xrayStatus"),
 		XrayVersion:   stringField(object, "xray_version", "xrayVersion"),
 		XPanelVersion: stringField(object, "xpanel_version", "xPanelVersion", "panel_version", "panelVersion"),
-		CPUUsage:      floatField(object, "cpu_usage", "cpuUsage", "cpu_percent", "cpuPercent"),
+		CPUUsage:      floatField(object, "cpu_usage", "cpuUsage", "cpu_percent", "cpuPercent", "cpu"),
 		MemoryUsed:    intField(object, "memory_used", "memoryUsed", "memUsed"),
 		MemoryTotal:   intField(object, "memory_total", "memoryTotal", "memTotal"),
 		DiskUsed:      intField(object, "disk_used", "diskUsed"),
@@ -153,6 +153,26 @@ func ParseStatus(payload json.RawMessage) (Status, error) {
 		}
 		if status.XrayVersion == "" {
 			status.XrayVersion = stringField(nested, "version", "xray_version")
+		}
+	}
+	if status.MemoryUsed == 0 || status.MemoryTotal == 0 {
+		if nested, ok := objectMap(object, "mem", "memory", "memory_usage", "memoryUsage"); ok {
+			if status.MemoryUsed == 0 {
+				status.MemoryUsed = intField(nested, "current", "used", "memory_used", "memoryUsed")
+			}
+			if status.MemoryTotal == 0 {
+				status.MemoryTotal = intField(nested, "total", "memory_total", "memoryTotal")
+			}
+		}
+	}
+	if status.DiskUsed == 0 || status.DiskTotal == 0 {
+		if nested, ok := objectMap(object, "disk", "disk_usage", "diskUsage"); ok {
+			if status.DiskUsed == 0 {
+				status.DiskUsed = intField(nested, "current", "used", "disk_used", "diskUsed")
+			}
+			if status.DiskTotal == 0 {
+				status.DiskTotal = intField(nested, "total", "disk_total", "diskTotal")
+			}
 		}
 	}
 	return status, nil
@@ -241,7 +261,7 @@ func findClientItems(object, settings map[string]json.RawMessage) ([]json.RawMes
 		if source == nil {
 			continue
 		}
-		for _, key := range []string{"clients", "clientList"} {
+		for _, key := range []string{"clients", "clientList", "clientStats"} {
 			if raw, ok := source[key]; ok {
 				return rawList(raw)
 			}
@@ -251,7 +271,7 @@ func findClientItems(object, settings map[string]json.RawMessage) ([]json.RawMes
 }
 
 func trafficItemsFrom(object map[string]json.RawMessage) ([]json.RawMessage, error) {
-	for _, key := range []string{"clientTraffics", "client_traffics", "clientTraffic"} {
+	for _, key := range []string{"clientStats", "clientTraffics", "client_traffics", "clientTraffic"} {
 		if raw, ok := object[key]; ok {
 			return rawList(raw)
 		}
@@ -358,8 +378,15 @@ func objectFromOptional(raw json.RawMessage) (map[string]json.RawMessage, bool) 
 	return nil, false
 }
 
-func objectMap(object map[string]json.RawMessage, key string) (map[string]json.RawMessage, bool) {
-	return objectFromOptional(objectValueRaw(object, key))
+func objectMap(object map[string]json.RawMessage, keys ...string) (map[string]json.RawMessage, bool) {
+	for _, key := range keys {
+		if raw, ok := object[key]; ok {
+			if nested, ok := objectFromOptional(raw); ok {
+				return nested, true
+			}
+		}
+	}
+	return nil, false
 }
 
 func objectValue(object map[string]json.RawMessage, keys ...string) (json.RawMessage, bool) {

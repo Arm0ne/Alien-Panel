@@ -1,0 +1,22 @@
+[Unit]
+Description=X-Panel central management panel
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=xpanel-central
+Group=xpanel-central
+WorkingDirectory=/var/lib/xpanel-central
+ExecStart=/usr/local/bin/xpanel-central
+Restart=on-failure
+RestartSec=5s
+EnvironmentFile=-/etc/xpanel-central/central.env
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/xpanel-central
+
+[Install]
+WantedBy=multi-user.target

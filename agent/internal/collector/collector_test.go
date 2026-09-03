@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -75,6 +77,91 @@ func TestParseStatusSupportsNestedXrayObject(t *testing.T) {
 	if !status.XrayRunning || status.XrayVersion != "1.2.3" || status.CPUUsage != 12.5 || status.MemoryUsed != 100 || status.MemoryTotal != 200 {
 		t.Fatalf("status = %+v", status)
 	}
+}
+
+func TestCompatibilityFixtures(t *testing.T) {
+	tests := []struct {
+		name             string
+		inboundsFixture  string
+		statusFixture    string
+		inboundID        int64
+		clientID         string
+		clientAllTime    int64
+		statusXray       string
+		statusPanel      string
+		statusCPU        float64
+		statusMemoryUsed int64
+		statusDiskUsed   int64
+	}{
+		{
+			name:             "xpanel-v1-envelope-and-nested-metrics",
+			inboundsFixture:  "xpanel-v1-inbounds.json",
+			statusFixture:    "xpanel-v1-status.json",
+			inboundID:        101,
+			clientID:         "v1-client",
+			clientAllTime:    30,
+			statusXray:       "1.8.4",
+			statusPanel:      "2.4.7",
+			statusCPU:        6.25,
+			statusMemoryUsed: 1048576,
+			statusDiskUsed:   2147483648,
+		},
+		{
+			name:             "xpanel-v2-data-envelope-and-string-fields",
+			inboundsFixture:  "xpanel-v2-inbounds.json",
+			statusFixture:    "xpanel-v2-status.json",
+			inboundID:        202,
+			clientID:         "v2-laptop",
+			clientAllTime:    13,
+			statusXray:       "1.8.5",
+			statusPanel:      "2.5.0",
+			statusCPU:        8.5,
+			statusMemoryUsed: 2000,
+			statusDiskUsed:   5000,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			inboundResponse := readResponseFixture(t, test.inboundsFixture)
+			inbounds, err := ParseInbounds(responsePayload(inboundResponse))
+			if err != nil {
+				t.Fatalf("ParseInbounds() error = %v", err)
+			}
+			if len(inbounds) != 1 || inbounds[0].RemoteID != test.inboundID {
+				t.Fatalf("inbounds = %+v", inbounds)
+			}
+			if len(inbounds[0].Clients) != 1 || inbounds[0].Clients[0].RemoteID != test.clientID || inbounds[0].Clients[0].AllTime != test.clientAllTime {
+				t.Fatalf("clients = %+v", inbounds[0].Clients)
+			}
+
+			statusResponse := readResponseFixture(t, test.statusFixture)
+			status, err := ParseStatus(responsePayload(statusResponse))
+			if err != nil {
+				t.Fatalf("ParseStatus() error = %v", err)
+			}
+			if !status.XrayRunning || status.XrayVersion != test.statusXray || status.XPanelVersion != test.statusPanel || status.CPUUsage != test.statusCPU || status.MemoryUsed != test.statusMemoryUsed || status.DiskUsed != test.statusDiskUsed {
+				t.Fatalf("status = %+v", status)
+			}
+		})
+	}
+}
+
+func readResponseFixture(t *testing.T, name string) xpanel.Response {
+	t.Helper()
+	path := filepath.Join("testdata", name)
+	contents, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read fixture %s: %v", path, err)
+	}
+	var response xpanel.Response
+	if err := json.Unmarshal(contents, &response); err != nil {
+		t.Fatalf("decode fixture %s: %v", path, err)
+	}
+	if !response.Success {
+		t.Fatalf("fixture %s is not successful: %s", path, response.Msg)
+	}
+	return response
 }
 
 func TestCollectorCollectsInboundAndStatusWithoutReset(t *testing.T) {

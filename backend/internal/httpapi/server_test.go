@@ -3,6 +3,7 @@ package httpapi
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"database/sql"
 	"encoding/json"
 	"io"
@@ -90,6 +91,204 @@ func TestProtectedEndpointsRejectMissingToken(t *testing.T) {
 	server.Handler().ServeHTTP(recorder, request)
 	if recorder.Code != http.StatusUnauthorized {
 		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusUnauthorized)
+	}
+}
+
+func TestSecurityHeaders(t *testing.T) {
+	server, _ := testServer(t)
+	handler := server.Handler()
+
+	local := httptest.NewRecorder()
+	handler.ServeHTTP(local, httptest.NewRequest(http.MethodGet, "/health/live", nil))
+	for header, want := range map[string]string{
+		"X-Content-Type-Options":  "nosniff",
+		"X-Frame-Options":         "DENY",
+		"Referrer-Policy":         "strict-origin-when-cross-origin",
+		"Permissions-Policy":      "camera=(), microphone=(), geolocation=()",
+		"Content-Security-Policy": "default-src 'none'; frame-ancestors 'none'",
+		"Cache-Control":           "no-store",
+	} {
+		if got := local.Header().Get(header); got != want {
+			t.Fatalf("local %s = %q, want %q", header, got, want)
+		}
+	}
+	if got := local.Header().Get("Strict-Transport-Security"); got != "" {
+		t.Fatalf("local HSTS = %q, want absent", got)
+	}
+
+	proxied := httptest.NewRecorder()
+	proxiedRequest := httptest.NewRequest(http.MethodGet, "/health/live", nil)
+	proxiedRequest.Header.Set("X-Forwarded-Proto", "https")
+	handler.ServeHTTP(proxied, proxiedRequest)
+	if got := proxied.Header().Get("Strict-Transport-Security"); got != "max-age=31536000; includeSubDomains" {
+		t.Fatalf("proxied HSTS = %q", got)
+	}
+
+	tlsRequest := httptest.NewRequest(http.MethodGet, "/health/live", nil)
+	tlsRequest.TLS = &tls.ConnectionState{}
+	secure := httptest.NewRecorder()
+	handler.ServeHTTP(secure, tlsRequest)
+	if got := secure.Header().Get("Strict-Transport-Security"); got != "max-age=31536000; includeSubDomains" {
+		t.Fatalf("TLS HSTS = %q", got)
+	}
+}
+
+func TestAdministratorWritesValidateOrigin(t *testing.T) {
+	server, database := testServer(t)
+	ts := httptest.NewServer(server.Handler())
+	defer ts.Close()
+
+	login := doJSON(t, ts.Client(), http.MethodPost, ts.URL+"/api/auth/login", "", map[string]string{"userName": "admin", "password": "test-password"})
+	token := login["data"].(map[string]any)["token"].(string)
+	payload := map[string]any{"nodeKey": "csrf-node", "name": "CSRF 测试节点", "type": "landing"}
+	postWithOrigin := func(origin, referer string) (int, map[string]any) {
+		encoded, err := json.Marshal(payload)
+		if err != nil {
+			t.Fatal(err)
+		}
+		request := httptest.NewRequest(http.MethodPost, "/api/nodes", bytes.NewReader(encoded))
+		request.Header.Set("Content-Type", "application/json")
+		request.Header.Set("Authorization", "Bearer "+token)
+		if origin != "" {
+			request.Header.Set("Origin", origin)
+		}
+		if referer != "" {
+			request.Header.Set("Referer", referer)
+		}
+		recorder := httptest.NewRecorder()
+		server.Handler().ServeHTTP(recorder, request)
+		var response map[string]any
+		if err := json.NewDecoder(recorder.Body).Decode(&response); err != nil {
+			t.Fatalf("decode origin response: %v", err)
+		}
+		return recorder.Code, response
+	}
+
+	status, response := postWithOrigin("https://evil.example", "")
+	if status != http.StatusForbidden || response["code"] != csrfCode {
+		t.Fatalf("evil origin status=%d response=%#v", status, response)
+	}
+	status, response = postWithOrigin("", "https://evil.example/form")
+	if status != http.StatusForbidden || response["code"] != csrfCode {
+		t.Fatalf("evil referer status=%d response=%#v", status, response)
+	}
+	status, response = postWithOrigin("http://localhost:9527", "")
+	if status != http.StatusOK || response["code"] != successCode {
+		t.Fatalf("allowed origin status=%d response=%#v", status, response)
+	}
+	var count int
+	if err := database.QueryRow(`SELECT COUNT(*) FROM nodes WHERE node_key = 'csrf-node'`).Scan(&count); err != nil || count != 1 {
+		t.Fatalf("allowed origin node count=%d err=%v", count, err)
+	}
+}
+
+func TestSessionRefreshAndLogoutRevokeCredentials(t *testing.T) {
+	server, database := testServer(t)
+	ts := httptest.NewServer(server.Handler())
+	defer ts.Close()
+
+	login := doJSON(t, ts.Client(), http.MethodPost, ts.URL+"/api/auth/login", "", map[string]string{"userName": "admin", "password": "test-password"})
+	loginData := login["data"].(map[string]any)
+	oldToken := loginData["token"].(string)
+	oldRefresh := loginData["refreshToken"].(string)
+	refreshed := doJSON(t, ts.Client(), http.MethodPost, ts.URL+"/api/auth/refreshToken", "", map[string]string{"refreshToken": oldRefresh})
+	if refreshed["code"] != successCode {
+		t.Fatalf("refresh response = %#v", refreshed)
+	}
+	refreshedData := refreshed["data"].(map[string]any)
+	newToken := refreshedData["token"].(string)
+	newRefresh := refreshedData["refreshToken"].(string)
+	if newToken == oldToken || newRefresh == oldRefresh {
+		t.Fatalf("refresh did not rotate credentials old=%q/%q new=%q/%q", oldToken, oldRefresh, newToken, newRefresh)
+	}
+	if status, response := doJSONWithStatus(t, ts.Client(), http.MethodGet, ts.URL+"/api/auth/me", oldToken, nil); status != http.StatusUnauthorized || response["code"] != unauthorizedCode {
+		t.Fatalf("old access token status=%d response=%#v", status, response)
+	}
+	if status, response := doJSONWithStatus(t, ts.Client(), http.MethodPost, ts.URL+"/api/auth/refreshToken", "", map[string]string{"refreshToken": oldRefresh}); status != http.StatusUnauthorized || response["code"] != unauthorizedCode {
+		t.Fatalf("old refresh token status=%d response=%#v", status, response)
+	}
+	if status, response := doJSONWithStatus(t, ts.Client(), http.MethodGet, ts.URL+"/api/auth/me", newToken, nil); status != http.StatusOK || response["code"] != successCode {
+		t.Fatalf("new access token status=%d response=%#v", status, response)
+	}
+	logout := doJSON(t, ts.Client(), http.MethodPost, ts.URL+"/api/auth/logout", newToken, nil)
+	if logout["code"] != successCode {
+		t.Fatalf("logout response = %#v", logout)
+	}
+	if status, response := doJSONWithStatus(t, ts.Client(), http.MethodGet, ts.URL+"/api/auth/me", newToken, nil); status != http.StatusUnauthorized || response["code"] != unauthorizedCode {
+		t.Fatalf("logged-out access token status=%d response=%#v", status, response)
+	}
+	var activeSessions int
+	if err := database.QueryRow(`SELECT COUNT(*) FROM sessions WHERE revoked_at IS NULL`).Scan(&activeSessions); err != nil || activeSessions != 0 {
+		t.Fatalf("active sessions=%d err=%v, want 0", activeSessions, err)
+	}
+}
+
+func TestAgentRegistrationRotatesPreviousToken(t *testing.T) {
+	server, database := testServer(t)
+	ts := httptest.NewServer(server.Handler())
+	defer ts.Close()
+
+	register := func(name string) string {
+		request, err := http.NewRequest(http.MethodPost, ts.URL+"/api/agent/v1/register", strings.NewReader(`{"node_key":"rotate-agent","node_name":"`+name+`","node_type":"relay"}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		request.Header.Set("Content-Type", "application/json")
+		request.Header.Set("X-Agent-Registration-Token", "bootstrap-secret")
+		response, err := ts.Client().Do(request)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer response.Body.Close()
+		var body map[string]any
+		if err := json.NewDecoder(response.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		if response.StatusCode != http.StatusOK || body["code"] != successCode {
+			t.Fatalf("registration status=%d body=%#v", response.StatusCode, body)
+		}
+		return body["data"].(map[string]any)["token"].(string)
+	}
+
+	firstToken := register("轮换 Agent 1")
+	secondToken := register("轮换 Agent 2")
+	if firstToken == secondToken {
+		t.Fatal("agent registration returned the same token")
+	}
+	payload := map[string]any{"node_key": "rotate-agent", "observed_at": time.Now().UTC().Format(time.RFC3339Nano), "status": map[string]any{"xray_running": true}}
+	if status, response := doJSONWithStatus(t, ts.Client(), http.MethodPost, ts.URL+"/api/agent/v1/heartbeat", firstToken, payload); status != http.StatusUnauthorized || response["code"] != unauthorizedCode {
+		t.Fatalf("revoked agent token status=%d response=%#v", status, response)
+	}
+	if status, response := doJSONWithStatus(t, ts.Client(), http.MethodPost, ts.URL+"/api/agent/v1/heartbeat", secondToken, payload); status != http.StatusOK || response["code"] != successCode {
+		t.Fatalf("rotated agent token status=%d response=%#v", status, response)
+	}
+	var revoked int
+	if err := database.QueryRow(`SELECT COUNT(*) FROM node_credentials WHERE node_id = (SELECT id FROM nodes WHERE node_key = 'rotate-agent') AND revoked_at IS NOT NULL`).Scan(&revoked); err != nil || revoked != 1 {
+		t.Fatalf("revoked agent credentials=%d err=%v, want 1", revoked, err)
+	}
+}
+
+func TestAuditLogsRedactSensitiveFields(t *testing.T) {
+	server, database := testServer(t)
+	request := httptest.NewRequest(http.MethodPatch, "/api/test", nil)
+	server.writeAuditLog(request, "test.redaction", "test", "redaction-1",
+		map[string]any{
+			"token":  "access-secret",
+			"nested": map[string]any{"password": "password-secret", "safe": "kept"},
+		},
+		map[string]any{"client_secret": "client-secret", "subscriptionUrl": "subscription-secret", "value": "kept"})
+
+	var beforeJSON, afterJSON string
+	if err := database.QueryRow(`SELECT before_json, after_json FROM audit_logs WHERE action = 'test.redaction'`).Scan(&beforeJSON, &afterJSON); err != nil {
+		t.Fatalf("read redacted audit log: %v", err)
+	}
+	for _, secret := range []string{"access-secret", "password-secret", "client-secret", "subscription-secret"} {
+		if strings.Contains(beforeJSON, secret) || strings.Contains(afterJSON, secret) {
+			t.Fatalf("audit log contains secret %q: before=%s after=%s", secret, beforeJSON, afterJSON)
+		}
+	}
+	if !strings.Contains(beforeJSON, "[REDACTED]") || !strings.Contains(afterJSON, "[REDACTED]") || !strings.Contains(beforeJSON, "kept") || !strings.Contains(afterJSON, "kept") {
+		t.Fatalf("unexpected redacted audit state: before=%s after=%s", beforeJSON, afterJSON)
 	}
 }
 
@@ -466,6 +665,7 @@ func TestListEndpointsWithData(t *testing.T) {
 		{`INSERT INTO route_exit_ips (id, route_id, exit_ip_id, allocation_weight) VALUES ('rei1', 'r1', 'e1', 1)`, nil},
 		{`INSERT INTO node_costs (id, node_id, category, monthly_amount, currency, effective_from, created_at) VALUES ('c1', 'n1', 'server', 30, 'CNY', '2026-01-01', ?)`, []any{now}},
 		{`INSERT INTO node_events (id, node_id, event_type, severity, message, created_at) VALUES ('ev1', 'n1', 'sync_failed', 'error', 'sample event', ?)`, []any{now}},
+		{`INSERT INTO sync_runs (id, node_id, sync_id, started_at, finished_at, status, inbound_count, client_count) VALUES ('sync-list', 'n1', 'sync-list-1', ?, ?, 'success', 1, 2)`, []any{now, now}},
 	}
 	for _, statement := range statements {
 		if _, err := database.Exec(statement.query, statement.args...); err != nil {
@@ -483,12 +683,885 @@ func TestListEndpointsWithData(t *testing.T) {
 		if result["code"] != successCode {
 			t.Fatalf("%s response: %#v", path, result)
 		}
+		data, ok := result["data"].(map[string]any)
+		if !ok {
+			t.Fatalf("%s data is not an object: %#v", path, result["data"])
+		}
+		if data["dataAt"] == nil || data["dataAt"] == "" {
+			t.Fatalf("%s did not return latest sync dataAt: %#v", path, data)
+		}
+	}
+}
+
+func TestUserListAggregatesOneRowPerInbound(t *testing.T) {
+	server, database := testServer(t)
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	statements := []string{
+		`INSERT INTO nodes (id, node_key, name, type, health_status, created_at, updated_at) VALUES ('aggregate-relay-1', 'aggregate-relay-1', '线路机 A', 'relay', 'online', '` + now + `', '` + now + `')`,
+		`INSERT INTO nodes (id, node_key, name, type, health_status, created_at, updated_at) VALUES ('aggregate-relay-2', 'aggregate-relay-2', '线路机 B', 'relay', 'online', '` + now + `', '` + now + `')`,
+		`INSERT INTO users (id, display_name, status, created_at, updated_at) VALUES ('aggregate-user-1', '用户 A', 'active', '` + now + `', '` + now + `')`,
+		`INSERT INTO users (id, display_name, status, created_at, updated_at) VALUES ('aggregate-user-2', '用户 B', 'active', '` + now + `', '` + now + `')`,
+		`INSERT INTO inbounds (id, node_id, remote_inbound_id, user_id, kind, tag, client_count, up, down, first_seen_at, last_seen_at) VALUES ('aggregate-inbound-1', 'aggregate-relay-1', '101', 'aggregate-user-1', 'user', 'user-a', 2, 100, 200, '` + now + `', '` + now + `')`,
+		`INSERT INTO inbounds (id, node_id, remote_inbound_id, user_id, kind, tag, client_count, up, down, first_seen_at, last_seen_at) VALUES ('aggregate-inbound-2', 'aggregate-relay-2', '101', 'aggregate-user-2', 'user', 'user-b', 1, 300, 400, '` + now + `', '` + now + `')`,
+		`INSERT INTO user_inbounds (id, user_id, inbound_id, is_primary, active_from) VALUES ('aggregate-mapping-1', 'aggregate-user-1', 'aggregate-inbound-1', 1, '` + now + `')`,
+		`INSERT INTO user_inbounds (id, user_id, inbound_id, is_primary, active_from) VALUES ('aggregate-mapping-2', 'aggregate-user-2', 'aggregate-inbound-2', 1, '` + now + `')`,
+		`INSERT INTO clients (id, node_id, inbound_id, remote_client_id, email, enable, all_time) VALUES ('aggregate-client-1', 'aggregate-relay-1', 'aggregate-inbound-1', 'phone-a', 'shared@example.com', 1, 100)`,
+		`INSERT INTO clients (id, node_id, inbound_id, remote_client_id, email, enable, all_time) VALUES ('aggregate-client-2', 'aggregate-relay-1', 'aggregate-inbound-1', 'laptop-a', 'shared@example.com', 1, 200)`,
+		`INSERT INTO clients (id, node_id, inbound_id, remote_client_id, email, enable, all_time) VALUES ('aggregate-client-3', 'aggregate-relay-2', 'aggregate-inbound-2', 'phone-b', 'shared@example.com', 1, 300)`,
+	}
+	for _, statement := range statements {
+		if _, err := database.Exec(statement); err != nil {
+			t.Fatalf("seed aggregation data: %v", err)
+		}
+	}
+
+	ts := httptest.NewServer(server.Handler())
+	defer ts.Close()
+	login := doJSON(t, ts.Client(), http.MethodPost, ts.URL+"/api/auth/login", "", map[string]string{"userName": "admin", "password": "test-password"})
+	token := login["data"].(map[string]any)["token"].(string)
+	result := doJSON(t, ts.Client(), http.MethodGet, ts.URL+"/api/users?page_size=20", token, nil)
+	if result["code"] != successCode {
+		t.Fatalf("user list response = %#v", result)
+	}
+	data := result["data"].(map[string]any)
+	if data["total"] != float64(2) {
+		t.Fatalf("user list total = %v, want 2", data["total"])
+	}
+	items := data["items"].([]any)
+	if len(items) != 2 {
+		t.Fatalf("user list items = %d, want one row per Inbound", len(items))
+	}
+
+	byNode := make(map[string]map[string]any, len(items))
+	for _, item := range items {
+		row := item.(map[string]any)
+		nodeName := row["nodeName"].(string)
+		if _, exists := byNode[nodeName]; exists {
+			t.Fatalf("duplicate user row for node %q: %#v", nodeName, row)
+		}
+		byNode[nodeName] = row
+	}
+	if byNode["线路机 A"]["clientCount"] != float64(2) || byNode["线路机 B"]["clientCount"] != float64(1) {
+		t.Fatalf("client counts were not aggregated per Inbound: %#v", byNode)
+	}
+	if byNode["线路机 A"]["id"] == byNode["线路机 B"]["id"] {
+		t.Fatalf("same Email across nodes incorrectly merged users: %#v", byNode)
+	}
+
+	nodeFiltered := doJSON(t, ts.Client(), http.MethodGet, ts.URL+"/api/users?node_id=aggregate-relay-1", token, nil)
+	filteredData := nodeFiltered["data"].(map[string]any)
+	if filteredData["total"] != float64(1) || len(filteredData["items"].([]any)) != 1 {
+		t.Fatalf("node-filtered user list = %#v", filteredData)
+	}
+}
+
+func TestNodeDetailAndManualSyncRequest(t *testing.T) {
+	server, database := testServer(t)
+	now := time.Now().UTC()
+	nowText := now.Format(time.RFC3339Nano)
+	statements := []struct {
+		query string
+		args  []any
+	}{
+		{`INSERT INTO nodes (id, node_key, name, type, hostname, public_ip, region, provider, health_status, created_at, updated_at) VALUES ('node-detail', 'node-detail', '东京落地机', 'landing', 'landing.example', '203.0.113.20', '东京', 'Test ISP', 'online', ?, ?)`, []any{nowText, nowText}},
+		{`INSERT INTO inbounds (id, node_id, remote_inbound_id, kind, tag, protocol, port, enable, client_count, up, down, all_time, first_seen_at, last_seen_at) VALUES ('node-inbound', 'node-detail', '7', 'infrastructure', 'ss-entry', 'shadowsocks', 8443, 1, 4, 10, 20, 30, ?, ?)`, []any{nowText, nowText}},
+		{`INSERT INTO exit_ips (id, landing_node_id, ip, provider, monthly_cost, currency, created_at, updated_at) VALUES ('node-exit', 'node-detail', '198.51.100.10', 'Test ISP', 12, 'CNY', ?, ?)`, []any{nowText, nowText}},
+		{`INSERT INTO sync_runs (id, node_id, sync_id, started_at, finished_at, status, inbound_count, client_count) VALUES ('node-sync', 'node-detail', 'sync-1', ?, ?, 'success', 1, 4)`, []any{nowText, nowText}},
+		{`INSERT INTO node_events (id, node_id, event_type, severity, message, created_at) VALUES ('node-event', 'node-detail', 'sync_failed', 'error', 'sample failure', ?)`, []any{nowText}},
+	}
+	for _, statement := range statements {
+		if _, err := database.Exec(statement.query, statement.args...); err != nil {
+			t.Fatalf("seed node detail data: %v", err)
+		}
+	}
+	ts := httptest.NewServer(server.Handler())
+	defer ts.Close()
+	login := doJSON(t, ts.Client(), http.MethodPost, ts.URL+"/api/auth/login", "", map[string]string{"userName": "admin", "password": "test-password"})
+	token := login["data"].(map[string]any)["token"].(string)
+	detail := doJSON(t, ts.Client(), http.MethodGet, ts.URL+"/api/nodes/node-detail", token, nil)
+	if detail["code"] != successCode {
+		t.Fatalf("node detail response: %#v", detail)
+	}
+	detailData := detail["data"].(map[string]any)
+	if detailData["name"] != "东京落地机" || len(detailData["inbounds"].([]any)) != 1 || len(detailData["exitIps"].([]any)) != 1 {
+		t.Fatalf("unexpected node detail: %#v", detailData)
+	}
+	queued := doJSON(t, ts.Client(), http.MethodPost, ts.URL+"/api/nodes/node-detail/sync", token, nil)
+	if queued["code"] != successCode || queued["data"].(map[string]any)["status"] != "queued" {
+		t.Fatalf("manual sync response: %#v", queued)
+	}
+	var eventType string
+	if err := database.QueryRow(`SELECT event_type FROM node_events WHERE id = ?`, queued["data"].(map[string]any)["requestId"].(string)).Scan(&eventType); err != nil || eventType != "sync_requested" {
+		t.Fatalf("sync request event type = %q, err=%v", eventType, err)
+	}
+}
+
+func TestRouteCRUDAndBindingProtection(t *testing.T) {
+	server, database := testServer(t)
+	ts := httptest.NewServer(server.Handler())
+	defer ts.Close()
+
+	now := time.Now().UTC()
+	nowText := now.Format(time.RFC3339Nano)
+	seed := []struct {
+		query string
+		args  []any
+	}{
+		{`INSERT INTO nodes (id, node_key, name, type, health_status, created_at, updated_at) VALUES ('route-relay', 'route-relay', '线路机 A', 'relay', 'online', ?, ?)`, []any{nowText, nowText}},
+		{`INSERT INTO nodes (id, node_key, name, type, health_status, created_at, updated_at) VALUES ('route-landing', 'route-landing', '落地机 A', 'landing', 'online', ?, ?)`, []any{nowText, nowText}},
+		{`INSERT INTO nodes (id, node_key, name, type, health_status, created_at, updated_at) VALUES ('route-other', 'route-other', '其他线路机', 'relay', 'online', ?, ?)`, []any{nowText, nowText}},
+		{`INSERT INTO inbounds (id, node_id, remote_inbound_id, kind, tag, first_seen_at, last_seen_at) VALUES ('route-landing-inbound', 'route-landing', '99', 'infrastructure', 'ss-landing-a', ?, ?)`, []any{nowText, nowText}},
+		{`INSERT INTO inbounds (id, node_id, remote_inbound_id, kind, tag, first_seen_at, last_seen_at) VALUES ('route-other-inbound', 'route-other', '100', 'infrastructure', 'ss-other', ?, ?)`, []any{nowText, nowText}},
+		{`INSERT INTO users (id, display_name, status, created_at, updated_at) VALUES ('route-user', '线路用户', 'active', ?, ?)`, []any{nowText, nowText}},
+		{`INSERT INTO exit_ips (id, landing_node_id, ip, created_at, updated_at) VALUES ('route-exit-ip', 'route-landing', '198.51.100.42', ?, ?)`, []any{nowText, nowText}},
+	}
+	for _, statement := range seed {
+		if _, err := database.Exec(statement.query, statement.args...); err != nil {
+			t.Fatalf("seed route data: %v", err)
+		}
+	}
+
+	login := doJSON(t, ts.Client(), http.MethodPost, ts.URL+"/api/auth/login", "", map[string]string{"userName": "admin", "password": "test-password"})
+	token := login["data"].(map[string]any)["token"].(string)
+	created := doJSON(t, ts.Client(), http.MethodPost, ts.URL+"/api/routes", token, map[string]any{
+		"name": "东京线路 A", "relayNodeId": "route-relay", "landingNodeId": "route-landing",
+		"relayOutboundTag": "to-landing", "landingInboundId": "route-landing-inbound", "landingInboundTag": "ss-landing-a",
+		"validFrom": "2026-09-01", "validTo": "2026-09-30", "notes": "首条线路",
+	})
+	if created["code"] != successCode {
+		t.Fatalf("create route response = %#v", created)
+	}
+	createdData := created["data"].(map[string]any)
+	routeID := createdData["id"].(string)
+	if createdData["name"] != "东京线路 A" || createdData["relayNodeName"] != "线路机 A" || createdData["landingInboundId"] != "route-landing-inbound" {
+		t.Fatalf("created route data = %#v", createdData)
+	}
+
+	detail := doJSON(t, ts.Client(), http.MethodGet, ts.URL+"/api/routes/"+routeID, token, nil)
+	if detail["code"] != successCode || detail["data"].(map[string]any)["id"] != routeID {
+		t.Fatalf("route detail response = %#v", detail)
+	}
+
+	updated := doJSON(t, ts.Client(), http.MethodPatch, ts.URL+"/api/routes/"+routeID, token, map[string]any{
+		"name": "东京线路 A（更新）", "enabled": false, "validTo": "2026-10-01", "notes": "已更新",
+	})
+	if updated["code"] != successCode || updated["data"].(map[string]any)["name"] != "东京线路 A（更新）" || updated["data"].(map[string]any)["enabled"] != false {
+		t.Fatalf("update route response = %#v", updated)
+	}
+
+	invalidRelay := doJSON(t, ts.Client(), http.MethodPost, ts.URL+"/api/routes", token, map[string]any{
+		"name": "非法线路", "relayNodeId": "route-landing", "landingNodeId": "route-other",
+	})
+	if invalidRelay["code"] != validationCode {
+		t.Fatalf("invalid relay type response = %#v", invalidRelay)
+	}
+	invalidInbound := doJSON(t, ts.Client(), http.MethodPost, ts.URL+"/api/routes", token, map[string]any{
+		"name": "非法落地 Inbound", "relayNodeId": "route-relay", "landingNodeId": "route-landing", "landingInboundId": "route-other-inbound",
+	})
+	if invalidInbound["code"] != validationCode {
+		t.Fatalf("invalid landing inbound response = %#v", invalidInbound)
+	}
+	invalidDates := doJSON(t, ts.Client(), http.MethodPost, ts.URL+"/api/routes", token, map[string]any{
+		"name": "非法日期", "relayNodeId": "route-relay", "landingNodeId": "route-landing", "validFrom": "2026-10-02", "validTo": "2026-10-01",
+	})
+	if invalidDates["code"] != validationCode {
+		t.Fatalf("invalid route dates response = %#v", invalidDates)
+	}
+
+	deletable := doJSON(t, ts.Client(), http.MethodPost, ts.URL+"/api/routes", token, map[string]any{
+		"name": "可删除线路", "relayNodeId": "route-relay", "landingNodeId": "route-landing",
+	})
+	if deletable["code"] != successCode {
+		t.Fatalf("create deletable route response = %#v", deletable)
+	}
+	deletableID := deletable["data"].(map[string]any)["id"].(string)
+	deleteStatus, deleted := doJSONWithStatus(t, ts.Client(), http.MethodDelete, ts.URL+"/api/routes/"+deletableID, token, nil)
+	if deleteStatus != http.StatusOK || deleted["code"] != successCode || deleted["data"].(map[string]any)["deleted"] != true {
+		t.Fatalf("delete unbound route status=%d response=%#v", deleteStatus, deleted)
+	}
+
+	if _, err := database.Exec(`INSERT INTO user_routes (id, user_id, route_id, is_primary, active_from) VALUES ('route-user-binding', 'route-user', ?, 1, ?)`, routeID, nowText); err != nil {
+		t.Fatalf("bind route to user: %v", err)
+	}
+	conflictStatus, conflict := doJSONWithStatus(t, ts.Client(), http.MethodDelete, ts.URL+"/api/routes/"+routeID, token, nil)
+	if conflictStatus != http.StatusConflict || conflict["code"] != validationCode {
+		t.Fatalf("delete bound route status=%d response=%#v", conflictStatus, conflict)
+	}
+
+	exitBound := doJSON(t, ts.Client(), http.MethodPost, ts.URL+"/api/routes", token, map[string]any{
+		"name": "出口 IP 绑定线路", "relayNodeId": "route-relay", "landingNodeId": "route-landing",
+	})
+	if exitBound["code"] != successCode {
+		t.Fatalf("create exit-bound route response = %#v", exitBound)
+	}
+	exitRouteID := exitBound["data"].(map[string]any)["id"].(string)
+	if _, err := database.Exec(`INSERT INTO route_exit_ips (id, route_id, exit_ip_id, allocation_weight) VALUES ('route-exit-binding', ?, 'route-exit-ip', 1)`, exitRouteID); err != nil {
+		t.Fatalf("bind route to exit IP: %v", err)
+	}
+	exitConflictStatus, exitConflict := doJSONWithStatus(t, ts.Client(), http.MethodDelete, ts.URL+"/api/routes/"+exitRouteID, token, nil)
+	if exitConflictStatus != http.StatusConflict || exitConflict["code"] != validationCode {
+		t.Fatalf("delete exit-bound route status=%d response=%#v", exitConflictStatus, exitConflict)
+	}
+}
+
+func TestUserRouteAssignmentWithFixedExit(t *testing.T) {
+	server, database := testServer(t)
+	ts := httptest.NewServer(server.Handler())
+	defer ts.Close()
+
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	seed := []struct {
+		query string
+		args  []any
+	}{
+		{`INSERT INTO nodes (id, node_key, name, type, health_status, created_at, updated_at) VALUES ('assign-relay', 'assign-relay', '分配线路机', 'relay', 'online', ?, ?)`, []any{now, now}},
+		{`INSERT INTO nodes (id, node_key, name, type, health_status, created_at, updated_at) VALUES ('assign-landing', 'assign-landing', '分配落地机', 'landing', 'online', ?, ?)`, []any{now, now}},
+		{`INSERT INTO users (id, display_name, status, created_at, updated_at) VALUES ('assign-user', '待分配用户', 'active', ?, ?)`, []any{now, now}},
+		{`INSERT INTO routes (id, name, relay_node_id, landing_node_id, enabled, created_at, updated_at) VALUES ('assign-route', '分配线路', 'assign-relay', 'assign-landing', 1, ?, ?)`, []any{now, now}},
+		{`INSERT INTO exit_ips (id, landing_node_id, source_type, owner_node_id, ip, enabled, created_at, updated_at) VALUES ('assign-ip', NULL, 's5', NULL, '198.51.100.99', 1, ?, ?)`, []any{now, now}},
+		{`INSERT INTO route_exit_ips (id, route_id, exit_ip_id, scope, enabled) VALUES ('assign-binding', 'assign-route', 'assign-ip', 'external', 1)`, nil},
+	}
+	for _, statement := range seed {
+		if _, err := database.Exec(statement.query, statement.args...); err != nil {
+			t.Fatalf("seed assignment data: %v", err)
+		}
+	}
+
+	login := doJSON(t, ts.Client(), http.MethodPost, ts.URL+"/api/auth/login", "", map[string]string{"userName": "admin", "password": "test-password"})
+	token := login["data"].(map[string]any)["token"].(string)
+	assigned := doJSON(t, ts.Client(), http.MethodPut, ts.URL+"/api/users/assign-user/route", token, map[string]any{
+		"routeId": "assign-route", "routeExitIpId": "assign-binding",
+	})
+	if assigned["code"] != successCode {
+		t.Fatalf("assign user route response = %#v", assigned)
+	}
+	assignedData := assigned["data"].(map[string]any)
+	routes := assignedData["routes"].([]any)
+	if len(routes) != 1 {
+		t.Fatalf("assigned routes = %#v", routes)
+	}
+	routeData := routes[0].(map[string]any)
+	if routeData["routeExitIpId"] != "assign-binding" || routeData["exitIpAddress"] != "198.51.100.99" || routeData["assignmentMode"] != "fixed" {
+		t.Fatalf("assigned route details = %#v", routeData)
+	}
+
+	cleared := doJSON(t, ts.Client(), http.MethodDelete, ts.URL+"/api/users/assign-user/route", token, nil)
+	if cleared["code"] != successCode || len(cleared["data"].(map[string]any)["routes"].([]any)) != 0 {
+		t.Fatalf("clear user route response = %#v", cleared)
+	}
+	var active int
+	if err := database.QueryRow(`SELECT COUNT(*) FROM user_routes WHERE user_id = 'assign-user' AND active_to IS NULL`).Scan(&active); err != nil || active != 0 {
+		t.Fatalf("active user route count = %d, err=%v", active, err)
+	}
+	unboundStatus, unbound := doJSONWithStatus(t, ts.Client(), http.MethodDelete, ts.URL+"/api/routes/assign-route/exit-ips/assign-ip", token, nil)
+	if unboundStatus != http.StatusOK || unbound["code"] != successCode {
+		t.Fatalf("unbind released fixed assignment status=%d response=%#v", unboundStatus, unbound)
+	}
+}
+
+func TestExitIPCRUDAndBindingProtection(t *testing.T) {
+	server, database := testServer(t)
+	ts := httptest.NewServer(server.Handler())
+	defer ts.Close()
+
+	now := time.Now().UTC()
+	nowText := now.Format(time.RFC3339Nano)
+	seed := []struct {
+		query string
+		args  []any
+	}{
+		{`INSERT INTO nodes (id, node_key, name, type, health_status, created_at, updated_at) VALUES ('exit-landing', 'exit-landing', '落地机 B', 'landing', 'online', ?, ?)`, []any{nowText, nowText}},
+		{`INSERT INTO nodes (id, node_key, name, type, health_status, created_at, updated_at) VALUES ('exit-relay', 'exit-relay', '线路机 B', 'relay', 'online', ?, ?)`, []any{nowText, nowText}},
+		{`INSERT INTO routes (id, name, relay_node_id, landing_node_id, enabled, created_at, updated_at) VALUES ('exit-binding-route', '出口绑定线路', 'exit-relay', 'exit-landing', 1, ?, ?)`, []any{nowText, nowText}},
+	}
+	for _, statement := range seed {
+		if _, err := database.Exec(statement.query, statement.args...); err != nil {
+			t.Fatalf("seed exit IP data: %v", err)
+		}
+	}
+
+	login := doJSON(t, ts.Client(), http.MethodPost, ts.URL+"/api/auth/login", "", map[string]string{"userName": "admin", "password": "test-password"})
+	token := login["data"].(map[string]any)["token"].(string)
+	created := doJSON(t, ts.Client(), http.MethodPost, ts.URL+"/api/exit-ips", token, map[string]any{
+		"address": "203.0.113.42", "landingNodeId": "exit-landing", "family": 4,
+		"provider": "Test ISP", "monthlyCost": 18.5, "validFrom": "2026-09-01", "validTo": "2026-12-31", "notes": "主出口",
+	})
+	if created["code"] != successCode {
+		t.Fatalf("create exit IP response = %#v", created)
+	}
+	createdData := created["data"].(map[string]any)
+	exitIPID := createdData["id"].(string)
+	if createdData["address"] != "203.0.113.42" || createdData["landingNodeName"] != "落地机 B" || createdData["family"] != float64(4) {
+		t.Fatalf("created exit IP data = %#v", createdData)
+	}
+	exitList := doJSON(t, ts.Client(), http.MethodGet, ts.URL+"/api/exit-ips?page=1&page_size=20", token, nil)
+	listData := exitList["data"].(map[string]any)
+	listItems := listData["items"].([]any)
+	var listedExitIP map[string]any
+	for _, raw := range listItems {
+		item := raw.(map[string]any)
+		if item["id"] == exitIPID {
+			listedExitIP = item
+			break
+		}
+	}
+	if exitList["code"] != successCode || listedExitIP == nil || listedExitIP["landingNodeId"] != "exit-landing" {
+		t.Fatalf("exit IP list should include landingNodeId: %#v", exitList)
+	}
+	ipv6 := doJSON(t, ts.Client(), http.MethodPost, ts.URL+"/api/exit-ips", token, map[string]any{
+		"address": "2001:db8::42", "landingNodeId": "exit-landing",
+	})
+	if ipv6["code"] != successCode || ipv6["data"].(map[string]any)["family"] != float64(6) {
+		t.Fatalf("IPv6 family inference response = %#v", ipv6)
+	}
+	ipv6ID := ipv6["data"].(map[string]any)["id"].(string)
+	if status, result := doJSONWithStatus(t, ts.Client(), http.MethodDelete, ts.URL+"/api/exit-ips/"+ipv6ID, token, nil); status != http.StatusOK || result["code"] != successCode {
+		t.Fatalf("delete inferred IPv6 response status=%d response=%#v", status, result)
+	}
+
+	detail := doJSON(t, ts.Client(), http.MethodGet, ts.URL+"/api/exit-ips/"+exitIPID, token, nil)
+	if detail["code"] != successCode || detail["data"].(map[string]any)["id"] != exitIPID {
+		t.Fatalf("exit IP detail response = %#v", detail)
+	}
+	updated := doJSON(t, ts.Client(), http.MethodPatch, ts.URL+"/api/exit-ips/"+exitIPID, token, map[string]any{
+		"provider": "Updated ISP", "monthlyCost": 20, "enabled": false, "validTo": "2027-01-01", "notes": "已更新",
+	})
+	if updated["code"] != successCode || updated["data"].(map[string]any)["provider"] != "Updated ISP" || updated["data"].(map[string]any)["enabled"] != false {
+		t.Fatalf("update exit IP response = %#v", updated)
+	}
+
+	invalidNode := doJSON(t, ts.Client(), http.MethodPost, ts.URL+"/api/exit-ips", token, map[string]any{
+		"address": "203.0.113.43", "landingNodeId": "exit-relay", "family": 4,
+	})
+	if invalidNode["code"] != validationCode {
+		t.Fatalf("invalid landing node response = %#v", invalidNode)
+	}
+	invalidAddress := doJSON(t, ts.Client(), http.MethodPost, ts.URL+"/api/exit-ips", token, map[string]any{
+		"address": "not-an-ip", "landingNodeId": "exit-landing", "family": 4,
+	})
+	if invalidAddress["code"] != validationCode {
+		t.Fatalf("invalid address response = %#v", invalidAddress)
+	}
+	invalidFamily := doJSON(t, ts.Client(), http.MethodPost, ts.URL+"/api/exit-ips", token, map[string]any{
+		"address": "2001:db8::42", "landingNodeId": "exit-landing", "family": 4,
+	})
+	if invalidFamily["code"] != validationCode {
+		t.Fatalf("invalid family response = %#v", invalidFamily)
+	}
+	invalidDates := doJSON(t, ts.Client(), http.MethodPost, ts.URL+"/api/exit-ips", token, map[string]any{
+		"address": "203.0.113.44", "landingNodeId": "exit-landing", "family": 4, "validFrom": "2026-10-02", "validTo": "2026-10-01",
+	})
+	if invalidDates["code"] != validationCode {
+		t.Fatalf("invalid dates response = %#v", invalidDates)
+	}
+
+	deletable := doJSON(t, ts.Client(), http.MethodPost, ts.URL+"/api/exit-ips", token, map[string]any{
+		"address": "203.0.113.45", "landingNodeId": "exit-landing", "family": 4,
+	})
+	if deletable["code"] != successCode {
+		t.Fatalf("create deletable exit IP response = %#v", deletable)
+	}
+	deletableID := deletable["data"].(map[string]any)["id"].(string)
+	deleteStatus, deleted := doJSONWithStatus(t, ts.Client(), http.MethodDelete, ts.URL+"/api/exit-ips/"+deletableID, token, nil)
+	if deleteStatus != http.StatusOK || deleted["code"] != successCode || deleted["data"].(map[string]any)["deleted"] != true {
+		t.Fatalf("delete unbound exit IP status=%d response=%#v", deleteStatus, deleted)
+	}
+
+	if _, err := database.Exec(`INSERT INTO route_exit_ips (id, route_id, exit_ip_id, allocation_weight) VALUES ('exit-binding', 'exit-binding-route', ?, 1)`, exitIPID); err != nil {
+		t.Fatalf("bind exit IP to route: %v", err)
+	}
+	conflictStatus, conflict := doJSONWithStatus(t, ts.Client(), http.MethodDelete, ts.URL+"/api/exit-ips/"+exitIPID, token, nil)
+	if conflictStatus != http.StatusConflict || conflict["code"] != validationCode {
+		t.Fatalf("delete bound exit IP status=%d response=%#v", conflictStatus, conflict)
+	}
+}
+
+func TestRouteExitIPBindingCRUD(t *testing.T) {
+	server, database := testServer(t)
+	ts := httptest.NewServer(server.Handler())
+	defer ts.Close()
+
+	nowText := time.Now().UTC().Format(time.RFC3339Nano)
+	seed := []struct {
+		query string
+		args  []any
+	}{
+		{`INSERT INTO nodes (id, node_key, name, type, health_status, created_at, updated_at) VALUES ('binding-relay', 'binding-relay', '绑定线路机', 'relay', 'online', ?, ?)`, []any{nowText, nowText}},
+		{`INSERT INTO nodes (id, node_key, name, type, health_status, created_at, updated_at) VALUES ('binding-landing-1', 'binding-landing-1', '绑定落地机 1', 'landing', 'online', ?, ?)`, []any{nowText, nowText}},
+		{`INSERT INTO nodes (id, node_key, name, type, health_status, created_at, updated_at) VALUES ('binding-landing-2', 'binding-landing-2', '绑定落地机 2', 'landing', 'online', ?, ?)`, []any{nowText, nowText}},
+		{`INSERT INTO routes (id, name, relay_node_id, landing_node_id, enabled, created_at, updated_at) VALUES ('binding-route', '绑定测试线路', 'binding-relay', 'binding-landing-1', 1, ?, ?)`, []any{nowText, nowText}},
+		{`INSERT INTO exit_ips (id, landing_node_id, ip, family, created_at, updated_at) VALUES ('binding-exit-1', 'binding-landing-1', '198.51.100.51', 4, ?, ?)`, []any{nowText, nowText}},
+		{`INSERT INTO exit_ips (id, landing_node_id, ip, family, created_at, updated_at) VALUES ('binding-exit-2', 'binding-landing-2', '198.51.100.52', 4, ?, ?)`, []any{nowText, nowText}},
+	}
+	for _, statement := range seed {
+		if _, err := database.Exec(statement.query, statement.args...); err != nil {
+			t.Fatalf("seed route binding data: %v", err)
+		}
+	}
+
+	login := doJSON(t, ts.Client(), http.MethodPost, ts.URL+"/api/auth/login", "", map[string]string{"userName": "admin", "password": "test-password"})
+	token := login["data"].(map[string]any)["token"].(string)
+	bound := doJSON(t, ts.Client(), http.MethodPost, ts.URL+"/api/routes/binding-route/exit-ips", token, map[string]any{
+		"exitIpId": "binding-exit-1", "allocationWeight": 2.5,
+	})
+	if bound["code"] != successCode {
+		t.Fatalf("bind route exit IP response = %#v", bound)
+	}
+	boundData := bound["data"].(map[string]any)
+	bindingID := boundData["id"].(string)
+	if boundData["address"] != "198.51.100.51" || boundData["landingNodeName"] != "绑定落地机 1" || boundData["allocationWeight"] != 2.5 || boundData["enabled"] != true {
+		t.Fatalf("bound route exit IP data = %#v", boundData)
+	}
+
+	list := doJSON(t, ts.Client(), http.MethodGet, ts.URL+"/api/routes/binding-route/exit-ips", token, nil)
+	if list["code"] != successCode || len(list["data"].([]any)) != 1 {
+		t.Fatalf("route exit IP list response = %#v", list)
+	}
+	duplicateStatus, duplicate := doJSONWithStatus(t, ts.Client(), http.MethodPost, ts.URL+"/api/routes/binding-route/exit-ips", token, map[string]any{"exitIpId": "binding-exit-1"})
+	if duplicateStatus != http.StatusConflict || duplicate["code"] != validationCode {
+		t.Fatalf("duplicate route exit IP binding status=%d response=%#v", duplicateStatus, duplicate)
+	}
+	mismatchStatus, mismatch := doJSONWithStatus(t, ts.Client(), http.MethodPost, ts.URL+"/api/routes/binding-route/exit-ips", token, map[string]any{"exitIpId": "binding-exit-2"})
+	if mismatchStatus != http.StatusBadRequest || mismatch["code"] != validationCode {
+		t.Fatalf("cross-landing route exit IP binding status=%d response=%#v", mismatchStatus, mismatch)
+	}
+
+	updated := doJSON(t, ts.Client(), http.MethodPatch, ts.URL+"/api/routes/binding-route/exit-ips/binding-exit-1", token, map[string]any{
+		"allocationWeight": 3, "enabled": false,
+	})
+	if updated["code"] != successCode || updated["data"].(map[string]any)["allocationWeight"] != float64(3) || updated["data"].(map[string]any)["enabled"] != false {
+		t.Fatalf("update route exit IP response = %#v", updated)
+	}
+	routeDetail := doJSON(t, ts.Client(), http.MethodGet, ts.URL+"/api/routes/binding-route", token, nil)
+	if routeDetail["code"] != successCode || routeDetail["data"].(map[string]any)["exitIpCount"] != float64(0) {
+		t.Fatalf("disabled route exit IP count response = %#v", routeDetail)
+	}
+
+	unboundStatus, unbound := doJSONWithStatus(t, ts.Client(), http.MethodDelete, ts.URL+"/api/routes/binding-route/exit-ips/binding-exit-1", token, nil)
+	if unboundStatus != http.StatusOK || unbound["code"] != successCode || unbound["data"].(map[string]any)["id"] != bindingID {
+		t.Fatalf("unbind route exit IP status=%d response=%#v", unboundStatus, unbound)
+	}
+	list = doJSON(t, ts.Client(), http.MethodGet, ts.URL+"/api/routes/binding-route/exit-ips", token, nil)
+	if list["code"] != successCode || len(list["data"].([]any)) != 0 {
+		t.Fatalf("route exit IP list after unbind = %#v", list)
+	}
+}
+
+func TestAllocationCountsOnlyEffectiveUsersAndUsableBindings(t *testing.T) {
+	server, database := testServer(t)
+	ts := httptest.NewServer(server.Handler())
+	defer ts.Close()
+
+	now := time.Now().UTC()
+	nowText := now.Format(time.RFC3339Nano)
+	futureExpiry := now.Add(24 * time.Hour).Format(time.RFC3339Nano)
+	pastExpiry := now.Add(-24 * time.Hour).Format(time.RFC3339Nano)
+	futureCreated := now.Add(24 * time.Hour).Format(time.RFC3339Nano)
+	statements := []struct {
+		query string
+		args  []any
+	}{
+		{`INSERT INTO nodes (id, node_key, name, type, health_status, created_at, updated_at) VALUES ('allocation-relay', 'allocation-relay', '归属线路机', 'relay', 'online', ?, ?)`, []any{nowText, nowText}},
+		{`INSERT INTO nodes (id, node_key, name, type, health_status, created_at, updated_at) VALUES ('allocation-landing', 'allocation-landing', '归属落地机', 'landing', 'online', ?, ?)`, []any{nowText, nowText}},
+		{`INSERT INTO routes (id, name, relay_node_id, landing_node_id, enabled, created_at, updated_at) VALUES ('allocation-route', '有效线路', 'allocation-relay', 'allocation-landing', 1, ?, ?)`, []any{nowText, nowText}},
+		{`INSERT INTO routes (id, name, relay_node_id, landing_node_id, enabled, created_at, updated_at) VALUES ('allocation-disabled-route', '停用线路', 'allocation-relay', 'allocation-landing', 0, ?, ?)`, []any{nowText, nowText}},
+		{`INSERT INTO exit_ips (id, landing_node_id, ip, family, enabled, created_at, updated_at) VALUES ('allocation-exit', 'allocation-landing', '198.51.100.60', 4, 1, ?, ?)`, []any{nowText, nowText}},
+		{`INSERT INTO exit_ips (id, landing_node_id, ip, family, enabled, created_at, updated_at) VALUES ('allocation-disabled-exit', 'allocation-landing', '198.51.100.61', 4, 0, ?, ?)`, []any{nowText, nowText}},
+		{`INSERT INTO users (id, display_name, status, expiry_time, created_at, updated_at) VALUES ('allocation-valid', '有效用户', 'active', ?, ?, ?)`, []any{futureExpiry, nowText, nowText}},
+		{`INSERT INTO users (id, display_name, status, expiry_time, created_at, updated_at) VALUES ('allocation-unlimited', '长期用户', 'active', NULL, ?, ?)`, []any{nowText, nowText}},
+		{`INSERT INTO users (id, display_name, status, expiry_time, created_at, updated_at) VALUES ('allocation-expired', '过期用户', 'expired', ?, ?, ?)`, []any{pastExpiry, nowText, nowText}},
+		{`INSERT INTO users (id, display_name, status, expiry_time, created_at, updated_at) VALUES ('allocation-disabled', '停用用户', 'disabled', ?, ?, ?)`, []any{futureExpiry, nowText, nowText}},
+		{`INSERT INTO users (id, display_name, status, expiry_time, created_at, updated_at) VALUES ('allocation-future', '未来用户', 'active', ?, ?, ?)`, []any{futureExpiry, futureCreated, futureCreated}},
+		{`INSERT INTO user_routes (id, user_id, route_id, is_primary, active_from) VALUES ('allocation-map-valid', 'allocation-valid', 'allocation-route', 1, ?)`, []any{nowText}},
+		{`INSERT INTO user_routes (id, user_id, route_id, is_primary, active_from) VALUES ('allocation-map-unlimited', 'allocation-unlimited', 'allocation-route', 1, ?)`, []any{nowText}},
+		{`INSERT INTO user_routes (id, user_id, route_id, is_primary, active_from) VALUES ('allocation-map-expired', 'allocation-expired', 'allocation-route', 1, ?)`, []any{nowText}},
+		{`INSERT INTO user_routes (id, user_id, route_id, is_primary, active_from) VALUES ('allocation-map-disabled', 'allocation-disabled', 'allocation-route', 1, ?)`, []any{nowText}},
+		{`INSERT INTO user_routes (id, user_id, route_id, is_primary, active_from) VALUES ('allocation-map-future', 'allocation-future', 'allocation-route', 1, ?)`, []any{nowText}},
+		{`INSERT INTO user_routes (id, user_id, route_id, is_primary, active_from) VALUES ('allocation-map-disabled-route', 'allocation-valid', 'allocation-disabled-route', 1, ?)`, []any{nowText}},
+		{`INSERT INTO route_exit_ips (id, route_id, exit_ip_id, enabled) VALUES ('allocation-binding', 'allocation-route', 'allocation-exit', 1)`, nil},
+		{`INSERT INTO route_exit_ips (id, route_id, exit_ip_id, enabled) VALUES ('allocation-disabled-binding', 'allocation-route', 'allocation-disabled-exit', 1)`, nil},
+		{`INSERT INTO route_exit_ips (id, route_id, exit_ip_id, enabled) VALUES ('allocation-disabled-route-binding', 'allocation-disabled-route', 'allocation-exit', 1)`, nil},
+	}
+	for _, statement := range statements {
+		if _, err := database.Exec(statement.query, statement.args...); err != nil {
+			t.Fatalf("seed allocation data: %v", err)
+		}
+	}
+
+	login := doJSON(t, ts.Client(), http.MethodPost, ts.URL+"/api/auth/login", "", map[string]string{"userName": "admin", "password": "test-password"})
+	token := login["data"].(map[string]any)["token"].(string)
+	routeDetail := doJSON(t, ts.Client(), http.MethodGet, ts.URL+"/api/routes/allocation-route", token, nil)
+	if routeDetail["code"] != successCode {
+		t.Fatalf("allocation route detail = %#v", routeDetail)
+	}
+	routeData := routeDetail["data"].(map[string]any)
+	if routeData["allocatedUserCount"] != float64(2) || routeData["exitIpCount"] != float64(1) {
+		t.Fatalf("allocation route counts = %#v, want users=2 exitIps=1", routeData)
+	}
+
+	exitDetail := doJSON(t, ts.Client(), http.MethodGet, ts.URL+"/api/exit-ips/allocation-exit", token, nil)
+	if exitDetail["code"] != successCode || exitDetail["data"].(map[string]any)["allocatedUserCount"] != float64(2) {
+		t.Fatalf("allocation exit IP detail = %#v, want users=2", exitDetail)
+	}
+	disabledExit := doJSON(t, ts.Client(), http.MethodGet, ts.URL+"/api/exit-ips/allocation-disabled-exit", token, nil)
+	if disabledExit["code"] != successCode || disabledExit["data"].(map[string]any)["allocatedUserCount"] != float64(0) {
+		t.Fatalf("disabled exit IP allocation = %#v, want users=0", disabledExit)
+	}
+}
+
+func TestNodeAdminRegistrationAndToggle(t *testing.T) {
+	server, database := testServer(t)
+	ts := httptest.NewServer(server.Handler())
+	defer ts.Close()
+
+	login := doJSON(t, ts.Client(), http.MethodPost, ts.URL+"/api/auth/login", "", map[string]string{"userName": "admin", "password": "test-password"})
+	token := login["data"].(map[string]any)["token"].(string)
+	createdStatus, created := doJSONWithStatus(t, ts.Client(), http.MethodPost, ts.URL+"/api/nodes", token, map[string]any{
+		"nodeKey": "admin-landing-1", "name": "管理创建落地机", "type": "landing",
+		"hostname": "landing.example", "publicIp": "203.0.113.80", "region": "东京", "provider": "Test ISP", "panelBasePath": "/panel",
+	})
+	if createdStatus != http.StatusOK || created["code"] != successCode {
+		t.Fatalf("create node status=%d response=%#v", createdStatus, created)
+	}
+	createdData := created["data"].(map[string]any)
+	nodeID := createdData["nodeId"].(string)
+	nodeToken := createdData["token"].(string)
+	if nodeID == "" || nodeToken == "" || createdData["nodeKey"] != "admin-landing-1" || createdData["type"] != "landing" {
+		t.Fatalf("unexpected node registration data: %#v", createdData)
+	}
+
+	list := doJSON(t, ts.Client(), http.MethodGet, ts.URL+"/api/nodes?page_size=20", token, nil)
+	items := list["data"].(map[string]any)["items"].([]any)
+	if len(items) != 1 {
+		t.Fatalf("node list after registration = %#v", list)
+	}
+	listed := items[0].(map[string]any)
+	if listed["id"] != nodeID || listed["enabled"] != true || listed["status"] != "unknown" {
+		t.Fatalf("unexpected listed node: %#v", listed)
+	}
+
+	duplicateStatus, duplicate := doJSONWithStatus(t, ts.Client(), http.MethodPost, ts.URL+"/api/nodes", token, map[string]any{
+		"nodeKey": "admin-landing-1", "name": "重复节点", "type": "landing",
+	})
+	if duplicateStatus != http.StatusConflict || duplicate["code"] != validationCode {
+		t.Fatalf("duplicate node status=%d response=%#v", duplicateStatus, duplicate)
+	}
+
+	disabledStatus, disabled := doJSONWithStatus(t, ts.Client(), http.MethodPatch, ts.URL+"/api/nodes/"+nodeID, token, map[string]any{"enabled": false})
+	if disabledStatus != http.StatusOK || disabled["code"] != successCode || disabled["data"].(map[string]any)["enabled"] != false || disabled["data"].(map[string]any)["status"] != "disabled" {
+		t.Fatalf("disable node status=%d response=%#v", disabledStatus, disabled)
+	}
+
+	disabledSyncStatus, disabledSync := doJSONWithStatus(t, ts.Client(), http.MethodPost, ts.URL+"/api/nodes/"+nodeID+"/sync", token, nil)
+	if disabledSyncStatus != http.StatusConflict || disabledSync["code"] != validationCode {
+		t.Fatalf("disabled node sync status=%d response=%#v", disabledSyncStatus, disabledSync)
+	}
+	disabledDetail := doJSON(t, ts.Client(), http.MethodGet, ts.URL+"/api/nodes/"+nodeID, token, nil)
+	if disabledDetail["code"] != successCode || disabledDetail["data"].(map[string]any)["status"] != "disabled" {
+		t.Fatalf("disabled node detail response=%#v", disabledDetail)
+	}
+
+	enabledStatus, enabled := doJSONWithStatus(t, ts.Client(), http.MethodPatch, ts.URL+"/api/nodes/"+nodeID, token, map[string]any{"enabled": true, "region": "大阪"})
+	if enabledStatus != http.StatusOK || enabled["code"] != successCode || enabled["data"].(map[string]any)["enabled"] != true || enabled["data"].(map[string]any)["region"] != "大阪" {
+		t.Fatalf("enable node status=%d response=%#v", enabledStatus, enabled)
+	}
+
+	heartbeat := doJSON(t, ts.Client(), http.MethodPost, ts.URL+"/api/agent/v1/heartbeat", nodeToken, map[string]any{
+		"node_key": "admin-landing-1", "observed_at": time.Now().UTC().Format(time.RFC3339), "status": map[string]any{"xray_running": true},
+	})
+	if heartbeat["code"] != successCode {
+		t.Fatalf("issued node token did not authenticate: %#v", heartbeat)
+	}
+
+	var credentialID string
+	if err := database.QueryRow(`SELECT id FROM node_credentials WHERE node_id = ?`, nodeID).Scan(&credentialID); err != nil || credentialID == "" {
+		t.Fatalf("read issued node credential id=%q err=%v", credentialID, err)
+	}
+}
+
+func TestNodeAdminGeneratesNodeKeyWhenOmitted(t *testing.T) {
+	server, _ := testServer(t)
+	ts := httptest.NewServer(server.Handler())
+	defer ts.Close()
+
+	login := doJSON(t, ts.Client(), http.MethodPost, ts.URL+"/api/auth/login", "", map[string]string{"userName": "admin", "password": "test-password"})
+	token := login["data"].(map[string]any)["token"].(string)
+	created := doJSON(t, ts.Client(), http.MethodPost, ts.URL+"/api/nodes", token, map[string]any{
+		"name": "自动 Key 节点", "type": "relay",
+	})
+	if created["code"] != successCode {
+		t.Fatalf("create node response = %#v", created)
+	}
+	nodeKey, _ := created["data"].(map[string]any)["nodeKey"].(string)
+	if !strings.HasPrefix(nodeKey, "node-") || len(nodeKey) != len("node-")+16 {
+		t.Fatalf("generated node key = %q", nodeKey)
+	}
+}
+
+func TestNodeAdminCreatesMultipleExitIPsAndDeletesNode(t *testing.T) {
+	server, database := testServer(t)
+	ts := httptest.NewServer(server.Handler())
+	defer ts.Close()
+
+	login := doJSON(t, ts.Client(), http.MethodPost, ts.URL+"/api/auth/login", "", map[string]string{"userName": "admin", "password": "test-password"})
+	token := login["data"].(map[string]any)["token"].(string)
+	created := doJSON(t, ts.Client(), http.MethodPost, ts.URL+"/api/nodes", token, map[string]any{
+		"nodeKey": "multi-exit-node", "name": "多出口落地机", "type": "landing",
+		"publicIp": "203.0.113.10", "exitIps": []string{"203.0.113.10", "198.51.100.20", "2001:db8::20"},
+	})
+	if created["code"] != successCode {
+		t.Fatalf("create multi-exit node response = %#v", created)
+	}
+	createdData := created["data"].(map[string]any)
+	nodeID := createdData["nodeId"].(string)
+	if createdData["exitIpCount"] != float64(3) {
+		t.Fatalf("created exit IP count = %#v", createdData["exitIpCount"])
+	}
+	var exitIPCount int
+	if err := database.QueryRow(`SELECT COUNT(*) FROM exit_ips WHERE owner_node_id = ?`, nodeID).Scan(&exitIPCount); err != nil || exitIPCount != 3 {
+		t.Fatalf("stored exit IP count=%d err=%v", exitIPCount, err)
+	}
+
+	deleteStatus, conflict := doJSONWithStatus(t, ts.Client(), http.MethodDelete, ts.URL+"/api/nodes/"+nodeID, token, nil)
+	if deleteStatus != http.StatusConflict || conflict["code"] != validationCode {
+		t.Fatalf("delete node with exit IPs status=%d response=%#v", deleteStatus, conflict)
+	}
+	rows, err := database.Query(`SELECT id FROM exit_ips WHERE owner_node_id = ?`, nodeID)
+	if err != nil {
+		t.Fatalf("read node exit IPs: %v", err)
+	}
+	var exitIDs []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			t.Fatalf("scan exit IP id: %v", err)
+		}
+		exitIDs = append(exitIDs, id)
+	}
+	if err := rows.Close(); err != nil {
+		t.Fatalf("close exit IP rows: %v", err)
+	}
+	for _, exitID := range exitIDs {
+		status, response := doJSONWithStatus(t, ts.Client(), http.MethodDelete, ts.URL+"/api/exit-ips/"+exitID, token, nil)
+		if status != http.StatusOK || response["code"] != successCode {
+			t.Fatalf("delete node exit IP status=%d response=%#v", status, response)
+		}
+	}
+
+	deletedStatus, deleted := doJSONWithStatus(t, ts.Client(), http.MethodDelete, ts.URL+"/api/nodes/"+nodeID, token, nil)
+	if deletedStatus != http.StatusOK || deleted["code"] != successCode || deleted["data"].(map[string]any)["historyPreserved"] != true {
+		t.Fatalf("delete node status=%d response=%#v", deletedStatus, deleted)
+	}
+	list := doJSON(t, ts.Client(), http.MethodGet, ts.URL+"/api/nodes?page_size=20", token, nil)
+	if list["code"] != successCode || len(list["data"].(map[string]any)["items"].([]any)) != 0 {
+		t.Fatalf("deleted node remained in list: %#v", list)
+	}
+	detailStatus, detail := doJSONWithStatus(t, ts.Client(), http.MethodGet, ts.URL+"/api/nodes/"+nodeID, token, nil)
+	if detailStatus != http.StatusNotFound || detail["code"] != notFoundCode {
+		t.Fatalf("deleted node detail status=%d response=%#v", detailStatus, detail)
+	}
+
+	heartbeatStatus, heartbeat := doJSONWithStatus(t, ts.Client(), http.MethodPost, ts.URL+"/api/agent/v1/heartbeat", createdData["token"].(string), map[string]any{
+		"node_key": "multi-exit-node", "observed_at": time.Now().UTC().Format(time.RFC3339), "status": map[string]any{"xray_running": true},
+	})
+	if heartbeatStatus != http.StatusUnauthorized || heartbeat["code"] != unauthorizedCode {
+		t.Fatalf("deleted node token status=%d response=%#v", heartbeatStatus, heartbeat)
+	}
+}
+
+func TestNodeCostCRUDAndHistoryProtection(t *testing.T) {
+	server, database := testServer(t)
+	ts := httptest.NewServer(server.Handler())
+	defer ts.Close()
+
+	login := doJSON(t, ts.Client(), http.MethodPost, ts.URL+"/api/auth/login", "", map[string]string{"userName": "admin", "password": "test-password"})
+	token := login["data"].(map[string]any)["token"].(string)
+	created := doJSON(t, ts.Client(), http.MethodPost, ts.URL+"/api/nodes", token, map[string]any{
+		"nodeKey": "cost-node", "name": "成本测试节点", "type": "relay",
+	})
+	if created["code"] != successCode {
+		t.Fatalf("create node response = %#v", created)
+	}
+	nodeID := created["data"].(map[string]any)["nodeId"].(string)
+
+	cost := doJSON(t, ts.Client(), http.MethodPost, ts.URL+"/api/nodes/"+nodeID+"/costs", token, map[string]any{
+		"category": "服务器", "monthlyAmount": 45.5, "effectiveFrom": "2026-09-01", "notes": "主机月租",
+	})
+	if cost["code"] != successCode {
+		t.Fatalf("create node cost response = %#v", cost)
+	}
+	costData := cost["data"].(map[string]any)
+	costID := costData["id"].(string)
+	if costData["nodeId"] != nodeID || costData["monthlyAmount"] != 45.5 || costData["effectiveFrom"] != "2026-09-01" {
+		t.Fatalf("unexpected node cost = %#v", costData)
+	}
+	costList := doJSON(t, ts.Client(), http.MethodGet, ts.URL+"/api/nodes/"+nodeID+"/costs", token, nil)
+	if costList["code"] != successCode || len(costList["data"].([]any)) != 1 {
+		t.Fatalf("node cost list response = %#v", costList)
+	}
+
+	detail := doJSON(t, ts.Client(), http.MethodGet, ts.URL+"/api/nodes/"+nodeID, token, nil)
+	if detail["code"] != successCode {
+		t.Fatalf("node detail response = %#v", detail)
+	}
+	costs := detail["data"].(map[string]any)["costs"].([]any)
+	if len(costs) != 1 || costs[0].(map[string]any)["id"] != costID {
+		t.Fatalf("node detail costs = %#v", costs)
+	}
+
+	updated := doJSON(t, ts.Client(), http.MethodPatch, ts.URL+"/api/nodes/"+nodeID+"/costs/"+costID, token, map[string]any{
+		"monthlyAmount": 50, "notes": "主机月租已调整",
+	})
+	if updated["code"] != successCode || updated["data"].(map[string]any)["monthlyAmount"] != float64(50) {
+		t.Fatalf("update node cost response = %#v", updated)
+	}
+
+	dateChangeStatus, dateChange := doJSONWithStatus(t, ts.Client(), http.MethodPatch, ts.URL+"/api/nodes/"+nodeID+"/costs/"+costID, token, map[string]any{
+		"effectiveFrom": "2026-10-01",
+	})
+	if dateChangeStatus != http.StatusConflict || dateChange["code"] != validationCode {
+		t.Fatalf("date change status=%d response=%#v", dateChangeStatus, dateChange)
+	}
+
+	finance := doJSON(t, ts.Client(), http.MethodGet, ts.URL+"/api/costs/summary?period=2026-09", token, nil)
+	if finance["code"] != successCode || finance["data"].(map[string]any)["monthCost"] != float64(50) {
+		t.Fatalf("finance node cost response = %#v", finance)
+	}
+	var storedAmount float64
+	if err := database.QueryRow(`SELECT monthly_amount FROM node_costs WHERE id = ?`, costID).Scan(&storedAmount); err != nil || storedAmount != 50 {
+		t.Fatalf("stored node cost amount=%v err=%v", storedAmount, err)
+	}
+}
+
+func TestFinanceUsesHistoricalEffectiveUsers(t *testing.T) {
+	server, database := testServer(t)
+	ts := httptest.NewServer(server.Handler())
+	defer ts.Close()
+
+	// Keep the fixtures independent of the wall clock. The request deliberately
+	// asks for historical months while the maintenance refresh moves these
+	// users' current operational statuses to expired where appropriate.
+	statements := []struct {
+		query string
+		args  []any
+	}{
+		{`INSERT INTO users (id, display_name, status, monthly_fee, currency, expiry_time, created_at, updated_at) VALUES ('revenue-history', '历史用户', 'active', 100, 'CNY', '2026-02-01T00:00:00Z', '2025-12-15T00:00:00Z', '2025-12-15T00:00:00Z')`, nil},
+		{`INSERT INTO users (id, display_name, status, monthly_fee, currency, expiry_time, created_at, updated_at) VALUES ('revenue-before', '此前已过期', 'expired', 80, 'CNY', '2025-12-31T23:59:59Z', '2025-01-01T00:00:00Z', '2026-01-01T00:00:00Z')`, nil},
+		{`INSERT INTO users (id, display_name, status, monthly_fee, currency, created_at, updated_at) VALUES ('revenue-unlimited', '长期用户', 'active', 40, 'CNY', '2026-01-15T00:00:00Z', '2026-01-15T00:00:00Z')`, nil},
+		{`INSERT INTO users (id, display_name, status, monthly_fee, currency, created_at, updated_at) VALUES ('revenue-created-later', '后来创建', 'active', 70, 'CNY', '2026-02-01T00:00:00Z', '2026-02-01T00:00:00Z')`, nil},
+		{`INSERT INTO users (id, display_name, status, monthly_fee, currency, expiry_time, created_at, updated_at) VALUES ('revenue-disabled', '停用用户', 'disabled', 90, 'CNY', '2026-12-31T00:00:00Z', '2025-12-01T00:00:00Z', '2025-12-01T00:00:00Z')`, nil},
+		{`INSERT INTO users (id, display_name, status, monthly_fee, currency, expiry_time, created_at, updated_at) VALUES ('revenue-usd', '非人民币用户', 'active', 60, 'USD', '2026-12-31T00:00:00Z', '2025-12-01T00:00:00Z', '2025-12-01T00:00:00Z')`, nil},
+		{`INSERT INTO users (id, display_name, status, monthly_fee, currency, expiry_time, created_at, updated_at) VALUES ('revenue-start-boundary', '起始日到期', 'active', 5, 'CNY', '2026-01-01T00:00:00Z', '2025-01-01T00:00:00Z', '2025-01-01T00:00:00Z')`, nil},
+	}
+	for _, statement := range statements {
+		if _, err := database.Exec(statement.query, statement.args...); err != nil {
+			t.Fatalf("seed revenue data: %v", err)
+		}
+	}
+
+	login := doJSON(t, ts.Client(), http.MethodPost, ts.URL+"/api/auth/login", "", map[string]string{"userName": "admin", "password": "test-password"})
+	token := login["data"].(map[string]any)["token"].(string)
+
+	january := doJSON(t, ts.Client(), http.MethodGet, ts.URL+"/api/costs/summary?period=2026-01", token, nil)
+	if january["code"] != successCode {
+		t.Fatalf("january finance response = %#v", january)
+	}
+	januaryData := january["data"].(map[string]any)
+	if januaryData["effectiveUserCount"] != float64(3) || januaryData["monthIncome"] != float64(145) {
+		t.Fatalf("january effective revenue = %#v, want count=3 income=145", januaryData)
+	}
+
+	february := doJSON(t, ts.Client(), http.MethodGet, ts.URL+"/api/costs/summary?period=2026-02", token, nil)
+	februaryData := february["data"].(map[string]any)
+	if february["code"] != successCode || februaryData["effectiveUserCount"] != float64(3) || februaryData["monthIncome"] != float64(210) {
+		t.Fatalf("february effective revenue = %#v, want count=3 income=210", februaryData)
+	}
+
+	march := doJSON(t, ts.Client(), http.MethodGet, ts.URL+"/api/costs/summary?period=2026-03", token, nil)
+	marchData := march["data"].(map[string]any)
+	if march["code"] != successCode || marchData["effectiveUserCount"] != float64(2) || marchData["monthIncome"] != float64(110) {
+		t.Fatalf("march effective revenue = %#v, want count=2 income=110", marchData)
+	}
+}
+
+func TestFinanceAggregatesTemporalCostsAndGrossProfit(t *testing.T) {
+	server, database := testServer(t)
+	ts := httptest.NewServer(server.Handler())
+	defer ts.Close()
+
+	now := "2026-09-03T00:00:00Z"
+	statements := []string{
+		`INSERT INTO nodes (id, node_key, name, type, health_status, created_at, updated_at) VALUES ('finance-relay', 'finance-relay', '财务线路机', 'relay', 'online', '` + now + `', '` + now + `')`,
+		`INSERT INTO nodes (id, node_key, name, type, health_status, created_at, updated_at) VALUES ('finance-landing', 'finance-landing', '财务落地机', 'landing', 'online', '` + now + `', '` + now + `')`,
+		`INSERT INTO node_costs (id, node_id, category, monthly_amount, currency, effective_from, effective_to, created_at) VALUES ('finance-node-current', 'finance-relay', '主机', 30, 'CNY', '2026-09-01', NULL, '` + now + `')`,
+		`INSERT INTO node_costs (id, node_id, category, monthly_amount, currency, effective_from, effective_to, created_at) VALUES ('finance-node-next', 'finance-relay', '下月主机', 40, 'CNY', '2026-10-01', NULL, '` + now + `')`,
+		`INSERT INTO node_costs (id, node_id, category, monthly_amount, currency, effective_from, effective_to, created_at) VALUES ('finance-node-ended', 'finance-relay', '已结束', 20, 'CNY', '2026-08-01', '2026-08-31', '` + now + `')`,
+		`INSERT INTO node_costs (id, node_id, category, monthly_amount, currency, effective_from, effective_to, created_at) VALUES ('finance-node-boundary', 'finance-relay', '月初结束', 10, 'CNY', '2026-08-15', '2026-09-01', '` + now + `')`,
+		`INSERT INTO other_costs (id, name, category, monthly_amount, currency, effective_from, effective_to, created_at) VALUES ('finance-other-current', '监控', '服务', 5, 'CNY', '2026-09-15', NULL, '` + now + `')`,
+		`INSERT INTO other_costs (id, name, category, monthly_amount, currency, effective_from, effective_to, created_at) VALUES ('finance-other-next', '下月服务', '服务', 50, 'CNY', '2026-10-01', NULL, '` + now + `')`,
+		`INSERT INTO exit_ips (id, landing_node_id, ip, family, monthly_cost, currency, enabled, valid_from, valid_to, created_at, updated_at) VALUES ('finance-exit-current', 'finance-landing', '203.0.113.20', 4, 7, 'CNY', 1, '2026-09-01', '2026-09-30', '` + now + `', '` + now + `')`,
+		`INSERT INTO exit_ips (id, landing_node_id, ip, family, monthly_cost, currency, enabled, valid_from, valid_to, created_at, updated_at) VALUES ('finance-exit-next', 'finance-landing', '203.0.113.21', 4, 9, 'CNY', 1, '2026-10-01', NULL, '` + now + `', '` + now + `')`,
+		`INSERT INTO exit_ips (id, landing_node_id, ip, family, monthly_cost, currency, enabled, valid_from, valid_to, created_at, updated_at) VALUES ('finance-exit-ended', 'finance-landing', '203.0.113.22', 4, 11, 'CNY', 1, NULL, '2026-08-31', '` + now + `', '` + now + `')`,
+		`INSERT INTO exit_ips (id, landing_node_id, ip, family, monthly_cost, currency, enabled, valid_from, valid_to, created_at, updated_at) VALUES ('finance-exit-disabled', 'finance-landing', '203.0.113.23', 4, 13, 'CNY', 0, '2026-09-01', NULL, '` + now + `', '` + now + `')`,
+	}
+	for _, statement := range statements {
+		if _, err := database.Exec(statement); err != nil {
+			t.Fatalf("seed temporal cost data: %v", err)
+		}
+	}
+
+	login := doJSON(t, ts.Client(), http.MethodPost, ts.URL+"/api/auth/login", "", map[string]string{"userName": "admin", "password": "test-password"})
+	token := login["data"].(map[string]any)["token"].(string)
+	finance := doJSON(t, ts.Client(), http.MethodGet, ts.URL+"/api/costs/summary?period=2026-09", token, nil)
+	if finance["code"] != successCode {
+		t.Fatalf("temporal finance response = %#v", finance)
+	}
+	data := finance["data"].(map[string]any)
+	if data["monthIncome"] != float64(0) || data["monthCost"] != float64(52) || data["grossProfit"] != float64(-52) {
+		t.Fatalf("temporal finance totals = %#v, want income=0 cost=52 grossProfit=-52", data)
+	}
+	breakdown := data["breakdown"].([]any)
+	if len(breakdown) != 4 || breakdown[0].(map[string]any)["label"] != "用户月费收入" {
+		t.Fatalf("temporal finance breakdown = %#v", breakdown)
 	}
 }
 
 func doJSON(t *testing.T, client *http.Client, method, url, token string, payload any) map[string]any {
 	t.Helper()
 	return doJSONWithRequestID(t, client, method, url, token, "", payload)
+}
+
+func doJSONWithStatus(t *testing.T, client *http.Client, method, url, token string, payload any) (int, map[string]any) {
+	t.Helper()
+	var body io.Reader
+	if payload != nil {
+		encoded, err := json.Marshal(payload)
+		if err != nil {
+			t.Fatalf("encode request: %v", err)
+		}
+		body = bytes.NewReader(encoded)
+	}
+	request, err := http.NewRequestWithContext(context.Background(), method, url, body)
+	if err != nil {
+		t.Fatalf("create request: %v", err)
+	}
+	if payload != nil {
+		request.Header.Set("Content-Type", "application/json")
+	}
+	if token != "" {
+		request.Header.Set("Authorization", "Bearer "+token)
+	}
+	response, err := client.Do(request)
+	if err != nil {
+		t.Fatalf("perform request: %v", err)
+	}
+	defer response.Body.Close()
+	var result map[string]any
+	if err := json.NewDecoder(response.Body).Decode(&result); err != nil {
+		t.Fatalf("decode response (%d): %v", response.StatusCode, err)
+	}
+	return response.StatusCode, result
 }
 
 func doJSONWithRequestID(t *testing.T, client *http.Client, method, url, token, requestID string, payload any) map[string]any {

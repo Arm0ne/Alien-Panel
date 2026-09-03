@@ -1,0 +1,5 @@
+ALTER TABLE nodes ADD COLUMN cpu_usage REAL;
+ALTER TABLE nodes ADD COLUMN memory_used INTEGER;
+ALTER TABLE nodes ADD COLUMN memory_total INTEGER;
+ALTER TABLE nodes ADD COLUMN disk_used INTEGER;
+ALTER TABLE nodes ADD COLUMN disk_total INTEGER;
