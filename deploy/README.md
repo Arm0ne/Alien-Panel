@@ -55,6 +55,19 @@ To stop the containers while keeping data:
 sudo bash /opt/xpanel-central/deploy/uninstall-docker.sh
 ```
 
+To completely remove an old systemd/Docker test deployment, including its
+database, backups, uploaded files and Docker volume, preview and then confirm:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/Arm0ne/Alien-Panel/main/deploy/uninstall-all.sh \
+  | sudo bash
+curl -fsSL https://raw.githubusercontent.com/Arm0ne/Alien-Panel/main/deploy/uninstall-all.sh \
+  | sudo bash -s -- --yes
+```
+
+The cleanup does not touch TLS certificates, X-Panel Agent files on node
+machines, or unrelated Nginx sites.
+
 The bundled Nginx listens on the temporary test port only. For an existing
 host Nginx, proxy the HTTPS server to `127.0.0.1:18080` and set `--domain` when
 installing so browser write requests pass the backend Origin check:

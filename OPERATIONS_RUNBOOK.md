@@ -127,6 +127,10 @@ Agent 引导 Token，启动中央服务和内置 Nginx，默认通过
 将域名反代到
 `127.0.0.1:18080`；完整示例见 [`deploy/README.md`](deploy/README.md)。
 
+如果需要清空旧的 systemd 或 Docker 测试部署（包含数据库、备份和上传
+文件），使用部署包中的 `deploy/uninstall-all.sh`。它默认只预览，必须显式
+传入 `--yes` 才会删除；TLS 证书和节点机器上的 Agent 不会被删除。
+
 ## 2. 节点接入
 
 1. 在“节点管理”点击“接入节点”，填写节点名称、类型和管理地址；节点 Key 可以留空，由中央生成稳定 Key。
