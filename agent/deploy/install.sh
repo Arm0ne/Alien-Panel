@@ -17,6 +17,11 @@ if ! id -u xpanel-agent >/dev/null 2>&1; then
 fi
 chown xpanel-agent:xpanel-agent "$DATA_DIR"
 
+if [[ -f "$CONFIG_DIR/agent.yaml" ]]; then
+  chown xpanel-agent:xpanel-agent "$CONFIG_DIR/agent.yaml"
+  chmod 0600 "$CONFIG_DIR/agent.yaml"
+fi
+
 if [[ ! -f "$PREFIX/xpanel-agent" ]]; then
   echo "missing binary: $PREFIX/xpanel-agent" >&2
   exit 1
