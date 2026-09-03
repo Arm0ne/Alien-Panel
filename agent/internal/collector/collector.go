@@ -248,7 +248,7 @@ func parseClient(raw json.RawMessage) (Client, error) {
 		Up:         intField(object, "up", "upload"),
 		Down:       intField(object, "down", "download"),
 		AllTime:    intField(object, "all_time", "allTime", "total"),
-		LastOnline: intField(object, "last_online", "lastOnline"),
+		LastOnline: timestampField(object, "last_online", "lastOnline", "last_online_at", "lastOnlineAt", "last_online_time", "lastOnlineTime"),
 	}
 	if client.AllTime == 0 {
 		client.AllTime = client.Up + client.Down
@@ -292,7 +292,11 @@ func mergeClientTraffic(clients []Client, trafficItems []json.RawMessage) {
 				clients[index].Up = intField(traffic, "up", "upload")
 				clients[index].Down = intField(traffic, "down", "download")
 				clients[index].AllTime = intField(traffic, "all_time", "allTime", "total")
-				clients[index].LastOnline = intField(traffic, "last_online", "lastOnline")
+				// Some X-Panel versions omit lastOnline from traffic records. Do
+				// not erase a value parsed from the client definition in that case.
+				if lastOnline := timestampField(traffic, "last_online", "lastOnline", "last_online_at", "lastOnlineAt", "last_online_time", "lastOnlineTime"); lastOnline > 0 {
+					clients[index].LastOnline = lastOnline
+				}
 				if clients[index].AllTime == 0 {
 					clients[index].AllTime = clients[index].Up + clients[index].Down
 				}
@@ -431,6 +435,63 @@ func intField(object map[string]json.RawMessage, keys ...string) int64 {
 		return value
 	}
 	return 0
+}
+
+// timestampField reads the timestamp variants used by different X-Panel
+// releases. Values may be Unix seconds, milliseconds, microseconds,
+// nanoseconds, numeric strings, or RFC3339 strings. The central API stores
+// timestamps as RFC3339, so normalize all numeric forms to Unix seconds here.
+func timestampField(object map[string]json.RawMessage, keys ...string) int64 {
+	raw, ok := objectValue(object, keys...)
+	if !ok || len(raw) == 0 || string(raw) == "null" {
+		return 0
+	}
+
+	var number json.Number
+	if err := json.Unmarshal(raw, &number); err == nil {
+		if value, ok := normalizeTimestamp(number.String()); ok {
+			return value
+		}
+	}
+
+	var text string
+	if err := json.Unmarshal(raw, &text); err != nil {
+		return 0
+	}
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return 0
+	}
+	for _, layout := range []string{time.RFC3339Nano, time.RFC3339, "2006-01-02 15:04:05"} {
+		if parsed, err := time.Parse(layout, text); err == nil {
+			return parsed.Unix()
+		}
+	}
+	value, _ := normalizeTimestamp(text)
+	return value
+}
+
+func normalizeTimestamp(value string) (int64, bool) {
+	parsed, err := strconv.ParseInt(strings.TrimSpace(value), 10, 64)
+	if err != nil {
+		return 0, false
+	}
+	if parsed <= 0 {
+		return 0, true
+	}
+	abs := parsed
+	if abs < 0 {
+		abs = -abs
+	}
+	switch {
+	case abs >= 1_000_000_000_000_000_000:
+		parsed /= 1_000_000_000 // nanoseconds
+	case abs >= 1_000_000_000_000_000:
+		parsed /= 1_000_000 // microseconds
+	case abs >= 1_000_000_000_000:
+		parsed /= 1_000 // milliseconds
+	}
+	return parsed, true
 }
 
 func floatField(object map[string]json.RawMessage, keys ...string) float64 {

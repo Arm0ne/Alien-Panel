@@ -69,6 +69,39 @@ func TestParseInboundsSupportsWrappedPayloadAndStringSettings(t *testing.T) {
 	}
 }
 
+func TestParseInboundsNormalizesLastOnlineTimestampVariants(t *testing.T) {
+	payload := json.RawMessage(`[
+      {
+        "id": 1,
+        "settings": {"clients": [
+          {"id": "rfc-client", "email": "rfc", "lastOnlineAt": "2026-09-04T00:00:00Z"}
+        ]},
+        "clientTraffics": [
+          {"id": "rfc-client", "up": 1, "down": 2}
+        ]
+      },
+      {
+        "id": 2,
+        "clientStats": [
+          {"id": "ms-client", "email": "ms", "lastOnline": "1756944000000"}
+        ]
+      }
+    ]`)
+	inbounds, err := ParseInbounds(payload)
+	if err != nil {
+		t.Fatalf("ParseInbounds() error = %v", err)
+	}
+	if len(inbounds) != 2 || len(inbounds[0].Clients) != 1 || len(inbounds[1].Clients) != 1 {
+		t.Fatalf("inbounds = %+v", inbounds)
+	}
+	if got, want := inbounds[0].Clients[0].LastOnline, int64(1788480000); got != want {
+		t.Fatalf("RFC3339 last online = %d, want %d", got, want)
+	}
+	if got, want := inbounds[1].Clients[0].LastOnline, int64(1756944000); got != want {
+		t.Fatalf("millisecond last online = %d, want %d", got, want)
+	}
+}
+
 func TestParseStatusSupportsNestedXrayObject(t *testing.T) {
 	status, err := ParseStatus(json.RawMessage(`{"xray":{"state":"running","version":"1.2.3"},"cpuUsage":"12.5","memoryUsed":100,"memoryTotal":200}`))
 	if err != nil {
