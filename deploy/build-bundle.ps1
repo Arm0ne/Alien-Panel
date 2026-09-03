@@ -39,6 +39,12 @@ try {
     Write-Host "Building Linux/$GoArch central binary..."
     go build -trimpath -o (Join-Path $Release 'xpanel-central') ./cmd/server
   } finally { Pop-Location }
+
+  Push-Location (Join-Path $Root 'agent')
+  try {
+    Write-Host "Building Linux/$GoArch agent binary..."
+    go build -trimpath -o (Join-Path $Release 'xpanel-agent') ./cmd/agent
+  } finally { Pop-Location }
 } finally {
   if ($null -eq $oldGoOS) { Remove-Item Env:GOOS -ErrorAction SilentlyContinue } else { $env:GOOS = $oldGoOS }
   if ($null -eq $oldGoArch) { Remove-Item Env:GOARCH -ErrorAction SilentlyContinue } else { $env:GOARCH = $oldGoArch }
