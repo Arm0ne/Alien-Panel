@@ -1,0 +1,1 @@
+import{Pi as e,Wi as t,ki as n}from"./router-B7Ig3Ii3.js";import{t as r}from"./exception-base-7zW163bR.js";var i=e({name:`404`,__name:`index`,setup(e){return(e,i)=>{let a=r;return t(),n(a,{type:`404`})}}});export{i as default};

@@ -1,1 +1,0 @@
-import{Oi as e,Wi as t,ea as n,ji as r}from"./router-CBkxnRvy.js";var i={class:`inline-block`,viewBox:`0 0 24 24`,width:`1em`,height:`1em`};function a(n,a){return t(),r(`svg`,i,[...a[0]||=[e(`path`,{fill:`currentColor`,d:`M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6z`},null,-1)]])}var o=n({name:`mdi-plus`,render:a});export{o as t};
