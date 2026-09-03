@@ -63,6 +63,47 @@ func TestClientLoginAndGetRetriesOnceAfterUnauthorized(t *testing.T) {
 	}
 }
 
+func TestClientLoginAndGetHandlesRedirectToLogin(t *testing.T) {
+	var loginCalls atomic.Int32
+	var getCalls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		switch request.URL.Path {
+		case "/xpanel/login":
+			loginCalls.Add(1)
+			if err := request.ParseForm(); err != nil {
+				t.Fatalf("ParseForm() error = %v", err)
+			}
+			http.SetCookie(writer, &http.Cookie{Name: "session", Value: "session-value", Path: "/xpanel"})
+			writeJSON(writer, Response{Success: true, Msg: "ok"})
+		case "/xpanel/panel/api/inbounds/list":
+			getCalls.Add(1)
+			if _, err := request.Cookie("session"); err != nil {
+				http.Redirect(writer, request, "/xpanel/login", http.StatusFound)
+				return
+			}
+			writeJSON(writer, Response{Success: true, Obj: json.RawMessage(`[{"id":15}]`)})
+		default:
+			http.NotFound(writer, request)
+		}
+	}))
+	defer server.Close()
+
+	client, err := NewClient(server.URL, "/xpanel/", "admin", "secret", time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload, err := client.Get(context.Background(), "/inbounds/list")
+	if err != nil {
+		t.Fatalf("Get() error = %v", err)
+	}
+	if loginCalls.Load() != 1 || getCalls.Load() != 2 {
+		t.Fatalf("login calls = %d, GET calls = %d, want 1 and 2", loginCalls.Load(), getCalls.Load())
+	}
+	if string(payload.Obj) != `[{"id":15}]` {
+		t.Fatalf("Obj = %s", payload.Obj)
+	}
+}
+
 func TestClientLoginFailureEntersBackoff(t *testing.T) {
 	var loginCalls atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {

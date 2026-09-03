@@ -56,12 +56,24 @@ func NewClientWithRetryPolicy(baseURL, basePath, username, password string, time
 		timeout = 15 * time.Second
 	}
 	return &Client{
-		baseURL:     strings.TrimRight(baseURL, "/") + "/" + strings.Trim(strings.TrimSpace(basePath), "/"),
-		username:    username,
-		password:    password,
-		http:        &http.Client{Timeout: timeout, Jar: jar},
+		baseURL:  strings.TrimRight(baseURL, "/") + "/" + strings.Trim(strings.TrimSpace(basePath), "/"),
+		username: username,
+		password: password,
+		// X-Panel commonly redirects unauthenticated API requests to its HTML
+		// login page. Do not follow that redirect here: doing so hides the
+		// authentication challenge and makes the JSON decoder fail on '<'.
+		// The GET path below handles the redirect by logging in and retrying.
+		http: &http.Client{
+			Timeout:       timeout,
+			Jar:           jar,
+			CheckRedirect: noRedirect,
+		},
 		retryPolicy: policy.Normalized(),
 	}, nil
+}
+
+func noRedirect(_ *http.Request, _ []*http.Request) error {
+	return http.ErrUseLastResponse
 }
 
 func (client *Client) Login(ctx context.Context) error {
@@ -135,7 +147,7 @@ func (client *Client) doGet(ctx context.Context, path string, retryAuth bool) (R
 		response, status, err, transient := client.getAttempt(ctx, path)
 		if err != nil {
 			lastErr = err
-		} else if status == http.StatusUnauthorized && authRetry {
+		} else if isAuthChallenge(status) && authRetry {
 			client.mu.Lock()
 			loginErr := client.loginLocked(ctx)
 			client.mu.Unlock()
@@ -198,6 +210,10 @@ func (client *Client) getAttempt(ctx context.Context, path string) (Response, in
 
 func retryableHTTPStatus(status int) bool {
 	return status == http.StatusRequestTimeout || status == http.StatusTooEarly || status == http.StatusTooManyRequests || status >= 500
+}
+
+func isAuthChallenge(status int) bool {
+	return status == http.StatusUnauthorized || (status >= 300 && status < 400)
 }
 
 func (client *Client) recordLoginFailure() {
