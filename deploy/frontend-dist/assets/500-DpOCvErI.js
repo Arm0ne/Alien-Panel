@@ -1,1 +1,0 @@
-import{Pi as e,Wi as t,ki as n}from"./router-CdtSZDv0.js";import{t as r}from"./exception-base-CAHRBB4H.js";var i=e({name:`500`,__name:`index`,setup(e){return(e,i)=>{let a=r;return t(),n(a,{type:`500`})}}});export{i as default};

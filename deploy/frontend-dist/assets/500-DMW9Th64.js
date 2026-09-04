@@ -1,0 +1,1 @@
+import{Pi as e,Wi as t,ki as n}from"./router-C4y8YdJN.js";import{t as r}from"./exception-base-DL5Bn5Oa.js";var i=e({name:`500`,__name:`index`,setup(e){return(e,i)=>{let a=r;return t(),n(a,{type:`500`})}}});export{i as default};

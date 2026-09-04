@@ -1,4 +1,4 @@
-import{Di as e,Gn as t,Ii as n,Jr as r,Kn as i,On as a,Pi as o,Zn as s,jn as c,qr as l}from"./router-CdtSZDv0.js";import{n as u}from"./index-CD3NytCV.js";var d=l(`statistic`,[r(`label`,`
+import{Di as e,Gn as t,Ii as n,Jr as r,Kn as i,On as a,Pi as o,Zn as s,jn as c,qr as l}from"./router-C4y8YdJN.js";import{n as u}from"./index-DQcyMUK0.js";var d=l(`statistic`,[r(`label`,`
  font-weight: var(--n-label-font-weight);
  transition: .3s color var(--n-bezier);
  font-size: var(--n-label-font-size);
