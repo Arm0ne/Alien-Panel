@@ -316,6 +316,16 @@ cpu_usage = ?, memory_used = ?, memory_total = ?, disk_used = ?, disk_total = ?,
 // outside the business-user list.
 func (s *Server) ensureRelayInboundUser(tx *sql.Tx, nodeType, inboundID, remoteInboundID string, inbound agentInboundPayload, expiryText string, observedAt time.Time) error {
 	if nodeType != "relay" {
+		// A landing/unknown node may have been synchronized by an older
+		// version that incorrectly attached its Inbound to a business user.
+		// Remove only that invalid association; the user record itself is
+		// central data and must remain available for later reuse.
+		if _, err := tx.Exec(`DELETE FROM user_inbounds WHERE inbound_id = ?`, inboundID); err != nil {
+			return fmt.Errorf("clear non-relay business mapping: %w", err)
+		}
+		if _, err := tx.Exec(`UPDATE inbounds SET user_id = NULL, kind = 'infrastructure' WHERE id = ?`, inboundID); err != nil {
+			return fmt.Errorf("classify non-relay inbound: %w", err)
+		}
 		return nil
 	}
 

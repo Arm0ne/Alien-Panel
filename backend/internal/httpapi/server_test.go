@@ -391,6 +391,71 @@ func TestUserDetailAndBusinessFieldUpdate(t *testing.T) {
 	}
 }
 
+func TestLandingInboundMappingIsHiddenButUserIsKept(t *testing.T) {
+	server, database := testServer(t)
+	ts := httptest.NewServer(server.Handler())
+	defer ts.Close()
+
+	nowText := time.Now().UTC().Format(time.RFC3339Nano)
+	for _, statement := range []string{
+		`INSERT INTO nodes (id, node_key, name, type, health_status, created_at, updated_at) VALUES ('legacy-landing-node', 'legacy-landing-node', '历史落地机', 'landing', 'online', '` + nowText + `', '` + nowText + `')`,
+		`INSERT INTO users (id, display_name, status, created_at, updated_at) VALUES ('legacy-landing-user', '保留的预留用户', 'active', '` + nowText + `', '` + nowText + `')`,
+		`INSERT INTO inbounds (id, node_id, remote_inbound_id, user_id, kind, tag, first_seen_at, last_seen_at) VALUES ('legacy-landing-inbound', 'legacy-landing-node', '77', 'legacy-landing-user', 'user', '落地入口-旧记录', '` + nowText + `', '` + nowText + `')`,
+		`INSERT INTO user_inbounds (id, user_id, inbound_id, is_primary, active_from) VALUES ('legacy-landing-user-inbound', 'legacy-landing-user', 'legacy-landing-inbound', 1, '` + nowText + `')`,
+	} {
+		if _, err := database.Exec(statement); err != nil {
+			t.Fatalf("seed legacy landing user: %v", err)
+		}
+	}
+
+	login := doJSON(t, ts.Client(), http.MethodPost, ts.URL+"/api/auth/login", "", map[string]string{"userName": "admin", "password": "test-password"})
+	token := login["data"].(map[string]any)["token"].(string)
+	list := doJSON(t, ts.Client(), http.MethodGet, ts.URL+"/api/users?page_size=20", token, nil)
+	if list["code"] != successCode {
+		t.Fatalf("user list response = %#v", list)
+	}
+	items := list["data"].(map[string]any)["items"].([]any)
+	if len(items) != 1 {
+		t.Fatalf("expected preserved user in list, got %#v", items)
+	}
+	item := items[0].(map[string]any)
+	if item["id"] != "legacy-landing-user" || item["nodeId"] != "" || item["inboundTag"] != "" {
+		t.Fatalf("landing inbound leaked into user summary: %#v", item)
+	}
+
+	detail := doJSON(t, ts.Client(), http.MethodGet, ts.URL+"/api/users/legacy-landing-user", token, nil)
+	if detail["code"] != successCode {
+		t.Fatalf("user detail response = %#v", detail)
+	}
+	inbound := detail["data"].(map[string]any)["inbound"].(map[string]any)
+	node := detail["data"].(map[string]any)["node"].(map[string]any)
+	if inbound["id"] != nil || inbound["tag"] != nil || node["id"] != nil {
+		t.Fatalf("landing inbound leaked into user detail: inbound=%#v node=%#v", inbound, node)
+	}
+
+	tx, err := database.Begin()
+	if err != nil {
+		t.Fatalf("begin cleanup sync: %v", err)
+	}
+	if err := server.ensureRelayInboundUser(tx, "landing", "legacy-landing-inbound", "77", agentInboundPayload{Enable: true}, "", time.Now().UTC()); err != nil {
+		_ = tx.Rollback()
+		t.Fatalf("clean legacy landing mapping: %v", err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatalf("commit cleanup sync: %v", err)
+	}
+	var mappings, users int
+	if err := database.QueryRow(`SELECT COUNT(*) FROM user_inbounds WHERE inbound_id = 'legacy-landing-inbound'`).Scan(&mappings); err != nil {
+		t.Fatalf("count cleaned mapping: %v", err)
+	}
+	if err := database.QueryRow(`SELECT COUNT(*) FROM users WHERE id = 'legacy-landing-user'`).Scan(&users); err != nil {
+		t.Fatalf("count preserved user: %v", err)
+	}
+	if mappings != 0 || users != 1 {
+		t.Fatalf("runtime cleanup mappings=%d users=%d", mappings, users)
+	}
+}
+
 func TestUserPathAssignmentLifecycle(t *testing.T) {
 	server, database := testServer(t)
 	ts := httptest.NewServer(server.Handler())

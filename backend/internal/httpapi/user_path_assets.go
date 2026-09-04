@@ -41,7 +41,8 @@ FROM user_inbounds ui
 JOIN inbounds i ON i.id = ui.inbound_id
 JOIN nodes n ON n.id = i.node_id
 WHERE ui.user_id = ? AND ui.is_primary = 1 AND ui.active_to IS NULL
-  AND i.deleted_at IS NULL AND i.enable = 1`, userID).Scan(
+  AND i.deleted_at IS NULL AND i.enable = 1 AND i.kind = 'user'
+  AND n.type = 'relay' AND n.deleted_at IS NULL`, userID).Scan(
 		&relayID, &relayName, &relayType, &relayStatus, &relayEnabled, &relayHost, &relayLastSeen, &relayLastSync,
 	)
 	if errors.Is(err, sql.ErrNoRows) {

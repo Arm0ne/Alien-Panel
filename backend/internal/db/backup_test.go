@@ -24,8 +24,8 @@ func TestMigrateIsIdempotent(t *testing.T) {
 	if err := database.QueryRow(`SELECT COUNT(*) FROM schema_migrations`).Scan(&count); err != nil {
 		t.Fatalf("count migrations: %v", err)
 	}
-	if count != 8 {
-		t.Fatalf("migration count = %d, want 8", count)
+	if count != 9 {
+		t.Fatalf("migration count = %d, want 9", count)
 	}
 }
 
@@ -77,6 +77,62 @@ func TestExitIPSourceMigrationPreservesLegacyBindings(t *testing.T) {
 	}
 	if scope != "landing" {
 		t.Fatalf("migrated scope = %q, want landing", scope)
+	}
+}
+
+func TestNonRelayUserMappingMigrationKeepsUsers(t *testing.T) {
+	database, err := Open(":memory:")
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+	defer database.Close()
+	if _, err := database.Exec(`CREATE TABLE schema_migrations (version TEXT PRIMARY KEY, applied_at TEXT NOT NULL)`); err != nil {
+		t.Fatalf("create migration table: %v", err)
+	}
+	versions := []string{
+		"001_initial.sql", "002_inbound_missing_sync_count.sql", "003_node_metrics.sql",
+		"004_exit_ip_sources.sql", "005_node_deletion.sql", "006_user_route_assignment.sql",
+		"007_clear_inactive_route_exit_refs.sql", "008_user_paths.sql",
+	}
+	for _, version := range versions {
+		sqlBytes, readErr := migrationFiles.ReadFile("migrations/" + version)
+		if readErr != nil {
+			t.Fatalf("read %s: %v", version, readErr)
+		}
+		if _, execErr := database.Exec(string(sqlBytes)); execErr != nil {
+			t.Fatalf("apply %s: %v", version, execErr)
+		}
+		if _, execErr := database.Exec(`INSERT INTO schema_migrations (version, applied_at) VALUES (?, 'now')`, version); execErr != nil {
+			t.Fatalf("record %s: %v", version, execErr)
+		}
+	}
+	now := "2026-09-03T00:00:00Z"
+	for _, statement := range []string{
+		`INSERT INTO nodes (id, node_key, name, type, created_at, updated_at) VALUES ('legacy-landing', 'legacy-landing', 'Legacy Landing', 'landing', '` + now + `', '` + now + `')`,
+		`INSERT INTO users (id, display_name, status, created_at, updated_at) VALUES ('kept-user', '预留用户', 'active', '` + now + `', '` + now + `')`,
+		`INSERT INTO inbounds (id, node_id, remote_inbound_id, user_id, kind, tag, first_seen_at, last_seen_at) VALUES ('legacy-landing-inbound', 'legacy-landing', '101', 'kept-user', 'user', 'legacy-landing-entry', '` + now + `', '` + now + `')`,
+		`INSERT INTO user_inbounds (id, user_id, inbound_id, is_primary, active_from) VALUES ('legacy-landing-mapping', 'kept-user', 'legacy-landing-inbound', 1, '` + now + `')`,
+	} {
+		if _, err := database.Exec(statement); err != nil {
+			t.Fatalf("insert legacy landing mapping: %v", err)
+		}
+	}
+	if err := Migrate(database); err != nil {
+		t.Fatalf("apply cleanup migration: %v", err)
+	}
+	var mappings, users int
+	if err := database.QueryRow(`SELECT COUNT(*) FROM user_inbounds WHERE inbound_id = 'legacy-landing-inbound'`).Scan(&mappings); err != nil {
+		t.Fatalf("count cleaned mappings: %v", err)
+	}
+	if err := database.QueryRow(`SELECT COUNT(*) FROM users WHERE id = 'kept-user'`).Scan(&users); err != nil {
+		t.Fatalf("count kept users: %v", err)
+	}
+	var userID, kind string
+	if err := database.QueryRow(`SELECT COALESCE(user_id, ''), kind FROM inbounds WHERE id = 'legacy-landing-inbound'`).Scan(&userID, &kind); err != nil {
+		t.Fatalf("read cleaned landing inbound: %v", err)
+	}
+	if mappings != 0 || users != 1 || userID != "" || kind != "infrastructure" {
+		t.Fatalf("cleanup mappings=%d users=%d user_id=%q kind=%q", mappings, users, userID, kind)
 	}
 }
 

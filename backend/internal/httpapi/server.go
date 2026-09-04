@@ -347,7 +347,8 @@ func (s *Server) users(w http.ResponseWriter, r *http.Request) {
 	}
 	base := `FROM users u
 LEFT JOIN user_inbounds ui ON ui.user_id = u.id AND ui.is_primary = 1 AND ui.active_to IS NULL
-LEFT JOIN inbounds i ON i.id = ui.inbound_id
+LEFT JOIN inbounds i ON i.id = ui.inbound_id AND i.kind = 'user' AND i.deleted_at IS NULL
+ AND i.node_id IN (SELECT id FROM nodes WHERE type = 'relay' AND deleted_at IS NULL)
 LEFT JOIN nodes n ON n.id = i.node_id
 WHERE ` + strings.Join(where, " AND ")
 	var total int
@@ -677,7 +678,8 @@ COALESCE(i.client_count, 0), COALESCE(i.up, 0), COALESCE(i.down, 0), COALESCE(i.
 COALESCE(n.id, ''), COALESCE(n.name, ''), COALESCE(n.type, '')
 FROM users u
 LEFT JOIN user_inbounds ui ON ui.user_id = u.id AND ui.is_primary = 1 AND ui.active_to IS NULL
-LEFT JOIN inbounds i ON i.id = ui.inbound_id
+LEFT JOIN inbounds i ON i.id = ui.inbound_id AND i.kind = 'user' AND i.deleted_at IS NULL
+ AND i.node_id IN (SELECT id FROM nodes WHERE type = 'relay' AND deleted_at IS NULL)
 LEFT JOIN nodes n ON n.id = i.node_id
 WHERE u.id = ?`, id).Scan(&userID, &displayName, &status, &monthlyFee, &currency, &notes, &expiry,
 		&inboundID, &inboundRemoteID, &inboundTag, &inboundRemark, &protocol, &port, &enabled, &clientCount, &up, &down, &allTime, &lastSeen,
@@ -905,7 +907,9 @@ COALESCE(n.last_seen_at, ''),
 COALESCE((SELECT COALESCE(sr.finished_at, sr.started_at) FROM sync_runs sr WHERE sr.node_id = n.id AND sr.status = 'success'
 ORDER BY COALESCE(sr.finished_at, sr.started_at) DESC LIMIT 1), ''),
 		COALESCE((SELECT MAX(COALESCE(sr.finished_at, sr.started_at)) FROM sync_runs sr WHERE sr.node_id = n.id AND sr.status = 'success'), ''),
-(SELECT COUNT(DISTINCT u.id) FROM users u JOIN inbounds ui ON ui.user_id = u.id WHERE ui.node_id = n.id),
+(SELECT COUNT(DISTINCT u.id) FROM users u
+ JOIN inbounds ui ON ui.user_id = u.id AND ui.node_id = n.id AND ui.kind = 'user' AND ui.deleted_at IS NULL
+ WHERE n.type = 'relay' AND n.deleted_at IS NULL),
 COALESCE((SELECT SUM(COALESCE(i.up, 0) + COALESCE(i.down, 0)) FROM inbounds i WHERE i.node_id = n.id AND i.deleted_at IS NULL), 0),
 n.enabled
 FROM nodes n WHERE n.id = ? AND n.deleted_at IS NULL`, id).Scan(&nodeID, &nodeKey, &name, &nodeType, &status,

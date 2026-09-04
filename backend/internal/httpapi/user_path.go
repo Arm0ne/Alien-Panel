@@ -69,7 +69,9 @@ func (s *Server) assignUserPath(w http.ResponseWriter, r *http.Request) {
 	err := s.db.QueryRow(`SELECT i.node_id, n.type, n.enabled
 FROM user_inbounds ui JOIN inbounds i ON i.id = ui.inbound_id
 JOIN nodes n ON n.id = i.node_id
-WHERE ui.user_id = ? AND ui.is_primary = 1 AND ui.active_to IS NULL AND i.deleted_at IS NULL AND i.enable = 1`, userID).Scan(&relayNodeID, &relayType, &relayEnabled)
+WHERE ui.user_id = ? AND ui.is_primary = 1 AND ui.active_to IS NULL
+  AND i.deleted_at IS NULL AND i.enable = 1 AND i.kind = 'user'
+  AND n.type = 'relay' AND n.deleted_at IS NULL`, userID).Scan(&relayNodeID, &relayType, &relayEnabled)
 	if errors.Is(err, sql.ErrNoRows) {
 		writeFailure(w, http.StatusConflict, validationCode, "user has no active primary inbound")
 		return
