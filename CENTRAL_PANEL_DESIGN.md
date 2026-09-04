@@ -129,7 +129,7 @@ node_id + remote_inbound_id + remote_client_id
 - infrastructure：落地机 SS 入站、管理入站、API 入站等基础设施；
 - unknown：新发现但尚未人工确认的 Inbound。
 
-线路机的新 Inbound 默认归为 `user` 并建立业务用户；落地机新 Inbound 保持 `unknown`，待运营人员确认后可标记为 `infrastructure`。已标记为 `infrastructure` 的线路机 Inbound 不会被后续同步自动创建成用户。
+线路机的新 Inbound 默认归为 `user` 并建立业务用户；落地机 Inbound 按节点类型归为基础设施资源，不会建立业务用户。API 同时返回 `purpose=business|infrastructure`，前端不得把落地节点 Inbound 放入业务用户列表。已标记为 `infrastructure` 的线路机 Inbound 也不会被后续同步自动创建成用户。
 
 第一版不自动从 Xray 路由规则推断用户归属。
 
@@ -167,7 +167,7 @@ X-Panel 的 onlines 基于采样增量，不是严格实时连接列表。页面
 - `landing_node_id` 保留为旧 API/数据兼容字段，仅对落地机资产回填，不作为新的归属判断依据；
 - 绑定接口按线路两端节点和来源类型做强校验，禁止跨节点或将 S5 当作节点出口绑定；
 - `scope` 仍是旧线路出口池的配置维度；新用户路径不经过出口池，直接校验出口资产归属，避免把两种出口混在同一池中随机使用；
-- 用户实际路径通过 `user_paths` 完成：线路机从用户主 Inbound 自动确定；管理员可选落地机、落地 Inbound，并直接指定一个固定出口 IP。路径保存会关闭上一条当前路径并保留历史，配置属于中央运营配置，不会直接改写 X-Panel/Xray；
+- 用户实际路径通过 `user_paths` 完成：线路机从用户主 Inbound 自动确定；线路机直出只指定线路机出口 IP，经落地机必须同时指定落地机和该节点基础设施 Inbound，独立 S5 不得与落地机混用。路径保存会关闭上一条当前路径并保留历史，配置属于中央运营配置，不会直接改写 X-Panel/Xray；
 - 旧 `routes`、`user_routes`、`route_exit_ips` 数据和接口保留用于历史兼容，但不再作为新用户日常分配的必填前置步骤；用户列表直接展示线路机、落地机、出口 IP 及其归属节点。
 - 中央只维护 S5 资产、节点/出口成本和用户路径（旧线路关系仅兼容），不保存明文账号密码；实际认证凭据应使用加密 Secret 或节点本地 Secret 引用。
 
@@ -433,6 +433,8 @@ user_paths (new primary assignment model)
 - notes
 - active_from
 - active_to
+
+路径模式约束：`mode=relay` 不得有落地字段且出口必须属于线路机；`mode=landing` 必须同时有落地节点、落地基础设施 Inbound 且出口属于落地机；`mode=external` 只能使用独立 S5，落地字段必须为空。
 
 exit_ips
 - id
@@ -833,6 +835,8 @@ Soybean Admin 的原始菜单只作为参考，最终菜单固定为：
 - 数据延迟、节点离线、流量重置和同步失败必须有明显但克制的状态标识；
 - 统计卡片、表格和图表均显示数据时间或统计周期；
 - 删除和高风险操作使用确认弹窗；
+- 用户路径明确区分线路机直出、经落地机和独立 S5；经落地机必须选择落地 Inbound，落地 Inbound 只能在路径配置中出现，不能出现在用户来源列表；
+- 落地节点未同步时显示等待同步状态，不把基础设施资源静默显示成空用户列表；
 - 空数据、加载中、权限不足和接口错误都有专门状态；
 - 不使用模板中的 Mock 数字、随机图表或静态占位用户。
 
@@ -848,6 +852,7 @@ GET  /api/auth/me
 GET  /api/dashboard
 GET  /api/users
 GET  /api/users/:id
+GET  /api/users/:id/path-assets
 PATCH /api/users/:id
 PUT  /api/users/:id/route
 DELETE /api/users/:id/route

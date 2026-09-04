@@ -80,6 +80,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /api/dashboard", s.requireAuth(http.HandlerFunc(s.dashboard)))
 	mux.Handle("GET /api/users", s.requireAuth(http.HandlerFunc(s.users)))
 	mux.Handle("GET /api/users/{id}", s.requireAuth(http.HandlerFunc(s.userDetail)))
+	mux.Handle("GET /api/users/{id}/path-assets", s.requireAuth(http.HandlerFunc(s.userPathAssets)))
 	mux.Handle("PATCH /api/users/{id}", s.requireAuth(http.HandlerFunc(s.updateUser)))
 	mux.Handle("PUT /api/users/{id}/path", s.requireAuth(http.HandlerFunc(s.assignUserPath)))
 	mux.Handle("DELETE /api/users/{id}/path", s.requireAuth(http.HandlerFunc(s.clearUserPath)))
@@ -963,7 +964,7 @@ FROM inbounds i WHERE i.node_id = ? ORDER BY (i.deleted_at IS NOT NULL) ASC, i.t
 		}
 		inbounds = append(inbounds, map[string]any{
 			"id": inboundID, "remoteId": remoteID, "tag": nullableString(tag), "remark": nullableString(remark),
-			"kind": kind, "protocol": nullableString(protocol), "port": port, "listen": nullableString(listen),
+			"kind": kind, "purpose": inboundPurpose(nodeType), "protocol": nullableString(protocol), "port": port, "listen": nullableString(listen),
 			"enabled": enabledInbound == 1, "status": inboundStatus, "expiresAt": nullableString(expiry),
 			"clientCount": clientCount, "up": up, "down": down, "allTime": allTime,
 			"lastSeenAt": nullableString(lastInboundSeen), "deletedAt": nullableString(deletedAt),

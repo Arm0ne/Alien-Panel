@@ -103,9 +103,10 @@ go run ./cmd/seed-demo --database .\data\panel.db
 用户详情接口：
 
 - `GET /api/users/{id}` 返回业务用户、主 Inbound、Client/Email 设备、线路机、当前用户路径、路径历史和已分配线路兼容快照；
+- `GET /api/users/{id}/path-assets` 返回该用户可用的路径资源：用户主 Inbound 所属线路机、启用的落地节点及其基础设施 Inbound、线路机出口 IP 和独立 S5 出口 IP。落地 Inbound 仅作为路径资源，不会创建或展示为业务用户；没有成功同步时会返回 `inboundState=pending`，而不是静默空列表；
 - `PATCH /api/users/{id}` 仅更新中央维护的 `displayName`、`monthlyFee`、`currency`（当前仅支持 `CNY`）和 `notes`，并写入 `audit_logs`；
 - `PUT /api/users/{id}/route` 是旧线路模板分配兼容接口；可选 `routeExitIpId` 固定到该线路已绑定的某个出口 IP，省略时按线路出口池权重分配；`DELETE /api/users/{id}/route` 解除当前线路并保留历史关系。新日常流程应使用下方的 `user_paths` 接口；这些操作只更新中央配置，不会直接改写 X-Panel/Xray；
-- `PUT /api/users/{id}/path` 保存新的直接路径。线路机由用户主 Inbound 自动确定；`landingNodeId`/`landingInboundId` 可选，`exitIpId` 必填且必须属于所选线路机、落地机或独立 S5；保存新路径会关闭旧路径并保留历史；`DELETE /api/users/{id}/path` 解除当前路径但不删除历史；
+- `PUT /api/users/{id}/path` 保存新的直接路径。线路机由用户主 Inbound 自动确定；线路机直出只能绑定线路机出口 IP，经落地机时必须同时指定启用的落地节点和该节点的基础设施 Inbound，并绑定该落地机出口 IP；独立 S5 不得与落地节点混用。保存新路径会关闭旧路径并保留历史；`DELETE /api/users/{id}/path` 解除当前路径但不删除历史；
 - 用户详情页不会修改 X-Panel/Xray，也不会写入 X-Panel 的到期、启用、Client 或流量字段。
 
 线路关系接口：

@@ -1,0 +1,1 @@
+import{Ai as e,Fi as t,Gi as n}from"./router-Ca5XLGLk.js";import{t as r}from"./exception-base-Bs-dzfZ-.js";var i=t({name:`404`,__name:`index`,setup(t){return(t,i)=>{let a=r;return n(),e(a,{type:`404`})}}});export{i as default};

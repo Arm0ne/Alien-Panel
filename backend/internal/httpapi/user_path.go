@@ -103,6 +103,14 @@ WHERE ui.user_id = ? AND ui.is_primary = 1 AND ui.active_to IS NULL AND i.delete
 			return
 		}
 	}
+	// A landing node is an execution hop, not a user source.  Selecting it
+	// always requires a concrete infrastructure inbound so the path is
+	// unambiguous; a relay-direct or external S5 path must not carry landing
+	// fields.
+	if landingNodeID != "" && landingInboundID == "" {
+		writeFailure(w, http.StatusConflict, validationCode, "landingInboundId is required when landingNodeId is set")
+		return
+	}
 	if landingInboundID != "" {
 		var inboundNodeID string
 		var inboundEnabled int
@@ -159,6 +167,9 @@ WHERE e.id = ?`, exitIPID).Scan(&sourceType, &ownerNodeID, &exitEnabled, &validF
 		}
 	} else if sourceType != "s5" {
 		writeFailure(w, http.StatusBadRequest, validationCode, "unsupported exit IP source")
+		return
+	} else if landingNodeID != "" {
+		writeFailure(w, http.StatusBadRequest, validationCode, "external S5 exit IP cannot be combined with a landing node")
 		return
 	}
 

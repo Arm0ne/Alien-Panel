@@ -195,6 +195,28 @@ paths:
               schema:
                 $ref: '#/components/schemas/EnvelopeUserDetail'
         '404': { description: User not found }
+  /users/{id}/path-assets:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema: { type: string }
+    get:
+      summary: List the path resources available to one business user
+      description: >-
+        The user's relay node is derived from its primary relay Inbound. The
+        response includes landing nodes and their infrastructure Inbounds,
+        relay-owned exit IPs, and independent S5 exit IPs. Landing Inbounds
+        are path resources only and never business users.
+      responses:
+        '200':
+          description: User path resources
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EnvelopeUserPathAssets'
+        '404': { description: User not found }
+        '409': { description: User has no enabled relay primary Inbound }
   /users/{id}/path:
     parameters:
       - name: id
@@ -204,9 +226,11 @@ paths:
     put:
       summary: Assign a direct user network path
       description: >-
-        The relay node is derived from the user's active primary Inbound. The
-        administrator may choose an optional landing node/inbound and must
-        choose one fixed exit IP. This only changes central configuration.
+        The relay node is derived from the user's active primary Inbound. A
+        relay-direct path uses a relay-owned exit IP; a landing path requires
+        both an enabled landing node and one of its enabled infrastructure
+        Inbounds; an external path uses an independent S5 exit IP. These
+        modes are mutually exclusive and only central configuration changes.
       requestBody:
         required: true
         content:
@@ -736,8 +760,8 @@ components:
       required: [exitIpId]
       additionalProperties: false
       properties:
-        landingNodeId: { type: [string, 'null'], description: Optional enabled landing node; null means relay direct }
-        landingInboundId: { type: [string, 'null'], description: Optional inbound belonging to landingNodeId }
+        landingNodeId: { type: [string, 'null'], description: Required together with landingInboundId for a landing path; null for relay-direct or external S5 }
+        landingInboundId: { type: [string, 'null'], description: Required for a landing path and must be an enabled infrastructure inbound belonging to landingNodeId }
         exitIpId: { type: string, minLength: 1, description: Fixed exit IP asset ID }
         notes: { type: [string, 'null'], maxLength: 500 }
     NodeCreateRequest:
@@ -851,6 +875,66 @@ components:
         code: { type: string, example: '0000' }
         msg: { type: string, example: ok }
         data: { $ref: '#/components/schemas/UserDetail' }
+    EnvelopeUserPathAssets:
+      type: object
+      required: [code, msg, data]
+      properties:
+        code: { type: string, example: '0000' }
+        msg: { type: string, example: ok }
+        data: { $ref: '#/components/schemas/UserPathAssets' }
+    UserPathAssets:
+      type: object
+      required: [generatedAt, dataAt, relay, landingNodes, relayExitIps, externalExitIps]
+      properties:
+        generatedAt: { type: string, format: date-time }
+        dataAt: { type: [string, 'null'], format: date-time }
+        relay:
+          type: object
+          required: [id, name, type, status, enabled, host]
+          properties:
+            id: { type: string }
+            name: { type: string }
+            type: { type: string, enum: [relay] }
+            status: { type: string, enum: [online, degraded, offline, disabled, unknown] }
+            enabled: { type: boolean }
+            host: { type: string }
+            lastSeenAt: { type: [string, 'null'], format: date-time }
+            lastSyncAt: { type: [string, 'null'], format: date-time }
+        landingNodes:
+          type: array
+          items: { $ref: '#/components/schemas/UserPathAssetNode' }
+        relayExitIps:
+          type: array
+          items: { type: object }
+        externalExitIps:
+          type: array
+          items: { type: object }
+    UserPathAssetNode:
+      type: object
+      required: [id, name, type, status, enabled, host, inboundState, inbounds, exitIps]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        type: { type: string, enum: [landing] }
+        status: { type: string, enum: [online, degraded, offline, disabled, unknown] }
+        enabled: { type: boolean }
+        host: { type: string }
+        lastSeenAt: { type: [string, 'null'], format: date-time }
+        lastSyncAt: { type: [string, 'null'], format: date-time }
+        inboundState: { type: string, enum: [ready, pending, empty] }
+        inbounds:
+          type: array
+          description: Infrastructure Inbounds only; never business users.
+          items:
+            type: object
+            properties:
+              id: { type: string }
+              purpose: { type: string, enum: [infrastructure] }
+              enabled: { type: boolean }
+              status: { type: string, enum: [active, disabled, archived] }
+        exitIps:
+          type: array
+          items: { type: object }
     EnvelopeFinanceSummary:
       type: object
       required: [code, msg, data]

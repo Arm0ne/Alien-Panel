@@ -408,6 +408,7 @@ func TestUserPathAssignmentLifecycle(t *testing.T) {
 		{`INSERT INTO nodes (id, node_key, name, type, enabled, health_status, created_at, updated_at) VALUES ('path-disabled-landing', 'path-disabled-landing', '停用落地机', 'landing', 0, 'offline', ?, ?)`, []any{nowText, nowText}},
 		{`INSERT INTO users (id, display_name, status, created_at, updated_at) VALUES ('path-user', '路径测试用户', 'active', ?, ?)`, []any{nowText, nowText}},
 		{`INSERT INTO inbounds (id, node_id, remote_inbound_id, user_id, kind, tag, protocol, port, enable, client_count, up, down, all_time, first_seen_at, last_seen_at) VALUES ('path-inbound', 'path-relay', 'path-1', 'path-user', 'user', 'path-user-inbound', 'vless', 443, 1, 1, 0, 0, 0, ?, ?)`, []any{nowText, nowText}},
+		{`INSERT INTO inbounds (id, node_id, remote_inbound_id, kind, tag, protocol, port, enable, client_count, up, down, all_time, first_seen_at, last_seen_at) VALUES ('path-landing-inbound', 'path-landing', 'landing-1', 'socks', 'path-landing-entry', 'socks', 10001, 1, 0, 0, 0, 0, ?, ?)`, []any{nowText, nowText}},
 		{`INSERT INTO user_inbounds (id, user_id, inbound_id, is_primary, active_from) VALUES ('path-user-inbound', 'path-user', 'path-inbound', 1, ?)`, []any{nowText}},
 		{`INSERT INTO exit_ips (id, source_type, owner_node_id, ip, family, enabled, created_at, updated_at) VALUES ('path-relay-ip', 'node', 'path-relay', '198.51.100.71', 4, 1, ?, ?)`, []any{nowText, nowText}},
 		{`INSERT INTO exit_ips (id, source_type, owner_node_id, ip, family, enabled, created_at, updated_at) VALUES ('path-landing-ip', 'node', 'path-landing', '198.51.100.72', 4, 1, ?, ?)`, []any{nowText, nowText}},
@@ -425,6 +426,60 @@ func TestUserPathAssignmentLifecycle(t *testing.T) {
 	login := doJSON(t, ts.Client(), http.MethodPost, ts.URL+"/api/auth/login", "", map[string]string{"userName": "admin", "password": "test-password"})
 	token := login["data"].(map[string]any)["token"].(string)
 
+	assets := doJSON(t, ts.Client(), http.MethodGet, ts.URL+"/api/users/path-user/path-assets", token, nil)
+	if assets["code"] != successCode {
+		t.Fatalf("path assets response = %#v", assets)
+	}
+	assetsData := assets["data"].(map[string]any)
+	if assetsData["relay"].(map[string]any)["id"] != "path-relay" || len(assetsData["relayExitIps"].([]any)) != 1 || len(assetsData["externalExitIps"].([]any)) != 1 {
+		t.Fatalf("unexpected relay path assets = %#v", assetsData)
+	}
+	landingAssets := assetsData["landingNodes"].([]any)
+	if len(landingAssets) != 3 {
+		t.Fatalf("expected all landing nodes in path assets, got %#v", landingAssets)
+	}
+	var foundLandingInbound bool
+	var foundPendingLanding bool
+	for _, raw := range landingAssets {
+		item := raw.(map[string]any)
+		if item["id"] == "path-other" && item["inboundState"] == "pending" && len(item["inbounds"].([]any)) == 0 {
+			foundPendingLanding = true
+		}
+		if item["id"] != "path-landing" {
+			continue
+		}
+		inbounds := item["inbounds"].([]any)
+		if item["inboundState"] != "ready" || len(inbounds) != 1 || inbounds[0].(map[string]any)["purpose"] != "infrastructure" {
+			t.Fatalf("unexpected landing inbound asset = %#v", item)
+		}
+		foundLandingInbound = true
+	}
+	if !foundLandingInbound {
+		t.Fatalf("path landing asset not found: %#v", landingAssets)
+	}
+	if !foundPendingLanding {
+		t.Fatalf("landing node without a successful sync should be marked pending: %#v", landingAssets)
+	}
+	var usersBeforeLandingInbound int
+	if err := database.QueryRow(`SELECT COUNT(*) FROM users`).Scan(&usersBeforeLandingInbound); err != nil {
+		t.Fatalf("count users before landing inbound classification: %v", err)
+	}
+	tx, err := database.Begin()
+	if err != nil {
+		t.Fatalf("begin landing inbound classification: %v", err)
+	}
+	if err := server.ensureRelayInboundUser(tx, "landing", "path-landing-inbound", "landing-1", agentInboundPayload{Enable: true}, "", now); err != nil {
+		_ = tx.Rollback()
+		t.Fatalf("classify landing inbound: %v", err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatalf("commit landing inbound classification: %v", err)
+	}
+	var usersAfterLandingInbound int
+	if err := database.QueryRow(`SELECT COUNT(*) FROM users`).Scan(&usersAfterLandingInbound); err != nil || usersAfterLandingInbound != usersBeforeLandingInbound {
+		t.Fatalf("landing inbound unexpectedly created a user: before=%d after=%d err=%v", usersBeforeLandingInbound, usersAfterLandingInbound, err)
+	}
+
 	direct := doJSON(t, ts.Client(), http.MethodPut, ts.URL+"/api/users/path-user/path", token, map[string]any{"exitIpId": "path-relay-ip", "notes": "线路机直出"})
 	if direct["code"] != successCode {
 		t.Fatalf("direct path response = %#v", direct)
@@ -434,7 +489,12 @@ func TestUserPathAssignmentLifecycle(t *testing.T) {
 		t.Fatalf("unexpected direct path = %#v", directPath)
 	}
 
-	landing := doJSON(t, ts.Client(), http.MethodPut, ts.URL+"/api/users/path-user/path", token, map[string]any{"landingNodeId": "path-landing", "exitIpId": "path-landing-ip", "notes": "落地机固定出口"})
+	missingLandingInboundStatus, missingLandingInbound := doJSONWithStatus(t, ts.Client(), http.MethodPut, ts.URL+"/api/users/path-user/path", token, map[string]any{"landingNodeId": "path-landing", "exitIpId": "path-landing-ip"})
+	if missingLandingInboundStatus != http.StatusConflict || missingLandingInbound["code"] != validationCode {
+		t.Fatalf("missing landing inbound status=%d response=%#v", missingLandingInboundStatus, missingLandingInbound)
+	}
+
+	landing := doJSON(t, ts.Client(), http.MethodPut, ts.URL+"/api/users/path-user/path", token, map[string]any{"landingNodeId": "path-landing", "landingInboundId": "path-landing-inbound", "exitIpId": "path-landing-ip", "notes": "落地机固定出口"})
 	if landing["code"] != successCode {
 		t.Fatalf("landing path response = %#v", landing)
 	}
@@ -444,9 +504,13 @@ func TestUserPathAssignmentLifecycle(t *testing.T) {
 		t.Fatalf("unexpected landing path/history = %#v", landingData)
 	}
 
-	mismatchStatus, mismatch := doJSONWithStatus(t, ts.Client(), http.MethodPut, ts.URL+"/api/users/path-user/path", token, map[string]any{"landingNodeId": "path-landing", "exitIpId": "path-other-ip"})
+	mismatchStatus, mismatch := doJSONWithStatus(t, ts.Client(), http.MethodPut, ts.URL+"/api/users/path-user/path", token, map[string]any{"landingNodeId": "path-landing", "landingInboundId": "path-landing-inbound", "exitIpId": "path-other-ip"})
 	if mismatchStatus != http.StatusBadRequest || mismatch["code"] != validationCode {
 		t.Fatalf("mismatch path status=%d response=%#v", mismatchStatus, mismatch)
+	}
+	mixedS5Status, mixedS5 := doJSONWithStatus(t, ts.Client(), http.MethodPut, ts.URL+"/api/users/path-user/path", token, map[string]any{"landingNodeId": "path-landing", "landingInboundId": "path-landing-inbound", "exitIpId": "path-s5-ip"})
+	if mixedS5Status != http.StatusBadRequest || mixedS5["code"] != validationCode {
+		t.Fatalf("mixed S5 path status=%d response=%#v", mixedS5Status, mixedS5)
 	}
 	disabledStatus, disabled := doJSONWithStatus(t, ts.Client(), http.MethodPut, ts.URL+"/api/users/path-user/path", token, map[string]any{"exitIpId": "path-disabled-ip"})
 	if disabledStatus != http.StatusConflict || disabled["code"] != validationCode {
