@@ -1401,37 +1401,21 @@ func TestNodeAdminCreatesMultipleExitIPsAndDeletesNode(t *testing.T) {
 	if err := database.QueryRow(`SELECT COUNT(*) FROM exit_ips WHERE owner_node_id = ?`, nodeID).Scan(&exitIPCount); err != nil || exitIPCount != 3 {
 		t.Fatalf("stored exit IP count=%d err=%v", exitIPCount, err)
 	}
-
-	deleteStatus, conflict := doJSONWithStatus(t, ts.Client(), http.MethodDelete, ts.URL+"/api/nodes/"+nodeID, token, nil)
-	if deleteStatus != http.StatusConflict || conflict["code"] != validationCode {
-		t.Fatalf("delete node with exit IPs status=%d response=%#v", deleteStatus, conflict)
-	}
-	rows, err := database.Query(`SELECT id FROM exit_ips WHERE owner_node_id = ?`, nodeID)
-	if err != nil {
-		t.Fatalf("read node exit IPs: %v", err)
-	}
-	var exitIDs []string
-	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
-			rows.Close()
-			t.Fatalf("scan exit IP id: %v", err)
-		}
-		exitIDs = append(exitIDs, id)
-	}
-	if err := rows.Close(); err != nil {
-		t.Fatalf("close exit IP rows: %v", err)
-	}
-	for _, exitID := range exitIDs {
-		status, response := doJSONWithStatus(t, ts.Client(), http.MethodDelete, ts.URL+"/api/exit-ips/"+exitID, token, nil)
-		if status != http.StatusOK || response["code"] != successCode {
-			t.Fatalf("delete node exit IP status=%d response=%#v", status, response)
-		}
+	legacyNow := time.Now().UTC().Format(time.RFC3339Nano)
+	if _, err := database.Exec(`INSERT INTO routes (id, name, relay_node_id, landing_node_id, created_at, updated_at) VALUES ('legacy-node-route', '旧线路记录', ?, ?, ?, ?)`, nodeID, nodeID, legacyNow, legacyNow); err != nil {
+		t.Fatalf("insert legacy route: %v", err)
 	}
 
 	deletedStatus, deleted := doJSONWithStatus(t, ts.Client(), http.MethodDelete, ts.URL+"/api/nodes/"+nodeID, token, nil)
-	if deletedStatus != http.StatusOK || deleted["code"] != successCode || deleted["data"].(map[string]any)["historyPreserved"] != true {
+	if deletedStatus != http.StatusOK || deleted["code"] != successCode || deleted["data"].(map[string]any)["deleted"] != true {
 		t.Fatalf("delete node status=%d response=%#v", deletedStatus, deleted)
+	}
+	var remaining int
+	if err := database.QueryRow(`SELECT COUNT(*) FROM exit_ips WHERE owner_node_id = ? OR landing_node_id = ?`, nodeID, nodeID).Scan(&remaining); err != nil || remaining != 0 {
+		t.Fatalf("deleted node exit IPs remaining=%d err=%v", remaining, err)
+	}
+	if err := database.QueryRow(`SELECT COUNT(*) FROM routes WHERE relay_node_id = ? OR landing_node_id = ?`, nodeID, nodeID).Scan(&remaining); err != nil || remaining != 0 {
+		t.Fatalf("deleted node legacy routes remaining=%d err=%v", remaining, err)
 	}
 	list := doJSON(t, ts.Client(), http.MethodGet, ts.URL+"/api/nodes?page_size=20", token, nil)
 	if list["code"] != successCode || len(list["data"].(map[string]any)["items"].([]any)) != 0 {

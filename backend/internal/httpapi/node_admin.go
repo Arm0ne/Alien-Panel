@@ -331,75 +331,103 @@ FROM nodes WHERE id = ? AND deleted_at IS NULL`, id).Scan(&existing.NodeKey, &ex
 	writeSuccess(w, nodeAdminData(id, updated))
 }
 
-// deleteNode hides a node from active management and revokes all of its Agent
-// credentials. Operational history remains intact so audits and historical
-// reports do not lose their context. Routes and exit IP assets are protected
-// from becoming orphaned and must be removed or unbound first.
+// deleteNode permanently removes a node and the node-owned operational data.
+// The old routes tables are compatibility data only; they are cleaned up in
+// the same transaction and must not block deletion of a node in the current
+// direct user-path model.
 func (s *Server) deleteNode(w http.ResponseWriter, r *http.Request) {
 	id := strings.TrimSpace(r.PathValue("id"))
 	if id == "" {
 		writeFailure(w, http.StatusBadRequest, validationCode, "node id is required")
 		return
 	}
+	ctx := r.Context()
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		writeFailure(w, http.StatusInternalServerError, internalErrorCode, "could not begin node deletion")
+		return
+	}
+	defer tx.Rollback()
 	var name string
 	var enabled int
-	if err := s.db.QueryRow(`SELECT name, enabled FROM nodes WHERE id = ? AND deleted_at IS NULL`, id).Scan(&name, &enabled); errors.Is(err, sql.ErrNoRows) {
+	if err := tx.QueryRowContext(ctx, `SELECT name, enabled FROM nodes WHERE id = ?`, id).Scan(&name, &enabled); errors.Is(err, sql.ErrNoRows) {
 		writeFailure(w, http.StatusNotFound, notFoundCode, "node not found")
 		return
 	} else if err != nil {
 		writeFailure(w, http.StatusInternalServerError, internalErrorCode, "could not read node")
 		return
 	}
-	var routeCount, exitIPCount, pathCount int
-	if err := s.db.QueryRow(`SELECT COUNT(*) FROM routes WHERE relay_node_id = ? OR landing_node_id = ?`, id, id).Scan(&routeCount); err != nil {
-		writeFailure(w, http.StatusInternalServerError, internalErrorCode, "could not check node routes")
-		return
-	}
-	if err := s.db.QueryRow(`SELECT COUNT(*) FROM exit_ips WHERE COALESCE(owner_node_id, landing_node_id) = ?`, id).Scan(&exitIPCount); err != nil {
-		writeFailure(w, http.StatusInternalServerError, internalErrorCode, "could not check node exit IPs")
-		return
-	}
-	if err := s.db.QueryRow(`SELECT COUNT(*) FROM user_paths WHERE relay_node_id = ? OR landing_node_id = ?`, id, id).Scan(&pathCount); err != nil {
-		writeFailure(w, http.StatusInternalServerError, internalErrorCode, "could not check user paths")
-		return
-	}
-	if routeCount > 0 || exitIPCount > 0 || pathCount > 0 {
-		parts := make([]string, 0, 3)
-		if routeCount > 0 {
-			parts = append(parts, fmt.Sprintf("%d 条线路", routeCount))
+
+	// Remove references first so SQLite foreign-key enforcement remains on and
+	// the whole operation is atomic. Users themselves are intentionally kept;
+	// deleting a node only clears the node-owned connection/path records.
+	execDelete := func(label, query string, args ...any) error {
+		if _, err := tx.ExecContext(ctx, query, args...); err != nil {
+			s.logger.Error("delete node data", "node_id", id, "resource", label, "error", err)
+			return err
 		}
-		if exitIPCount > 0 {
-			parts = append(parts, fmt.Sprintf("%d 个出口 IP", exitIPCount))
-		}
-		if pathCount > 0 {
-			parts = append(parts, fmt.Sprintf("%d 条用户路径", pathCount))
-		}
-		writeFailure(w, http.StatusConflict, validationCode, "节点仍有关联的"+strings.Join(parts, "和")+"，请先移除或解除绑定")
+		return nil
+	}
+	if err := execDelete("user paths", `DELETE FROM user_paths WHERE relay_node_id = ? OR landing_node_id = ? OR landing_inbound_id IN (SELECT id FROM inbounds WHERE node_id = ?) OR exit_ip_id IN (SELECT id FROM exit_ips WHERE owner_node_id = ? OR landing_node_id = ?)`, id, id, id, id, id); err != nil {
+		writeFailure(w, http.StatusInternalServerError, internalErrorCode, "could not delete node user paths")
 		return
 	}
-	now := time.Now().UTC().Format(time.RFC3339Nano)
-	tx, err := s.db.Begin()
-	if err != nil {
-		writeFailure(w, http.StatusInternalServerError, internalErrorCode, "could not begin node deletion")
+	if err := execDelete("legacy user routes", `DELETE FROM user_routes WHERE route_id IN (SELECT id FROM routes WHERE relay_node_id = ? OR landing_node_id = ?)`, id, id); err != nil {
+		writeFailure(w, http.StatusInternalServerError, internalErrorCode, "could not delete node legacy user routes")
 		return
 	}
-	defer tx.Rollback()
-	if _, err := tx.Exec(`UPDATE nodes SET enabled = 0, deleted_at = ?, updated_at = ? WHERE id = ? AND deleted_at IS NULL`, now, now, id); err != nil {
+	if err := execDelete("legacy route exit IP bindings", `DELETE FROM route_exit_ips WHERE route_id IN (SELECT id FROM routes WHERE relay_node_id = ? OR landing_node_id = ?) OR exit_ip_id IN (SELECT id FROM exit_ips WHERE owner_node_id = ? OR landing_node_id = ?)`, id, id, id, id); err != nil {
+		writeFailure(w, http.StatusInternalServerError, internalErrorCode, "could not delete node legacy route exit IP bindings")
+		return
+	}
+	if err := execDelete("legacy routes", `DELETE FROM routes WHERE relay_node_id = ? OR landing_node_id = ?`, id, id); err != nil {
+		writeFailure(w, http.StatusInternalServerError, internalErrorCode, "could not delete node legacy routes")
+		return
+	}
+	if err := execDelete("traffic snapshots", `DELETE FROM traffic_snapshots WHERE node_id = ? OR inbound_id IN (SELECT id FROM inbounds WHERE node_id = ?)`, id, id); err != nil {
+		writeFailure(w, http.StatusInternalServerError, internalErrorCode, "could not delete node traffic snapshots")
+		return
+	}
+	if err := execDelete("user inbound bindings", `DELETE FROM user_inbounds WHERE inbound_id IN (SELECT id FROM inbounds WHERE node_id = ?)`, id); err != nil {
+		writeFailure(w, http.StatusInternalServerError, internalErrorCode, "could not delete node user inbound bindings")
+		return
+	}
+	if err := execDelete("clients", `DELETE FROM clients WHERE node_id = ? OR inbound_id IN (SELECT id FROM inbounds WHERE node_id = ?)`, id, id); err != nil {
+		writeFailure(w, http.StatusInternalServerError, internalErrorCode, "could not delete node clients")
+		return
+	}
+	if err := execDelete("inbounds", `DELETE FROM inbounds WHERE node_id = ?`, id); err != nil {
+		writeFailure(w, http.StatusInternalServerError, internalErrorCode, "could not delete node inbounds")
+		return
+	}
+	if err := execDelete("exit IPs", `DELETE FROM exit_ips WHERE owner_node_id = ? OR landing_node_id = ?`, id, id); err != nil {
+		writeFailure(w, http.StatusInternalServerError, internalErrorCode, "could not delete node exit IPs")
+		return
+	}
+	if err := execDelete("node costs", `DELETE FROM node_costs WHERE node_id = ?`, id); err != nil {
+		writeFailure(w, http.StatusInternalServerError, internalErrorCode, "could not delete node costs")
+		return
+	}
+	if err := execDelete("sync runs", `DELETE FROM sync_runs WHERE node_id = ?`, id); err != nil {
+		writeFailure(w, http.StatusInternalServerError, internalErrorCode, "could not delete node sync runs")
+		return
+	}
+	if err := execDelete("node events", `DELETE FROM node_events WHERE node_id = ?`, id); err != nil {
+		writeFailure(w, http.StatusInternalServerError, internalErrorCode, "could not delete node events")
+		return
+	}
+	if err := execDelete("Agent credentials", `DELETE FROM node_credentials WHERE node_id = ?`, id); err != nil {
+		writeFailure(w, http.StatusInternalServerError, internalErrorCode, "could not delete node Agent credentials")
+		return
+	}
+	if err := execDelete("node", `DELETE FROM nodes WHERE id = ?`, id); err != nil {
 		writeFailure(w, http.StatusInternalServerError, internalErrorCode, "could not delete node")
-		return
-	}
-	if _, err := tx.Exec(`UPDATE node_credentials SET revoked_at = ? WHERE node_id = ? AND revoked_at IS NULL`, now, id); err != nil {
-		writeFailure(w, http.StatusInternalServerError, internalErrorCode, "could not revoke node credentials")
-		return
-	}
-	if _, err := tx.Exec(`INSERT INTO node_events (id, node_id, event_type, severity, message, created_at) VALUES (?, ?, 'node_deleted', 'warning', ?, ?)`, newID(), id, "节点已删除，Agent 凭据已撤销，历史数据保留", now); err != nil {
-		writeFailure(w, http.StatusInternalServerError, internalErrorCode, "could not record node deletion")
 		return
 	}
 	if err := tx.Commit(); err != nil {
 		writeFailure(w, http.StatusInternalServerError, internalErrorCode, "could not complete node deletion")
 		return
 	}
-	s.writeAuditLog(r, "node.delete", "node", id, map[string]any{"name": name, "enabled": enabled == 1}, map[string]any{"deleted": true, "deletedAt": now, "historyPreserved": true})
-	writeSuccess(w, map[string]any{"id": id, "deleted": true, "deletedAt": now, "historyPreserved": true})
+	s.writeAuditLog(r, "node.delete", "node", id, map[string]any{"name": name, "enabled": enabled == 1}, map[string]any{"deleted": true, "hardDelete": true})
+	writeSuccess(w, map[string]any{"id": id, "deleted": true})
 }

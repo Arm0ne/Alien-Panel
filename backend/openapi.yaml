@@ -297,11 +297,11 @@ paths:
         '400': { description: Validation failed }
         '404': { description: Node not found }
     delete:
-      summary: Delete a node from active management
+      summary: Permanently delete a node
       description: >-
-        Soft-deletes the node, hides it from active node lists, revokes all
-        Agent credentials, and preserves operational history. Deletion is
-        rejected while the node is referenced by a route or an exit IP asset.
+        Permanently deletes the node and all node-owned operational data in one
+        transaction. Legacy route records, exit IP assets and direct user
+        paths are removed with the node; business user records are retained.
       parameters:
         - name: id
           in: path
@@ -309,13 +309,12 @@ paths:
           schema: { type: string }
       responses:
         '200':
-          description: Node deleted while history is preserved
+          description: Node and node-owned data deleted
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/EnvelopeNodeDeletion'
         '404': { description: Node not found }
-        '409': { description: Node still has route or exit IP references }
   /nodes/{id}/sync:
     post:
       summary: Queue an on-demand node synchronization request
@@ -798,12 +797,10 @@ components:
         msg: { type: string, example: ok }
         data:
           type: object
-          required: [id, deleted, deletedAt, historyPreserved]
+          required: [id, deleted]
           properties:
             id: { type: string }
             deleted: { type: boolean }
-            deletedAt: { type: string, format: date-time }
-            historyPreserved: { type: boolean }
     NodeCostCreateRequest:
       type: object
       required: [category, monthlyAmount, effectiveFrom]

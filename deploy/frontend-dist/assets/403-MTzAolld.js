@@ -1,0 +1,1 @@
+import{Pi as e,Wi as t,ki as n}from"./router-D5IBWiIV.js";import{t as r}from"./exception-base-CHYZo3JG.js";var i=e({name:`403`,__name:`index`,setup(e){return(e,i)=>{let a=r;return t(),n(a,{type:`403`})}}});export{i as default};
