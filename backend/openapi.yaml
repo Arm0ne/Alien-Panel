@@ -195,6 +195,45 @@ paths:
               schema:
                 $ref: '#/components/schemas/EnvelopeUserDetail'
         '404': { description: User not found }
+  /users/{id}/path:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema: { type: string }
+    put:
+      summary: Assign a direct user network path
+      description: >-
+        The relay node is derived from the user's active primary Inbound. The
+        administrator may choose an optional landing node/inbound and must
+        choose one fixed exit IP. This only changes central configuration.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AssignUserPathRequest'
+      responses:
+        '200':
+          description: Updated user detail
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EnvelopeUserDetail'
+        '400': { description: Validation failed }
+        '404': { description: User or exit IP not found }
+        '409': { description: Node or exit IP is disabled or unavailable }
+    delete:
+      summary: Clear the user's active direct path
+      description: Removes the active path while retaining its history.
+      responses:
+        '200':
+          description: Updated user detail
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EnvelopeUserDetail'
+        '404': { description: User not found }
   /nodes:
     get:
       summary: Node list
@@ -693,6 +732,15 @@ components:
         routeExitIpId:
           type: [string, 'null']
           description: Route-exit binding ID; null selects the route's weighted exit-IP pool.
+    AssignUserPathRequest:
+      type: object
+      required: [exitIpId]
+      additionalProperties: false
+      properties:
+        landingNodeId: { type: [string, 'null'], description: Optional enabled landing node; null means relay direct }
+        landingInboundId: { type: [string, 'null'], description: Optional inbound belonging to landingNodeId }
+        exitIpId: { type: string, minLength: 1, description: Fixed exit IP asset ID }
+        notes: { type: [string, 'null'], maxLength: 500 }
     NodeCreateRequest:
       type: object
       required: [name, type]
@@ -1045,7 +1093,7 @@ components:
         statusHistory: { type: array, items: { type: object } }
     UserDetail:
       type: object
-      required: [id, displayName, status, monthlyFee, currency, inbound, node, clients, routes, traffic]
+      required: [id, displayName, status, monthlyFee, currency, inbound, node, clients, routes, path, pathHistory, traffic]
       properties:
         id: { type: string }
         displayName: { type: string }
@@ -1110,6 +1158,14 @@ components:
               exitIpSourceType: { type: [string, 'null'], enum: [node, s5, 'null'] }
               exitIpOwnerNodeName: { type: [string, 'null'] }
               assignmentMode: { type: string, enum: [fixed, pool] }
+        path:
+          oneOf:
+            - $ref: '#/components/schemas/UserPath'
+            - type: 'null'
+        pathHistory:
+          type: array
+          items:
+            $ref: '#/components/schemas/UserPath'
         traffic:
           type: array
           description: The 30 most recent read-only cumulative X-Panel snapshots.
@@ -1121,6 +1177,27 @@ components:
               down: { type: integer, format: int64 }
               allTime: { type: integer, format: int64 }
               resetDetected: { type: boolean }
+    UserPath:
+      type: object
+      required: [id, relayNodeId, exitIpId, exitIpSourceType, mode, valid]
+      properties:
+        id: { type: string }
+        relayNodeId: { type: string }
+        relayNodeName: { type: [string, 'null'] }
+        landingNodeId: { type: [string, 'null'] }
+        landingNodeName: { type: [string, 'null'] }
+        landingInboundId: { type: [string, 'null'] }
+        landingInboundTag: { type: [string, 'null'] }
+        exitIpId: { type: string }
+        exitIpAddress: { type: [string, 'null'] }
+        exitIpSourceType: { type: string, enum: [node, s5] }
+        exitIpOwnerNodeId: { type: [string, 'null'] }
+        exitIpOwnerNodeName: { type: [string, 'null'] }
+        mode: { type: string, enum: [relay, landing, external] }
+        notes: { type: [string, 'null'] }
+        activeFrom: { type: [string, 'null'], format: date-time }
+        activeTo: { type: [string, 'null'], format: date-time }
+        valid: { type: boolean }
     AgentRegisterRequest:
       type: object
       required: [node_key, node_name]

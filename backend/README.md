@@ -77,7 +77,7 @@ go run ./cmd/seed-demo --database .\data\panel.db
 }
 ```
 
-当前已实现健康检查、管理员登录/刷新/退出、当前管理员信息、Dashboard、各业务列表、用户详情和中央业务字段编辑、节点详情和同步请求，以及线路关系 CRUD。Agent 端点包括：
+当前已实现健康检查、管理员登录/刷新/退出、当前管理员信息、Dashboard、各业务列表、用户详情和中央业务字段编辑、用户直接路径管理、节点详情和同步请求，以及线路关系 CRUD。Agent 端点包括：
 
 - `POST /api/agent/v1/register`（注册节点并签发节点 Token）；
 - `POST /api/agent/v1/heartbeat`（Bearer 节点 Token）；
@@ -102,9 +102,10 @@ go run ./cmd/seed-demo --database .\data\panel.db
 
 用户详情接口：
 
-- `GET /api/users/{id}` 返回业务用户、主 Inbound、Client/Email 设备、节点和已分配线路的只读快照；
+- `GET /api/users/{id}` 返回业务用户、主 Inbound、Client/Email 设备、线路机、当前用户路径、路径历史和已分配线路兼容快照；
 - `PATCH /api/users/{id}` 仅更新中央维护的 `displayName`、`monthlyFee`、`currency`（当前仅支持 `CNY`）和 `notes`，并写入 `audit_logs`；
-- `PUT /api/users/{id}/route` 将一个启用的线路模板分配给用户；可选 `routeExitIpId` 固定到该线路已绑定的某个出口 IP，省略时按线路出口池权重分配；`DELETE /api/users/{id}/route` 解除当前线路并保留历史关系；这些操作只更新中央配置，不会直接改写 X-Panel/Xray；
+- `PUT /api/users/{id}/route` 是旧线路模板分配兼容接口；可选 `routeExitIpId` 固定到该线路已绑定的某个出口 IP，省略时按线路出口池权重分配；`DELETE /api/users/{id}/route` 解除当前线路并保留历史关系。新日常流程应使用下方的 `user_paths` 接口；这些操作只更新中央配置，不会直接改写 X-Panel/Xray；
+- `PUT /api/users/{id}/path` 保存新的直接路径。线路机由用户主 Inbound 自动确定；`landingNodeId`/`landingInboundId` 可选，`exitIpId` 必填且必须属于所选线路机、落地机或独立 S5；保存新路径会关闭旧路径并保留历史；`DELETE /api/users/{id}/path` 解除当前路径但不删除历史；
 - 用户详情页不会修改 X-Panel/Xray，也不会写入 X-Panel 的到期、启用、Client 或流量字段。
 
 线路关系接口：
@@ -114,14 +115,14 @@ go run ./cmd/seed-demo --database .\data\panel.db
 - `DELETE /api/routes/{id}` 仅允许删除没有用户或出口 IP 绑定的线路；有绑定时返回 `409`，应先停用线路。
 - `GET /api/routes/{id}/exit-ips` 查询线路已绑定的出口 IP；
 - `POST /api/routes/{id}/exit-ips` 按 `scope` 绑定出口：`relay` 只能绑定该线路线路机直出、`landing` 只能绑定该线路落地机、`external` 只能绑定独立 S5；省略 `scope` 时按资产归属兼容推断；重复或跨节点绑定会被拒绝；
-- `scope` 属于线路出口池；如果不同用户需要分别走线路机直出和落地机出口，应建立两条逻辑线路后分别分配用户，不要把两种出口混在同一线路池；
+- `scope` 属于旧线路出口池；新用户路径不依赖线路出口池，直接按出口资产归属校验。
 - `PATCH /api/routes/{id}/exit-ips/{exitIpId}` 更新绑定权重和启用状态，`DELETE` 解绑；绑定变更会刷新线路和出口 IP 的配置归属统计并写入审计日志。
 
 出口 IP 接口：
 
 - `GET /api/exit-ips/{id}` 返回地址、协议族、来源类型、所属节点/独立 S5、成本、有效期和配置归属用户数；旧 `landingNodeId` 字段保留兼容；
 - `POST /api/exit-ips`、`PATCH /api/exit-ips/{id}` 创建或更新 IPv4/IPv6 出口 IP 资产。`sourceType=node` 时用 `ownerNodeId` 指向线路机或落地机，`sourceType=s5` 表示独立购买的 S5（不绑定节点）；旧 `landingNodeId` 请求仍兼容为落地机资产。接口校验来源、地址族、成本和日期范围；
-- `DELETE /api/exit-ips/{id}` 仅允许删除没有线路绑定的资产；有绑定时返回 `409`，应先停用出口 IP。
+- `DELETE /api/exit-ips/{id}` 仅允许删除没有线路绑定或当前用户路径的资产；有绑定时返回 `409`，应先停用出口 IP 或调整用户路径。
 
 Agent Token 只以哈希形式保存在 `node_credentials`，注册响应中的明文 Token 仅返回一次。业务字段写 API 和更细的报表聚合按开发进度表继续实现。
 

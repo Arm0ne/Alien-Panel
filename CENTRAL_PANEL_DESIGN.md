@@ -156,7 +156,7 @@ X-Panel 的 onlines 基于采样增量，不是严格实时连接列表。页面
 
 ### 5.5 出口 IP 口径
 
-中央可统计“配置归属用户数”：绑定到某条线路且该线路允许使用某出口 IP 的有效用户数。
+中央可统计“配置归属用户数”：当前 `user_paths` 直接指定该出口 IP 的有效用户数；旧线路绑定统计仅用于兼容历史页面。
 
 现有共享 SS 入站和随机 Xray 路由无法证明某个用户在某个时刻实际使用了哪一个出口 IP。因此页面必须使用“配置归属用户数”措辞，不得宣称“实际使用用户数”。
 
@@ -166,9 +166,10 @@ X-Panel 的 onlines 基于采样增量，不是严格实时连接列表。页面
 - `source_type=s5`：独立购买的 S5 出口，不属于任何 VPS，`owner_node_id` 为空，只能以 `scope=external` 绑定线路；
 - `landing_node_id` 保留为旧 API/数据兼容字段，仅对落地机资产回填，不作为新的归属判断依据；
 - 绑定接口按线路两端节点和来源类型做强校验，禁止跨节点或将 S5 当作节点出口绑定；
-- `scope` 是线路出口池的配置维度；若同一节点组合下需要让不同用户分别走线路机直出或落地机，应建立两条逻辑线路并分别分配用户，避免把两种出口混在同一池中随机使用；
-- 用户实际分配通过 `user_routes` 完成：用户选择一条启用线路模板；`route_exit_ip_id` 有值时固定到该线路绑定的出口 IP，为空时按该线路启用出口池权重分配。线路机由用户主 Inbound 自动确定，落地机、落地 Inbound 和出口位置由线路模板统一维护；此配置属于中央运营配置，不会直接改写 X-Panel/Xray；
-- 中央只维护 S5 资产、成本和线路关系，不保存明文账号密码；实际认证凭据应使用加密 Secret 或节点本地 Secret 引用。
+- `scope` 仍是旧线路出口池的配置维度；新用户路径不经过出口池，直接校验出口资产归属，避免把两种出口混在同一池中随机使用；
+- 用户实际路径通过 `user_paths` 完成：线路机从用户主 Inbound 自动确定；管理员可选落地机、落地 Inbound，并直接指定一个固定出口 IP。路径保存会关闭上一条当前路径并保留历史，配置属于中央运营配置，不会直接改写 X-Panel/Xray；
+- 旧 `routes`、`user_routes`、`route_exit_ips` 数据和接口保留用于历史兼容，但不再作为新用户日常分配的必填前置步骤；用户列表直接展示线路机、落地机、出口 IP 及其归属节点。
+- 中央只维护 S5 资产、节点/出口成本和用户路径（旧线路关系仅兼容），不保存明文账号密码；实际认证凭据应使用加密 Secret 或节点本地 Secret 引用。
 
 ### 5.6 财务口径
 
@@ -418,6 +419,18 @@ user_routes
 - route_id
 - route_exit_ip_id (nullable; fixed route-exit binding, null means route pool)
 - is_primary
+- active_from
+- active_to
+
+user_paths (new primary assignment model)
+- id
+- user_id
+- relay_node_id (copied from the user's primary Inbound)
+- landing_node_id (nullable)
+- landing_inbound_id (nullable)
+- exit_ip_id (fixed, required)
+- mode (relay / landing / external)
+- notes
 - active_from
 - active_to
 

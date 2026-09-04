@@ -74,6 +74,8 @@ VALUES ('demo-user-route-001', 'demo-user-001', 'demo-route-001', 1, ?)`, []any{
 VALUES ('demo-exit-ip-001', 'demo-landing-001', 'node', 'demo-landing-001', '198.51.100.20', 4, 'Demo IP Provider', 15, 'CNY', 1, ?, ?)`, []any{nowText, nowText}},
 		{`INSERT OR IGNORE INTO route_exit_ips (id, route_id, exit_ip_id, scope, allocation_weight, enabled)
 VALUES ('demo-route-exit-001', 'demo-route-001', 'demo-exit-ip-001', 'landing', 1, 1)`, nil},
+		{`INSERT OR IGNORE INTO user_paths (id, user_id, relay_node_id, landing_node_id, exit_ip_id, mode, notes, active_from, created_at, updated_at)
+VALUES ('demo-user-path-001', 'demo-user-001', 'demo-relay-001', 'demo-landing-001', 'demo-exit-ip-001', 'landing', '模拟用户直接路径：线路机 → 落地机 → 固定出口 IP', ?, ?, ?)`, []any{previousText, nowText, nowText}},
 		{`INSERT OR IGNORE INTO node_events (id, node_id, event_type, severity, message, created_at)
 VALUES ('demo-node-event-001', 'demo-relay-001', 'demo_seed', 'info', '模拟数据已写入，用于本地功能测试', ?)`, []any{nowText}},
 	}

@@ -391,6 +391,84 @@ func TestUserDetailAndBusinessFieldUpdate(t *testing.T) {
 	}
 }
 
+func TestUserPathAssignmentLifecycle(t *testing.T) {
+	server, database := testServer(t)
+	ts := httptest.NewServer(server.Handler())
+	defer ts.Close()
+
+	now := time.Now().UTC()
+	nowText := now.Format(time.RFC3339Nano)
+	statements := []struct {
+		query string
+		args  []any
+	}{
+		{`INSERT INTO nodes (id, node_key, name, type, enabled, health_status, created_at, updated_at) VALUES ('path-relay', 'path-relay', '路径线路机', 'relay', 1, 'online', ?, ?)`, []any{nowText, nowText}},
+		{`INSERT INTO nodes (id, node_key, name, type, enabled, health_status, created_at, updated_at) VALUES ('path-landing', 'path-landing', '路径落地机', 'landing', 1, 'online', ?, ?)`, []any{nowText, nowText}},
+		{`INSERT INTO nodes (id, node_key, name, type, enabled, health_status, created_at, updated_at) VALUES ('path-other', 'path-other', '其他落地机', 'landing', 1, 'online', ?, ?)`, []any{nowText, nowText}},
+		{`INSERT INTO nodes (id, node_key, name, type, enabled, health_status, created_at, updated_at) VALUES ('path-disabled-landing', 'path-disabled-landing', '停用落地机', 'landing', 0, 'offline', ?, ?)`, []any{nowText, nowText}},
+		{`INSERT INTO users (id, display_name, status, created_at, updated_at) VALUES ('path-user', '路径测试用户', 'active', ?, ?)`, []any{nowText, nowText}},
+		{`INSERT INTO inbounds (id, node_id, remote_inbound_id, user_id, kind, tag, protocol, port, enable, client_count, up, down, all_time, first_seen_at, last_seen_at) VALUES ('path-inbound', 'path-relay', 'path-1', 'path-user', 'user', 'path-user-inbound', 'vless', 443, 1, 1, 0, 0, 0, ?, ?)`, []any{nowText, nowText}},
+		{`INSERT INTO user_inbounds (id, user_id, inbound_id, is_primary, active_from) VALUES ('path-user-inbound', 'path-user', 'path-inbound', 1, ?)`, []any{nowText}},
+		{`INSERT INTO exit_ips (id, source_type, owner_node_id, ip, family, enabled, created_at, updated_at) VALUES ('path-relay-ip', 'node', 'path-relay', '198.51.100.71', 4, 1, ?, ?)`, []any{nowText, nowText}},
+		{`INSERT INTO exit_ips (id, source_type, owner_node_id, ip, family, enabled, created_at, updated_at) VALUES ('path-landing-ip', 'node', 'path-landing', '198.51.100.72', 4, 1, ?, ?)`, []any{nowText, nowText}},
+		{`INSERT INTO exit_ips (id, source_type, owner_node_id, ip, family, enabled, created_at, updated_at) VALUES ('path-other-ip', 'node', 'path-other', '198.51.100.73', 4, 1, ?, ?)`, []any{nowText, nowText}},
+		{`INSERT INTO exit_ips (id, source_type, ip, family, enabled, created_at, updated_at) VALUES ('path-s5-ip', 's5', '198.51.100.74', 4, 1, ?, ?)`, []any{nowText, nowText}},
+		{`INSERT INTO exit_ips (id, source_type, owner_node_id, ip, family, enabled, created_at, updated_at) VALUES ('path-disabled-ip', 'node', 'path-relay', '198.51.100.75', 4, 0, ?, ?)`, []any{nowText, nowText}},
+		{`INSERT INTO exit_ips (id, source_type, owner_node_id, ip, family, enabled, created_at, updated_at) VALUES ('path-disabled-node-ip', 'node', 'path-disabled-landing', '198.51.100.76', 4, 1, ?, ?)`, []any{nowText, nowText}},
+	}
+	for _, statement := range statements {
+		if _, err := database.Exec(statement.query, statement.args...); err != nil {
+			t.Fatalf("seed user path data: %v", err)
+		}
+	}
+
+	login := doJSON(t, ts.Client(), http.MethodPost, ts.URL+"/api/auth/login", "", map[string]string{"userName": "admin", "password": "test-password"})
+	token := login["data"].(map[string]any)["token"].(string)
+
+	direct := doJSON(t, ts.Client(), http.MethodPut, ts.URL+"/api/users/path-user/path", token, map[string]any{"exitIpId": "path-relay-ip", "notes": "线路机直出"})
+	if direct["code"] != successCode {
+		t.Fatalf("direct path response = %#v", direct)
+	}
+	directPath := direct["data"].(map[string]any)["path"].(map[string]any)
+	if directPath["mode"] != "relay" || directPath["relayNodeId"] != "path-relay" || directPath["exitIpAddress"] != "198.51.100.71" {
+		t.Fatalf("unexpected direct path = %#v", directPath)
+	}
+
+	landing := doJSON(t, ts.Client(), http.MethodPut, ts.URL+"/api/users/path-user/path", token, map[string]any{"landingNodeId": "path-landing", "exitIpId": "path-landing-ip", "notes": "落地机固定出口"})
+	if landing["code"] != successCode {
+		t.Fatalf("landing path response = %#v", landing)
+	}
+	landingData := landing["data"].(map[string]any)
+	landingPath := landingData["path"].(map[string]any)
+	if landingPath["mode"] != "landing" || landingPath["landingNodeId"] != "path-landing" || len(landingData["pathHistory"].([]any)) != 2 {
+		t.Fatalf("unexpected landing path/history = %#v", landingData)
+	}
+
+	mismatchStatus, mismatch := doJSONWithStatus(t, ts.Client(), http.MethodPut, ts.URL+"/api/users/path-user/path", token, map[string]any{"landingNodeId": "path-landing", "exitIpId": "path-other-ip"})
+	if mismatchStatus != http.StatusBadRequest || mismatch["code"] != validationCode {
+		t.Fatalf("mismatch path status=%d response=%#v", mismatchStatus, mismatch)
+	}
+	disabledStatus, disabled := doJSONWithStatus(t, ts.Client(), http.MethodPut, ts.URL+"/api/users/path-user/path", token, map[string]any{"exitIpId": "path-disabled-ip"})
+	if disabledStatus != http.StatusConflict || disabled["code"] != validationCode {
+		t.Fatalf("disabled path status=%d response=%#v", disabledStatus, disabled)
+	}
+	disabledNodeStatus, disabledNode := doJSONWithStatus(t, ts.Client(), http.MethodPut, ts.URL+"/api/users/path-user/path", token, map[string]any{"landingNodeId": "path-disabled-landing", "exitIpId": "path-disabled-node-ip"})
+	if disabledNodeStatus != http.StatusConflict || disabledNode["code"] != validationCode {
+		t.Fatalf("disabled node path status=%d response=%#v", disabledNodeStatus, disabledNode)
+	}
+
+	s5 := doJSON(t, ts.Client(), http.MethodPut, ts.URL+"/api/users/path-user/path", token, map[string]any{"exitIpId": "path-s5-ip"})
+	if s5["code"] != successCode || s5["data"].(map[string]any)["path"].(map[string]any)["mode"] != "external" {
+		t.Fatalf("S5 path response = %#v", s5)
+	}
+
+	cleared := doJSON(t, ts.Client(), http.MethodDelete, ts.URL+"/api/users/path-user/path", token, nil)
+	clearedData := cleared["data"].(map[string]any)
+	if cleared["code"] != successCode || clearedData["path"] != nil || len(clearedData["pathHistory"].([]any)) != 3 {
+		t.Fatalf("cleared path response = %#v", cleared)
+	}
+}
+
 func TestAgentRegistrationHeartbeatAndIdempotentSync(t *testing.T) {
 	server, database := testServer(t)
 	ts := httptest.NewServer(server.Handler())
@@ -1181,6 +1259,8 @@ func TestAllocationCountsOnlyEffectiveUsersAndUsableBindings(t *testing.T) {
 		{`INSERT INTO route_exit_ips (id, route_id, exit_ip_id, enabled) VALUES ('allocation-binding', 'allocation-route', 'allocation-exit', 1)`, nil},
 		{`INSERT INTO route_exit_ips (id, route_id, exit_ip_id, enabled) VALUES ('allocation-disabled-binding', 'allocation-route', 'allocation-disabled-exit', 1)`, nil},
 		{`INSERT INTO route_exit_ips (id, route_id, exit_ip_id, enabled) VALUES ('allocation-disabled-route-binding', 'allocation-disabled-route', 'allocation-exit', 1)`, nil},
+		{`INSERT INTO user_paths (id, user_id, relay_node_id, landing_node_id, exit_ip_id, mode, active_from, created_at, updated_at) VALUES ('allocation-path-valid', 'allocation-valid', 'allocation-relay', 'allocation-landing', 'allocation-exit', 'landing', ?, ?, ?)`, []any{nowText, nowText, nowText}},
+		{`INSERT INTO user_paths (id, user_id, relay_node_id, landing_node_id, exit_ip_id, mode, active_from, created_at, updated_at) VALUES ('allocation-path-unlimited', 'allocation-unlimited', 'allocation-relay', 'allocation-landing', 'allocation-exit', 'landing', ?, ?, ?)`, []any{nowText, nowText, nowText}},
 	}
 	for _, statement := range statements {
 		if _, err := database.Exec(statement.query, statement.args...); err != nil {

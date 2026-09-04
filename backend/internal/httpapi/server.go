@@ -81,6 +81,8 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /api/users", s.requireAuth(http.HandlerFunc(s.users)))
 	mux.Handle("GET /api/users/{id}", s.requireAuth(http.HandlerFunc(s.userDetail)))
 	mux.Handle("PATCH /api/users/{id}", s.requireAuth(http.HandlerFunc(s.updateUser)))
+	mux.Handle("PUT /api/users/{id}/path", s.requireAuth(http.HandlerFunc(s.assignUserPath)))
+	mux.Handle("DELETE /api/users/{id}/path", s.requireAuth(http.HandlerFunc(s.clearUserPath)))
 	mux.Handle("PUT /api/users/{id}/route", s.requireAuth(http.HandlerFunc(s.assignUserRoute)))
 	mux.Handle("DELETE /api/users/{id}/route", s.requireAuth(http.HandlerFunc(s.clearUserRoute)))
 	mux.Handle("GET /api/nodes", s.requireAuth(http.HandlerFunc(s.nodes)))
@@ -356,7 +358,12 @@ WHERE ` + strings.Join(where, " AND ")
 COALESCE(i.node_id, ''), COALESCE(n.name, ''), COALESCE(i.tag, ''),
 COALESCE((SELECT r.name FROM user_routes ur JOIN routes r ON r.id = ur.route_id
  WHERE ur.user_id = u.id AND ur.is_primary = 1 AND ur.active_to IS NULL ORDER BY ur.active_from DESC LIMIT 1), ''),
-COALESCE(i.client_count, 0), COALESCE(i.up, 0) + COALESCE(i.down, 0), COALESCE(i.last_seen_at, '') `+base+`
+COALESCE(i.client_count, 0), COALESCE(i.up, 0) + COALESCE(i.down, 0), COALESCE(i.last_seen_at, ''),
+COALESCE((SELECT n2.name FROM user_paths p LEFT JOIN nodes n2 ON n2.id = p.landing_node_id WHERE p.user_id = u.id AND p.active_to IS NULL LIMIT 1), ''),
+COALESCE((SELECT e2.ip FROM user_paths p JOIN exit_ips e2 ON e2.id = p.exit_ip_id WHERE p.user_id = u.id AND p.active_to IS NULL LIMIT 1), ''),
+COALESCE((SELECT owner2.name FROM user_paths p JOIN exit_ips e2 ON e2.id = p.exit_ip_id LEFT JOIN nodes owner2 ON owner2.id = e2.owner_node_id WHERE p.user_id = u.id AND p.active_to IS NULL LIMIT 1), ''),
+COALESCE((SELECT p.mode FROM user_paths p WHERE p.user_id = u.id AND p.active_to IS NULL LIMIT 1), ''),
+COALESCE((SELECT p.id FROM user_paths p WHERE p.user_id = u.id AND p.active_to IS NULL LIMIT 1), '') `+base+`
 ORDER BY CASE WHEN u.expiry_time IS NULL THEN 1 ELSE 0 END, u.expiry_time ASC LIMIT ? OFFSET ?`, append(args, query.pageSize, query.offset)...)
 	if err != nil {
 		writeFailure(w, http.StatusInternalServerError, internalErrorCode, "could not read users")
@@ -365,10 +372,10 @@ ORDER BY CASE WHEN u.expiry_time IS NULL THEN 1 ELSE 0 END, u.expiry_time ASC LI
 	defer rows.Close()
 	items := make([]map[string]any, 0)
 	for rows.Next() {
-		var id, name, status, expiry, nodeID, nodeName, inboundTag, routeName, lastActivity string
+		var id, name, status, expiry, nodeID, nodeName, inboundTag, routeName, lastActivity, landingName, exitIP, exitOwner, pathMode, pathID string
 		var clientCount int
 		var traffic int64
-		if err := rows.Scan(&id, &name, &status, &expiry, &nodeID, &nodeName, &inboundTag, &routeName, &clientCount, &traffic, &lastActivity); err != nil {
+		if err := rows.Scan(&id, &name, &status, &expiry, &nodeID, &nodeName, &inboundTag, &routeName, &clientCount, &traffic, &lastActivity, &landingName, &exitIP, &exitOwner, &pathMode, &pathID); err != nil {
 			writeFailure(w, http.StatusInternalServerError, internalErrorCode, "could not decode users")
 			return
 		}
@@ -376,6 +383,9 @@ ORDER BY CASE WHEN u.expiry_time IS NULL THEN 1 ELSE 0 END, u.expiry_time ASC LI
 			"id": id, "name": name, "nodeId": nodeID, "nodeName": nodeName, "inboundTag": inboundTag, "routeName": nullableString(routeName),
 			"status": status, "expiresAt": nullableString(expiry), "clientCount": clientCount,
 			"trafficBytes": traffic, "lastActivityAt": nullableString(lastActivity),
+			"landingNodeName": nullableString(landingName), "exitIpAddress": nullableString(exitIP),
+			"exitIpOwnerNodeName": nullableString(exitOwner), "pathMode": nullableString(pathMode),
+			"pathConfigured": pathID != "",
 		})
 	}
 	writeSuccess(w, s.pageResponse(items, total, query))
@@ -758,6 +768,16 @@ ORDER BY ur.is_primary DESC, r.name ASC`, userID)
 		return nil, err
 	}
 	result["routes"] = routes
+	path, err := s.readUserPath(userID)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return nil, err
+	}
+	result["path"] = userPathData(path)
+	pathHistory, err := s.userPathHistory(userID)
+	if err != nil {
+		return nil, err
+	}
+	result["pathHistory"] = pathHistory
 	traffic, err := s.readUserTraffic(inboundID)
 	if err != nil {
 		return nil, err
@@ -1972,12 +1992,9 @@ LEFT JOIN nodes landing ON landing.id = e.landing_node_id
 		return exitIPRecord{}, err
 	}
 	record.Enabled = enabled == 1
-	if err := s.db.QueryRow(`SELECT COUNT(DISTINCT ur.user_id) FROM route_exit_ips rei
-JOIN routes r ON r.id = rei.route_id AND r.enabled = 1
-JOIN exit_ips e ON e.id = rei.exit_ip_id AND e.enabled = 1
-JOIN user_routes ur ON ur.route_id = rei.route_id
-JOIN users u ON u.id = ur.user_id
-WHERE rei.exit_ip_id = ? AND rei.enabled = 1 AND ur.is_primary = 1 AND ur.active_to IS NULL
+	if err := s.db.QueryRow(`SELECT COUNT(DISTINCT p.user_id) FROM user_paths p
+JOIN users u ON u.id = p.user_id
+WHERE p.exit_ip_id = ? AND p.active_to IS NULL
 AND u.status <> 'disabled' AND datetime(u.created_at) <= datetime('now')
 AND (u.expiry_time IS NULL OR datetime(u.expiry_time) >= datetime('now'))`, id).Scan(&record.AllocatedUserCount); err != nil {
 		return exitIPRecord{}, err
@@ -2273,12 +2290,16 @@ func (s *Server) updateExitIP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if values.SourceType != existing.SourceType || values.OwnerNodeID != existing.OwnerNodeID {
-		var bindingCount int
+		var bindingCount, pathCount int
 		if err := s.db.QueryRow(`SELECT COUNT(*) FROM route_exit_ips WHERE exit_ip_id = ?`, id).Scan(&bindingCount); err != nil {
 			writeFailure(w, http.StatusInternalServerError, internalErrorCode, "could not check exit IP bindings")
 			return
 		}
-		if bindingCount > 0 {
+		if err := s.db.QueryRow(`SELECT COUNT(*) FROM user_paths WHERE exit_ip_id = ? AND active_to IS NULL`, id).Scan(&pathCount); err != nil {
+			writeFailure(w, http.StatusInternalServerError, internalErrorCode, "could not check user path assignments")
+			return
+		}
+		if bindingCount > 0 || pathCount > 0 {
 			writeFailure(w, http.StatusConflict, validationCode, "bound exit IP cannot move to another landing node")
 			return
 		}
@@ -2335,13 +2356,17 @@ func (s *Server) deleteExitIP(w http.ResponseWriter, r *http.Request) {
 		writeFailure(w, http.StatusInternalServerError, internalErrorCode, "could not read exit IP")
 		return
 	}
-	var bindingCount int
+	var bindingCount, pathCount int
 	if err := s.db.QueryRow(`SELECT COUNT(*) FROM route_exit_ips WHERE exit_ip_id = ?`, id).Scan(&bindingCount); err != nil {
 		writeFailure(w, http.StatusInternalServerError, internalErrorCode, "could not check exit IP bindings")
 		return
 	}
-	if bindingCount > 0 {
-		writeFailure(w, http.StatusConflict, validationCode, "exit IP has route bindings; disable it instead of deleting")
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM user_paths WHERE exit_ip_id = ? AND active_to IS NULL`, id).Scan(&pathCount); err != nil {
+		writeFailure(w, http.StatusInternalServerError, internalErrorCode, "could not check user path assignments")
+		return
+	}
+	if bindingCount > 0 || pathCount > 0 {
+		writeFailure(w, http.StatusConflict, validationCode, "exit IP has active assignments; disable it or change the users first")
 		return
 	}
 	if _, err := s.db.Exec(`DELETE FROM exit_ips WHERE id = ?`, id); err != nil {
@@ -2380,12 +2405,9 @@ WHERE ` + strings.Join(where, " AND ")
 	}
 	rows, err := s.db.Query(`SELECT e.id, e.ip, COALESCE(e.source_type, 'node'), COALESCE(e.owner_node_id, e.landing_node_id, ''), COALESCE(owner.name, ''), COALESCE(owner.type, ''),
 COALESCE(e.landing_node_id, ''), COALESCE(landing.name, ''), e.family, COALESCE(e.provider, ''), e.enabled, e.monthly_cost, e.currency,
-(SELECT COUNT(DISTINCT ur.user_id) FROM route_exit_ips rei
-JOIN routes r ON r.id = rei.route_id AND r.enabled = 1
-JOIN exit_ips bound_e ON bound_e.id = rei.exit_ip_id AND bound_e.enabled = 1
-JOIN user_routes ur ON ur.route_id = rei.route_id
-JOIN users u ON u.id = ur.user_id
-WHERE rei.exit_ip_id = e.id AND rei.enabled = 1 AND ur.is_primary = 1 AND ur.active_to IS NULL
+(SELECT COUNT(DISTINCT p.user_id) FROM user_paths p
+JOIN users u ON u.id = p.user_id
+WHERE p.exit_ip_id = e.id AND p.active_to IS NULL
 AND u.status <> 'disabled' AND datetime(u.created_at) <= datetime('now')
 AND (u.expiry_time IS NULL OR datetime(u.expiry_time) >= datetime('now'))), e.updated_at
 `+base+` ORDER BY e.ip ASC LIMIT ? OFFSET ?`, append(args, query.pageSize, query.offset)...)

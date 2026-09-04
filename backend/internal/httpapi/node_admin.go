@@ -350,7 +350,7 @@ func (s *Server) deleteNode(w http.ResponseWriter, r *http.Request) {
 		writeFailure(w, http.StatusInternalServerError, internalErrorCode, "could not read node")
 		return
 	}
-	var routeCount, exitIPCount int
+	var routeCount, exitIPCount, pathCount int
 	if err := s.db.QueryRow(`SELECT COUNT(*) FROM routes WHERE relay_node_id = ? OR landing_node_id = ?`, id, id).Scan(&routeCount); err != nil {
 		writeFailure(w, http.StatusInternalServerError, internalErrorCode, "could not check node routes")
 		return
@@ -359,13 +359,20 @@ func (s *Server) deleteNode(w http.ResponseWriter, r *http.Request) {
 		writeFailure(w, http.StatusInternalServerError, internalErrorCode, "could not check node exit IPs")
 		return
 	}
-	if routeCount > 0 || exitIPCount > 0 {
-		parts := make([]string, 0, 2)
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM user_paths WHERE relay_node_id = ? OR landing_node_id = ?`, id, id).Scan(&pathCount); err != nil {
+		writeFailure(w, http.StatusInternalServerError, internalErrorCode, "could not check user paths")
+		return
+	}
+	if routeCount > 0 || exitIPCount > 0 || pathCount > 0 {
+		parts := make([]string, 0, 3)
 		if routeCount > 0 {
 			parts = append(parts, fmt.Sprintf("%d 条线路", routeCount))
 		}
 		if exitIPCount > 0 {
 			parts = append(parts, fmt.Sprintf("%d 个出口 IP", exitIPCount))
+		}
+		if pathCount > 0 {
+			parts = append(parts, fmt.Sprintf("%d 条用户路径", pathCount))
 		}
 		writeFailure(w, http.StatusConflict, validationCode, "节点仍有关联的"+strings.Join(parts, "和")+"，请先移除或解除绑定")
 		return
