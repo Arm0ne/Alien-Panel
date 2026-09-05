@@ -35,11 +35,13 @@ The uninstall script removes the systemd unit and binary but intentionally
 keeps `/etc/xpanel-agent` and `/var/lib/xpanel-agent` so a later reinstall can
 reuse the configuration and local state.
 
-The running agent reads the local X-Panel Session API and sends a heartbeat and
+The running Agent reads the local X-Panel Session API and sends a heartbeat and
 an idempotent snapshot to `/agent/v1/heartbeat` and `/agent/v1/sync` below the
 configured `central_url`. Set `central_token` to the node token issued by the
-central registration endpoint. The snapshot contains X-Panel's accumulated
-Inbound and Client counters; it never calls an Xray reset or stats RPC.
+central registration endpoint. Every request reports the version embedded in
+the running binary, so the central panel refreshes it after upgrades. The
+snapshot contains X-Panel's accumulated Inbound and Client counters; it never
+calls an Xray reset or stats RPC.
 
 The collector includes compatibility mappings for common X-Panel response
 shapes: `obj` and `data.list` envelopes, object or string `settings`,

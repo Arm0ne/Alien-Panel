@@ -38,6 +38,7 @@ type agentBootstrapRequest struct {
 }
 
 type agentStatusPayload struct {
+	AgentVersion  string  `json:"agent_version"`
 	XrayRunning   bool    `json:"xray_running"`
 	XrayVersion   string  `json:"xray_version"`
 	XPanelVersion string  `json:"xpanel_version"`
@@ -373,8 +374,8 @@ ON CONFLICT(node_id, inbound_id, remote_client_id) DO UPDATE SET email = exclude
 	var previousHealth string
 	_ = tx.QueryRow(`SELECT health_status FROM nodes WHERE id = ?`, principal.NodeID).Scan(&previousHealth)
 	newHealth := healthStatus(payload.Status.XrayRunning)
-	if _, err := tx.Exec(`UPDATE nodes SET health_status = ?, xpanel_version = CASE WHEN ? <> '' THEN ? ELSE xpanel_version END, xray_version = CASE WHEN ? <> '' THEN ? ELSE xray_version END,
-cpu_usage = ?, memory_used = ?, memory_total = ?, disk_used = ?, disk_total = ?, last_seen_at = ?, updated_at = ? WHERE id = ?`, healthStatus(payload.Status.XrayRunning), payload.Status.XPanelVersion, payload.Status.XPanelVersion, payload.Status.XrayVersion, payload.Status.XrayVersion,
+	if _, err := tx.Exec(`UPDATE nodes SET health_status = ?, agent_version = CASE WHEN ? <> '' THEN ? ELSE agent_version END, xpanel_version = CASE WHEN ? <> '' THEN ? ELSE xpanel_version END, xray_version = CASE WHEN ? <> '' THEN ? ELSE xray_version END,
+cpu_usage = ?, memory_used = ?, memory_total = ?, disk_used = ?, disk_total = ?, last_seen_at = ?, updated_at = ? WHERE id = ?`, healthStatus(payload.Status.XrayRunning), strings.TrimSpace(payload.Status.AgentVersion), strings.TrimSpace(payload.Status.AgentVersion), payload.Status.XPanelVersion, payload.Status.XPanelVersion, payload.Status.XrayVersion, payload.Status.XrayVersion,
 		payload.Status.CPUUsage, nullableMetric(payload.Status.MemoryUsed), nullableMetric(payload.Status.MemoryTotal), nullableMetric(payload.Status.DiskUsed), nullableMetric(payload.Status.DiskTotal), observedAt.Format(time.RFC3339Nano), now, principal.NodeID); err != nil {
 		s.failSync(w, tx, syncRunID, fmt.Errorf("update node after sync: %w", err))
 		return
@@ -665,8 +666,8 @@ func (s *Server) updateNodeHeartbeat(nodeID string, observedAt time.Time, status
 	var previousHealth string
 	_ = s.db.QueryRow(`SELECT health_status FROM nodes WHERE id = ?`, nodeID).Scan(&previousHealth)
 	newHealth := healthStatus(status.XrayRunning)
-	_, err := s.db.Exec(`UPDATE nodes SET health_status = ?, xpanel_version = CASE WHEN ? <> '' THEN ? ELSE xpanel_version END, xray_version = CASE WHEN ? <> '' THEN ? ELSE xray_version END,
-cpu_usage = ?, memory_used = ?, memory_total = ?, disk_used = ?, disk_total = ?, last_seen_at = ?, updated_at = ? WHERE id = ?`, healthStatus(status.XrayRunning), status.XPanelVersion, status.XPanelVersion, status.XrayVersion, status.XrayVersion,
+	_, err := s.db.Exec(`UPDATE nodes SET health_status = ?, agent_version = CASE WHEN ? <> '' THEN ? ELSE agent_version END, xpanel_version = CASE WHEN ? <> '' THEN ? ELSE xpanel_version END, xray_version = CASE WHEN ? <> '' THEN ? ELSE xray_version END,
+cpu_usage = ?, memory_used = ?, memory_total = ?, disk_used = ?, disk_total = ?, last_seen_at = ?, updated_at = ? WHERE id = ?`, healthStatus(status.XrayRunning), strings.TrimSpace(status.AgentVersion), strings.TrimSpace(status.AgentVersion), status.XPanelVersion, status.XPanelVersion, status.XrayVersion, status.XrayVersion,
 		status.CPUUsage, nullableMetric(status.MemoryUsed), nullableMetric(status.MemoryTotal), nullableMetric(status.DiskUsed), nullableMetric(status.DiskTotal), observedAt.Format(time.RFC3339Nano), now, nodeID)
 	if err == nil && previousHealth == "offline" && newHealth != "offline" {
 		eventErr := insertNodeEvent(s.db, nodeEventSpec{

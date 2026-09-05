@@ -238,7 +238,7 @@ func TestCollectorCollectsInboundAndStatusWithoutReset(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	collector, err := New(client, "relay-001")
+	collector, err := New(client, "relay-001", "test-agent")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -246,7 +246,7 @@ func TestCollectorCollectsInboundAndStatusWithoutReset(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Collect() error = %v", err)
 	}
-	if snapshot.NodeKey != "relay-001" || snapshot.SyncID == "" || snapshot.ObservedAt == "" || len(snapshot.Inbounds) != 1 || !snapshot.Status.XrayRunning {
+	if snapshot.NodeKey != "relay-001" || snapshot.SyncID == "" || snapshot.ObservedAt == "" || snapshot.Status.AgentVersion != "test-agent" || len(snapshot.Inbounds) != 1 || !snapshot.Status.XrayRunning {
 		t.Fatalf("snapshot = %+v", snapshot)
 	}
 	if strings.Contains(strings.Join(paths, ","), "reset") {

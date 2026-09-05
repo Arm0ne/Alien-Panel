@@ -507,9 +507,9 @@ onMounted(() => void loadNode());
               </NDescriptionsItem>
               <NDescriptionsItem label="区域">{{ detail.region || '--' }}</NDescriptionsItem>
               <NDescriptionsItem label="提供商">{{ detail.provider || '--' }}</NDescriptionsItem>
-              <NDescriptionsItem label="Agent 版本">{{ detail.agentVersion || '--' }}</NDescriptionsItem>
+              <NDescriptionsItem label="Agent 版本">{{ detail.agentVersion || '未上报' }}</NDescriptionsItem>
               <NDescriptionsItem label="X-Panel / Xray">
-                {{ detail.xpanelVersion || '--' }} / {{ detail.xrayVersion || '--' }}
+                {{ detail.xpanelVersion || '未检测到' }} / {{ detail.xrayVersion || '未检测到' }}
               </NDescriptionsItem>
               <NDescriptionsItem label="CPU 使用率">{{ formatPercent(detail.cpuUsage) }}</NDescriptionsItem>
               <NDescriptionsItem label="内存使用">

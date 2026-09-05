@@ -16,6 +16,7 @@ import (
 )
 
 type Status struct {
+	AgentVersion  string  `json:"agent_version,omitempty"`
 	XrayRunning   bool    `json:"xray_running"`
 	XrayVersion   string  `json:"xray_version,omitempty"`
 	XPanelVersion string  `json:"xpanel_version,omitempty"`
@@ -72,19 +73,20 @@ func (snapshot Snapshot) Heartbeat() Heartbeat {
 }
 
 type Collector struct {
-	client   *xpanel.Client
-	nodeKey  string
-	syncIDFn func(time.Time) string
+	client       *xpanel.Client
+	nodeKey      string
+	agentVersion string
+	syncIDFn     func(time.Time) string
 }
 
-func New(client *xpanel.Client, nodeKey string) (*Collector, error) {
+func New(client *xpanel.Client, nodeKey, agentVersion string) (*Collector, error) {
 	if client == nil {
 		return nil, errors.New("xpanel client is required")
 	}
 	if strings.TrimSpace(nodeKey) == "" {
 		return nil, errors.New("node key is required")
 	}
-	return &Collector{client: client, nodeKey: nodeKey, syncIDFn: newSyncID}, nil
+	return &Collector{client: client, nodeKey: nodeKey, agentVersion: strings.TrimSpace(agentVersion), syncIDFn: newSyncID}, nil
 }
 
 func (collector *Collector) Collect(ctx context.Context) (Snapshot, error) {
@@ -105,6 +107,7 @@ func (collector *Collector) Collect(ctx context.Context) (Snapshot, error) {
 	if err != nil {
 		return Snapshot{}, fmt.Errorf("parse server status: %w", err)
 	}
+	status.AgentVersion = collector.agentVersion
 
 	now := time.Now().UTC()
 	return Snapshot{

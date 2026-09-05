@@ -82,17 +82,13 @@ location / {
 }
 ```
 
-When frontend or backend code changes, rebuild the bundle from the project
-root before pushing:
+When frontend, backend, or Agent code changes, rebuild the bundle from the
+project root before pushing. The bundle command embeds the current Git build
+identity in the Agent binary, which the central panel displays after its next
+heartbeat:
 
 ```powershell
-Set-Location frontend
-pnpm.cmd build
-Set-Location ..
-Copy-Item -Path frontend/dist/* -Destination deploy/frontend-dist -Recurse -Force
-$env:GOOS='linux'; $env:GOARCH='amd64'; $env:CGO_ENABLED='0'
-go build -trimpath -o release/xpanel-central ./backend/cmd/server
-Remove-Item Env:GOOS,Env:GOARCH,Env:CGO_ENABLED
+powershell -ExecutionPolicy Bypass -File .\deploy\build-bundle.ps1
 ```
 
 Before exposing the service:

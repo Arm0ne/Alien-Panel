@@ -642,15 +642,22 @@ func TestAgentRegistrationHeartbeatAndIdempotentSync(t *testing.T) {
 	observedAt := "2026-09-02T12:00:00Z"
 	heartbeat := doJSON(t, ts.Client(), http.MethodPost, ts.URL+"/api/agent/v1/heartbeat", nodeToken, map[string]any{
 		"node_key": "relay-agent-1", "observed_at": observedAt,
-		"status": map[string]any{"xray_running": true, "xray_version": "26.6.27", "xpanel_version": "2.4.0"},
+		"status": map[string]any{"agent_version": "agent-heartbeat", "xray_running": true, "xray_version": "26.6.27", "xpanel_version": "2.4.0"},
 	})
 	if heartbeat["code"] != successCode {
 		t.Fatalf("heartbeat response = %#v", heartbeat)
 	}
+	var agentVersion string
+	if err := database.QueryRow(`SELECT agent_version FROM nodes WHERE node_key = 'relay-agent-1'`).Scan(&agentVersion); err != nil {
+		t.Fatalf("read heartbeat Agent version: %v", err)
+	}
+	if agentVersion != "agent-heartbeat" {
+		t.Fatalf("heartbeat Agent version = %q, want %q", agentVersion, "agent-heartbeat")
+	}
 
 	payload := map[string]any{
 		"node_key": "relay-agent-1", "sync_id": "relay-agent-1-sync-001", "observed_at": observedAt,
-		"status": map[string]any{"xray_running": true, "xray_version": "26.6.27", "xpanel_version": "2.4.0"},
+		"status": map[string]any{"agent_version": "agent-sync", "xray_running": true, "xray_version": "26.6.27", "xpanel_version": "2.4.0"},
 		"inbounds": []any{map[string]any{
 			"remote_id": 15, "tag": "user-15", "remark": "Customer A", "protocol": "vless", "port": 443,
 			"enable": true, "expiry_time": 1792022400, "up": 100, "down": 200, "all_time": 300,
@@ -699,6 +706,12 @@ func TestAgentRegistrationHeartbeatAndIdempotentSync(t *testing.T) {
 	}
 	if nodes != 1 || inbounds != 1 || users != 1 || userInboundMappings != 1 || clients != 1 || snapshots != 1 || resetSnapshots != 1 || resetEvents != 1 || syncRuns != 1 {
 		t.Fatalf("stored rows nodes=%d inbounds=%d users=%d userInboundMappings=%d clients=%d snapshots=%d resetSnapshots=%d resetEvents=%d syncRuns=%d", nodes, inbounds, users, userInboundMappings, clients, snapshots, resetSnapshots, resetEvents, syncRuns)
+	}
+	if err := database.QueryRow(`SELECT agent_version FROM nodes WHERE node_key = 'relay-agent-1'`).Scan(&agentVersion); err != nil {
+		t.Fatalf("read synced Agent version: %v", err)
+	}
+	if agentVersion != "agent-sync" {
+		t.Fatalf("synced Agent version = %q, want %q", agentVersion, "agent-sync")
 	}
 	var displayName, notes string
 	var monthlyFee float64

@@ -10,6 +10,11 @@ $Frontend = Join-Path $Root 'frontend'
 $Deploy = Join-Path $Root 'deploy'
 $Release = Join-Path $Root 'release'
 $FrontendDist = Join-Path $Deploy 'frontend-dist'
+$AgentVersion = (git -C $Root describe --tags --always --dirty 2>$null).Trim()
+if ([string]::IsNullOrWhiteSpace($AgentVersion)) { $AgentVersion = 'dev' }
+$AgentCommit = (git -C $Root rev-parse --short=12 HEAD 2>$null).Trim()
+$AgentBuildTime = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
+$AgentLdFlags = "-X xpanel-central/agent/internal/buildinfo.Version=$AgentVersion -X xpanel-central/agent/internal/buildinfo.Commit=$AgentCommit -X xpanel-central/agent/internal/buildinfo.BuildTime=$AgentBuildTime"
 
 if (-not $SkipFrontend) {
   Write-Host 'Building frontend...'
@@ -43,7 +48,7 @@ try {
   Push-Location (Join-Path $Root 'agent')
   try {
     Write-Host "Building Linux/$GoArch agent binary..."
-    go build -trimpath -o (Join-Path $Release 'xpanel-agent') ./cmd/agent
+    go build -trimpath -ldflags $AgentLdFlags -o (Join-Path $Release 'xpanel-agent') ./cmd/agent
   } finally { Pop-Location }
 } finally {
   if ($null -eq $oldGoOS) { Remove-Item Env:GOOS -ErrorAction SilentlyContinue } else { $env:GOOS = $oldGoOS }
@@ -56,5 +61,6 @@ $AgentChecksum = Join-Path $Release 'xpanel-agent.sha256'
   Set-Content -LiteralPath $AgentChecksum -NoNewline -Encoding ascii
 
 Write-Host 'Bundle ready:'
+Write-Host "Embedded Agent version: $AgentVersion"
 Get-Item (Join-Path $FrontendDist 'index.html'), (Join-Path $Release 'xpanel-central'), (Join-Path $Release 'xpanel-agent.sha256') |
   Select-Object FullName, Length

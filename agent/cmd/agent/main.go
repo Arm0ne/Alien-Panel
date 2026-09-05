@@ -4,11 +4,13 @@ import (
 	"context"
 	"errors"
 	"flag"
+	"fmt"
 	"log/slog"
 	"os"
 	"os/signal"
 	"syscall"
 
+	"xpanel-central/agent/internal/buildinfo"
 	"xpanel-central/agent/internal/central"
 	"xpanel-central/agent/internal/collector"
 	"xpanel-central/agent/internal/config"
@@ -23,7 +25,12 @@ func main() {
 		defaultPath = "./agent.yaml"
 	}
 	configPath := flag.String("config", defaultPath, "path to the agent YAML configuration")
+	showVersion := flag.Bool("version", false, "print the embedded Agent version and exit")
 	flag.Parse()
+	if *showVersion {
+		fmt.Println(buildinfo.DisplayVersion())
+		return
+	}
 
 	cfg, err := config.Load(*configPath)
 	if err != nil {
@@ -40,7 +47,7 @@ func main() {
 		logger.Error("create central client", "error", err)
 		os.Exit(1)
 	}
-	snapshotCollector, err := collector.New(xpanelClient, cfg.NodeKey)
+	snapshotCollector, err := collector.New(xpanelClient, cfg.NodeKey, buildinfo.DisplayVersion())
 	if err != nil {
 		logger.Error("create xpanel collector", "error", err)
 		os.Exit(1)
@@ -50,7 +57,7 @@ func main() {
 		logger.Error("create agent runner", "error", err)
 		os.Exit(1)
 	}
-	logger.Info("agent started", "node_key", cfg.NodeKey, "node_type", cfg.NodeType)
+	logger.Info("agent started", "node_key", cfg.NodeKey, "node_type", cfg.NodeType, "agent_version", buildinfo.DisplayVersion())
 
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)

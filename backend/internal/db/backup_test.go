@@ -2,6 +2,7 @@ package db
 
 import (
 	"context"
+	"database/sql"
 	"os"
 	"path/filepath"
 	"testing"
@@ -24,9 +25,52 @@ func TestMigrateIsIdempotent(t *testing.T) {
 	if err := database.QueryRow(`SELECT COUNT(*) FROM schema_migrations`).Scan(&count); err != nil {
 		t.Fatalf("count migrations: %v", err)
 	}
-	if count != 14 {
-		t.Fatalf("migration count = %d, want 14", count)
+	if count != 15 {
+		t.Fatalf("migration count = %d, want 15", count)
 	}
+}
+
+func TestLegacyAgentVersionMigrationClearsInstallerLabel(t *testing.T) {
+	database, err := Open(":memory:")
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+	defer database.Close()
+	if _, err := database.Exec(`CREATE TABLE schema_migrations (version TEXT PRIMARY KEY, applied_at TEXT NOT NULL)`); err != nil {
+		t.Fatalf("create migration table: %v", err)
+	}
+	for _, version := range legacyVersionMigrationNames {
+		sqlBytes, readErr := migrationFiles.ReadFile("migrations/" + version)
+		if readErr != nil {
+			t.Fatalf("read %s: %v", version, readErr)
+		}
+		if _, execErr := database.Exec(string(sqlBytes)); execErr != nil {
+			t.Fatalf("apply %s: %v", version, execErr)
+		}
+		if _, execErr := database.Exec(`INSERT INTO schema_migrations (version, applied_at) VALUES (?, 'now')`, version); execErr != nil {
+			t.Fatalf("record %s: %v", version, execErr)
+		}
+	}
+	if _, err := database.Exec(`INSERT INTO nodes (id, node_key, name, agent_version, created_at, updated_at) VALUES ('legacy-node', 'legacy-node', 'legacy node', 'online', '2026-09-06T00:00:00Z', '2026-09-06T00:00:00Z')`); err != nil {
+		t.Fatalf("insert legacy node: %v", err)
+	}
+	if err := Migrate(database); err != nil {
+		t.Fatalf("apply legacy-version migration: %v", err)
+	}
+	var version sql.NullString
+	if err := database.QueryRow(`SELECT agent_version FROM nodes WHERE id = 'legacy-node'`).Scan(&version); err != nil {
+		t.Fatalf("read migrated Agent version: %v", err)
+	}
+	if version.Valid {
+		t.Fatalf("legacy Agent version = %q, want NULL", version.String)
+	}
+}
+
+var legacyVersionMigrationNames = []string{
+	"001_initial.sql", "002_inbound_missing_sync_count.sql", "003_node_metrics.sql", "004_exit_ip_sources.sql",
+	"005_node_deletion.sql", "006_user_route_assignment.sql", "007_clear_inactive_route_exit_refs.sql", "008_user_paths.sql",
+	"009_cleanup_non_relay_user_mappings.sql", "010_node_install_tokens.sql", "011_node_management_url.sql",
+	"012_traffic_snapshot_inbound_time.sql", "013_user_billing.sql", "014_event_center.sql",
 }
 
 func TestExitIPSourceMigrationPreservesLegacyBindings(t *testing.T) {

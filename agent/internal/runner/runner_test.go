@@ -33,11 +33,22 @@ func TestRunCollectsAndSendsHeartbeatAndSync(t *testing.T) {
 
 	var mu sync.Mutex
 	paths := make([]string, 0, 2)
+	versions := make([]string, 0, 2)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	centralServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		mu.Lock()
 		paths = append(paths, request.URL.Path)
+		var payload struct {
+			Status struct {
+				AgentVersion string `json:"agent_version"`
+			} `json:"status"`
+		}
+		if err := json.NewDecoder(request.Body).Decode(&payload); err != nil {
+			t.Errorf("decode %s payload: %v", request.URL.Path, err)
+		} else {
+			versions = append(versions, payload.Status.AgentVersion)
+		}
 		mu.Unlock()
 		writer.Header().Set("Content-Type", "application/json")
 		_, _ = writer.Write([]byte(`{"code":"0000","msg":"ok","data":{"status":"accepted"}}`))
@@ -54,7 +65,7 @@ func TestRunCollectsAndSendsHeartbeatAndSync(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	snapshotCollector, err := collector.New(xpanelClient, "relay-001")
+	snapshotCollector, err := collector.New(xpanelClient, "relay-001", "test-agent")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -73,6 +84,9 @@ func TestRunCollectsAndSendsHeartbeatAndSync(t *testing.T) {
 	defer mu.Unlock()
 	if len(paths) != 2 || paths[0] != "/agent/v1/heartbeat" || paths[1] != "/agent/v1/sync" {
 		t.Fatalf("central paths = %v", paths)
+	}
+	if len(versions) != 2 || versions[0] != "test-agent" || versions[1] != "test-agent" {
+		t.Fatalf("Agent versions = %v, want both payloads to contain test-agent", versions)
 	}
 }
 
@@ -143,7 +157,7 @@ func TestRunRetriesXPanelAndCentralTransientFailures(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	snapshotCollector, err := collector.New(xpanelClient, "relay-retry")
+	snapshotCollector, err := collector.New(xpanelClient, "relay-retry", "test-agent")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -180,7 +194,7 @@ func TestRunStopsRetryBackoffWhenCanceled(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	snapshotCollector, err := collector.New(xpanelClient, "relay-cancel")
+	snapshotCollector, err := collector.New(xpanelClient, "relay-cancel", "test-agent")
 	if err != nil {
 		t.Fatal(err)
 	}
