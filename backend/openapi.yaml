@@ -829,7 +829,6 @@ components:
           type: string
           maxLength: 2048
           description: Full browser/X-Panel management URL; empty clears the value
-          pattern: '^https?://[^\\s]+$'
         publicIp: { type: string, maxLength: 100, description: Legacy compatibility field }
         region: { type: string, maxLength: 120 }
         provider: { type: string, maxLength: 200 }
