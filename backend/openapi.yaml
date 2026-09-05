@@ -964,11 +964,12 @@ components:
         summary: { $ref: '#/components/schemas/UserTrafficSummary' }
     UserTrafficPoint:
       type: object
-      required: [time, uploadBytes, downloadBytes, uploadRate, downloadRate, sampleCount, resetDetected, hasGap]
+      required: [time, uploadBytes, downloadBytes, totalBytes, uploadRate, downloadRate, sampleCount, resetDetected, hasGap]
       properties:
         time: { type: string, format: date-time }
-        uploadBytes: { type: integer, format: int64 }
-        downloadBytes: { type: integer, format: int64 }
+        uploadBytes: { type: integer, format: int64, description: Cumulative upload bytes since the selected range baseline }
+        downloadBytes: { type: integer, format: int64, description: Cumulative download bytes since the selected range baseline }
+        totalBytes: { type: integer, format: int64, description: Cumulative total bytes since the selected range baseline }
         uploadRate: { type: number, format: double }
         downloadRate: { type: number, format: double }
         sampleCount: { type: integer, minimum: 0 }

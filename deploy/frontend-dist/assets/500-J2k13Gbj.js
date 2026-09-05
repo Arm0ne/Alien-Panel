@@ -1,0 +1,1 @@
+import{Pi as e,Yi as t,zi as n}from"./router-BXCsM_PA.js";import{t as r}from"./exception-base-DKexCPpx.js";var i=n({name:`500`,__name:`index`,setup(n){return(n,i)=>{let a=r;return t(),e(a,{type:`500`})}}});export{i as default};

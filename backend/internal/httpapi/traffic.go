@@ -40,6 +40,7 @@ type trafficTrendPoint struct {
 	Time          string  `json:"time"`
 	UploadBytes   int64   `json:"uploadBytes"`
 	DownloadBytes int64   `json:"downloadBytes"`
+	TotalBytes    int64   `json:"totalBytes"`
 	UploadRate    float64 `json:"uploadRate"`
 	DownloadRate  float64 `json:"downloadRate"`
 	SampleCount   int     `json:"sampleCount"`
@@ -258,16 +259,20 @@ ORDER BY collected_at ASC`, inboundID, from.Format(time.RFC3339Nano), to.Format(
 			}
 		}
 	}
+	var cumulativeUpload, cumulativeDownload int64
 	for _, key := range keys {
 		bucket := buckets[key]
 		seconds := bucket.observedSecs
 		if seconds <= 0 {
 			seconds = spec.bucket.Seconds()
 		}
+		cumulativeUpload += bucket.uploadBytes
+		cumulativeDownload += bucket.downloadBytes
 		response.Points = append(response.Points, trafficTrendPoint{
 			Time:          bucket.start.Format(time.RFC3339Nano),
-			UploadBytes:   bucket.uploadBytes,
-			DownloadBytes: bucket.downloadBytes,
+			UploadBytes:   cumulativeUpload,
+			DownloadBytes: cumulativeDownload,
+			TotalBytes:    cumulativeUpload + cumulativeDownload,
 			UploadRate:    float64(bucket.uploadBytes) / seconds,
 			DownloadRate:  float64(bucket.downloadBytes) / seconds,
 			SampleCount:   bucket.sampleCount,

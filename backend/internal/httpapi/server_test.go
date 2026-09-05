@@ -856,6 +856,11 @@ func TestUserTrafficTrendUsesRelayInboundDeltas(t *testing.T) {
 	if points[2].(map[string]any)["resetDetected"] != true {
 		t.Fatalf("reset flag missing from trend point = %#v", points[2])
 	}
+	if points[0].(map[string]any)["totalBytes"] != float64(500) ||
+		points[1].(map[string]any)["totalBytes"] != float64(1200) ||
+		points[2].(map[string]any)["totalBytes"] != float64(1230) {
+		t.Fatalf("traffic trend points are not cumulative = %#v", points)
+	}
 
 	invalid := doJSON(t, ts.Client(), http.MethodGet, ts.URL+"/api/users/trend-user/traffic?range=30d", token, nil)
 	if invalid["code"] != validationCode {
