@@ -429,10 +429,42 @@ VALUES (?, ?, ?, ?, ?, ?)`, userID, inboundDisplayName(inbound, remoteInboundID)
 		if _, err := tx.Exec(`UPDATE inbounds SET user_id = ?, kind = 'user' WHERE id = ?`, userID, inboundID); err != nil {
 			return fmt.Errorf("link inbound to business user: %w", err)
 		}
-	} else if _, err := tx.Exec(`UPDATE users
+	} else {
+		// Read the previous central snapshot before replacing it.  An expiry
+		// extension is only a renewal suggestion; it is not automatically
+		// treated as a payment because operators may grant time for free.
+		var oldExpiry, billingCycle string
+		var billingAmount, monthlyFee float64
+		if err := tx.QueryRow(`SELECT COALESCE(expiry_time, ''), COALESCE(billing_cycle, 'monthly'), COALESCE(billing_amount, 0), COALESCE(monthly_fee, 0) FROM users WHERE id = ?`, userID).
+			Scan(&oldExpiry, &billingCycle, &billingAmount, &monthlyFee); err != nil {
+			return fmt.Errorf("read previous user billing state: %w", err)
+		}
+		if oldExpiry != "" && expiryText != "" {
+			oldTime, oldErr := time.Parse(time.RFC3339Nano, oldExpiry)
+			newTime, newErr := time.Parse(time.RFC3339Nano, expiryText)
+			if oldErr == nil && newErr == nil && newTime.After(oldTime) {
+				if billingCycle != "annual" {
+					billingCycle = "monthly"
+				}
+				suggestedAmount := billingAmount
+				if suggestedAmount <= 0 {
+					suggestedAmount = monthlyFee
+					if billingCycle == "annual" {
+						suggestedAmount *= 12
+					}
+				}
+				if _, err := tx.Exec(`INSERT OR IGNORE INTO user_renewal_candidates
+(id, user_id, inbound_id, old_expiry_at, new_expiry_at, detected_at, suggested_cycle, suggested_amount, currency, status)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'CNY', 'pending')`, newID(), userID, inboundID, oldExpiry, expiryText, now, billingCycle, suggestedAmount); err != nil {
+					return fmt.Errorf("record renewal candidate: %w", err)
+				}
+			}
+		}
+		if _, err := tx.Exec(`UPDATE users
 SET expiry_time = ?, status = CASE WHEN status = 'disabled' THEN 'disabled' ELSE ? END, updated_at = ?
 WHERE id = ?`, expiry, status, now, userID); err != nil {
-		return fmt.Errorf("refresh business user state: %w", err)
+			return fmt.Errorf("refresh business user state: %w", err)
+		}
 	}
 	if _, err := tx.Exec(`INSERT OR IGNORE INTO user_inbounds (id, user_id, inbound_id, is_primary, active_from)
 VALUES (?, ?, ?, 1, ?)`, newID(), userID, inboundID, now); err != nil {

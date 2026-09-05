@@ -156,7 +156,8 @@ paths:
     patch:
       summary: Update central-owned business fields of a user
       description: >-
-        Only displayName, monthlyFee, currency, and notes are editable here.
+        displayName, billingCycle (monthly or annual), billingAmount, currency,
+        and notes are editable here. monthlyFee remains a legacy monthly-equivalent field.
         X-Panel-owned expiry, enable state, Clients, and traffic are never
         written back to X-Panel by this endpoint.
       requestBody:
@@ -174,6 +175,57 @@ paths:
                 $ref: '#/components/schemas/EnvelopeUserDetail'
         '400': { description: Validation failed }
         '404': { description: User not found }
+  /users/{id}/renewals:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema: { type: string }
+    get:
+      summary: List Agent-detected renewal candidates
+      responses:
+        '200': { description: Renewal candidates for the user }
+        '404': { description: User not found }
+  /users/{id}/renewals/{candidateId}/confirm:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema: { type: string }
+      - name: candidateId
+        in: path
+        required: true
+        schema: { type: string }
+    post:
+      summary: Confirm a detected renewal and create an immutable billing record
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RenewalActionRequest' }
+      responses:
+        '200': { description: Updated user detail }
+        '409': { description: Candidate was already processed }
+  /users/{id}/renewals/{candidateId}/reject:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema: { type: string }
+      - name: candidateId
+        in: path
+        required: true
+        schema: { type: string }
+    post:
+      summary: Mark a detected expiry extension as a non-billing change
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RenewalRejectRequest' }
+      responses:
+        '200': { description: Updated user detail }
+        '409': { description: Candidate was already processed }
   /users/{id}/traffic:
     parameters:
       - name: id
@@ -797,10 +849,23 @@ components:
       properties:
         displayName: { type: string, minLength: 1, maxLength: 120 }
         monthlyFee: { type: number, minimum: 0, maximum: 100000000 }
+        billingCycle: { type: string, enum: [monthly, annual] }
+        billingAmount: { type: number, minimum: 0, maximum: 100000000 }
         currency:
           type: string
           description: CNY is currently the only supported reporting currency.
           enum: [CNY]
+        notes: { type: string, maxLength: 2000 }
+    RenewalActionRequest:
+      type: object
+      properties:
+        billingCycle: { type: string, enum: [monthly, annual] }
+        amount: { type: number, minimum: 0, maximum: 100000000 }
+        paidAt: { type: string, format: date-time }
+        notes: { type: string, maxLength: 2000 }
+    RenewalRejectRequest:
+      type: object
+      properties:
         notes: { type: string, maxLength: 2000 }
     AssignUserRouteRequest:
       type: object
@@ -1058,7 +1123,7 @@ components:
         data: { $ref: '#/components/schemas/FinanceSummary' }
     FinanceSummary:
       type: object
-      required: [period, currency, effectiveUserCount, monthIncome, monthCost, grossProfit, dataAt]
+      required: [period, currency, effectiveUserCount, monthIncome, cashIncome, monthCost, grossProfit, dataAt]
       properties:
         period: { type: string, pattern: '^\\d{4}-\\d{2}$' }
         currency: { type: string, enum: [CNY] }
@@ -1067,7 +1132,10 @@ components:
           description: Number of CNY users effective for the selected month.
         monthIncome:
           type: number
-          description: Sum of monthly fees for effective users.
+          description: Accrued income allocated over confirmed service intervals, with legacy monthly-fee fallback.
+        cashIncome:
+          type: number
+          description: Confirmed billing records whose paidAt falls in the selected month.
         monthCost: { type: number }
         grossProfit: { type: number }
         breakdown:
@@ -1290,12 +1358,14 @@ components:
         statusHistory: { type: array, items: { type: object } }
     UserDetail:
       type: object
-      required: [id, displayName, status, monthlyFee, currency, inbound, node, clients, routes, path, pathHistory, traffic]
+      required: [id, displayName, status, monthlyFee, billingCycle, billingAmount, currency, inbound, node, clients, routes, path, pathHistory, traffic, renewalCandidates, billingRecords]
       properties:
         id: { type: string }
         displayName: { type: string }
         status: { type: string, enum: [active, expiring, expired, disabled, unknown] }
         monthlyFee: { type: number }
+        billingCycle: { type: string, enum: [monthly, annual] }
+        billingAmount: { type: number }
         currency: { type: string, enum: [CNY] }
         notes: { type: [string, 'null'] }
         expiresAt: { type: [string, 'null'], format: date-time }

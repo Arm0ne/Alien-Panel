@@ -82,6 +82,9 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /api/dashboard", s.requireAuth(http.HandlerFunc(s.dashboard)))
 	mux.Handle("GET /api/users", s.requireAuth(http.HandlerFunc(s.users)))
 	mux.Handle("GET /api/users/{id}", s.requireAuth(http.HandlerFunc(s.userDetail)))
+	mux.Handle("GET /api/users/{id}/renewals", s.requireAuth(http.HandlerFunc(s.listUserRenewals)))
+	mux.Handle("POST /api/users/{id}/renewals/{candidateId}/confirm", s.requireAuth(http.HandlerFunc(s.confirmUserRenewal)))
+	mux.Handle("POST /api/users/{id}/renewals/{candidateId}/reject", s.requireAuth(http.HandlerFunc(s.rejectUserRenewal)))
 	mux.Handle("GET /api/users/{id}/traffic", s.requireAuth(http.HandlerFunc(s.userTraffic)))
 	mux.Handle("GET /api/users/{id}/path-assets", s.requireAuth(http.HandlerFunc(s.userPathAssets)))
 	mux.Handle("PATCH /api/users/{id}", s.requireAuth(http.HandlerFunc(s.updateUser)))
@@ -398,10 +401,12 @@ ORDER BY CASE WHEN u.expiry_time IS NULL THEN 1 ELSE 0 END, u.expiry_time ASC LI
 }
 
 type updateUserRequest struct {
-	DisplayName *string  `json:"displayName"`
-	MonthlyFee  *float64 `json:"monthlyFee"`
-	Currency    *string  `json:"currency"`
-	Notes       *string  `json:"notes"`
+	DisplayName   *string  `json:"displayName"`
+	MonthlyFee    *float64 `json:"monthlyFee"` // legacy monthly equivalent
+	BillingCycle  *string  `json:"billingCycle"`
+	BillingAmount *float64 `json:"billingAmount"`
+	Currency      *string  `json:"currency"`
+	Notes         *string  `json:"notes"`
 }
 
 // userRouteAssignmentRequest controls the central routing decision for a
@@ -608,14 +613,14 @@ func (s *Server) updateUser(w http.ResponseWriter, r *http.Request) {
 		writeFailure(w, http.StatusBadRequest, validationCode, "invalid user update payload")
 		return
 	}
-	if payload.DisplayName == nil && payload.MonthlyFee == nil && payload.Currency == nil && payload.Notes == nil {
+	if payload.DisplayName == nil && payload.MonthlyFee == nil && payload.BillingCycle == nil && payload.BillingAmount == nil && payload.Currency == nil && payload.Notes == nil {
 		writeFailure(w, http.StatusBadRequest, validationCode, "at least one editable field is required")
 		return
 	}
 
-	var displayName, currency, notes string
-	var monthlyFee float64
-	if err := s.db.QueryRow(`SELECT display_name, monthly_fee, currency, COALESCE(notes, '') FROM users WHERE id = ?`, id).Scan(&displayName, &monthlyFee, &currency, &notes); errors.Is(err, sql.ErrNoRows) {
+	var displayName, currency, notes, billingCycle string
+	var monthlyFee, billingAmount float64
+	if err := s.db.QueryRow(`SELECT display_name, monthly_fee, COALESCE(billing_cycle, 'monthly'), COALESCE(billing_amount, monthly_fee), currency, COALESCE(notes, '') FROM users WHERE id = ?`, id).Scan(&displayName, &monthlyFee, &billingCycle, &billingAmount, &currency, &notes); errors.Is(err, sql.ErrNoRows) {
 		writeFailure(w, http.StatusNotFound, notFoundCode, "user not found")
 		return
 	} else if err != nil {
@@ -623,7 +628,7 @@ func (s *Server) updateUser(w http.ResponseWriter, r *http.Request) {
 		writeFailure(w, http.StatusInternalServerError, internalErrorCode, "could not update user")
 		return
 	}
-	before := map[string]any{"displayName": displayName, "monthlyFee": monthlyFee, "currency": currency, "notes": notes}
+	before := map[string]any{"displayName": displayName, "monthlyFee": monthlyFee, "billingCycle": billingCycle, "billingAmount": billingAmount, "currency": currency, "notes": notes}
 	if payload.DisplayName != nil {
 		displayName = strings.TrimSpace(*payload.DisplayName)
 		if displayName == "" || len([]rune(displayName)) > 120 {
@@ -637,6 +642,33 @@ func (s *Server) updateUser(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		monthlyFee = *payload.MonthlyFee
+		if payload.BillingAmount == nil && billingCycle == "monthly" {
+			billingAmount = monthlyFee
+		}
+	}
+	if payload.BillingCycle != nil {
+		billingCycle = strings.TrimSpace(*payload.BillingCycle)
+		if billingCycle != "monthly" && billingCycle != "annual" {
+			writeFailure(w, http.StatusBadRequest, validationCode, "billingCycle must be monthly or annual")
+			return
+		}
+		if payload.BillingAmount == nil {
+			monthlyFee = billingAmount
+			if billingCycle == "annual" {
+				monthlyFee = billingAmount / 12
+			}
+		}
+	}
+	if payload.BillingAmount != nil {
+		if *payload.BillingAmount < 0 || *payload.BillingAmount > 100000000 || *payload.BillingAmount != *payload.BillingAmount {
+			writeFailure(w, http.StatusBadRequest, validationCode, "billingAmount must be a non-negative number")
+			return
+		}
+		billingAmount = *payload.BillingAmount
+		monthlyFee = billingAmount
+		if billingCycle == "annual" {
+			monthlyFee = billingAmount / 12
+		}
 	}
 	if payload.Currency != nil {
 		currency = strings.ToUpper(strings.TrimSpace(*payload.Currency))
@@ -654,12 +686,12 @@ func (s *Server) updateUser(w http.ResponseWriter, r *http.Request) {
 	}
 
 	now := time.Now().UTC().Format(time.RFC3339Nano)
-	if _, err := s.db.Exec(`UPDATE users SET display_name = ?, monthly_fee = ?, currency = ?, notes = ?, updated_at = ? WHERE id = ?`, displayName, monthlyFee, currency, nullableDBString(notes), now, id); err != nil {
+	if _, err := s.db.Exec(`UPDATE users SET display_name = ?, monthly_fee = ?, billing_cycle = ?, billing_amount = ?, currency = ?, notes = ?, updated_at = ? WHERE id = ?`, displayName, monthlyFee, billingCycle, billingAmount, currency, nullableDBString(notes), now, id); err != nil {
 		s.logger.Error("update user business fields", "user_id", id, "error", err)
 		writeFailure(w, http.StatusInternalServerError, internalErrorCode, "could not update user")
 		return
 	}
-	after := map[string]any{"displayName": displayName, "monthlyFee": monthlyFee, "currency": currency, "notes": notes}
+	after := map[string]any{"displayName": displayName, "monthlyFee": monthlyFee, "billingCycle": billingCycle, "billingAmount": billingAmount, "currency": currency, "notes": notes}
 	s.writeAuditLog(r, "user.update", "user", id, before, after)
 	result, err := s.readUserDetail(id)
 	if err != nil {
@@ -701,6 +733,23 @@ WHERE u.id = ?`, id).Scan(&userID, &displayName, &status, &monthlyFee, &currency
 		},
 		"node": map[string]any{"id": nullableString(nodeID), "name": nullableString(nodeName), "type": nullableString(nodeType)},
 	}
+	var billingCycle string
+	var billingAmount float64
+	if err := s.db.QueryRow(`SELECT COALESCE(billing_cycle, 'monthly'), COALESCE(billing_amount, monthly_fee) FROM users WHERE id = ?`, id).Scan(&billingCycle, &billingAmount); err != nil {
+		return nil, err
+	}
+	result["billingCycle"] = billingCycle
+	result["billingAmount"] = billingAmount
+	candidates, err := s.readUserRenewalCandidates(id)
+	if err != nil {
+		return nil, err
+	}
+	result["renewalCandidates"] = candidates
+	records, err := s.readUserBillingRecords(id)
+	if err != nil {
+		return nil, err
+	}
+	result["billingRecords"] = records
 	clients := make([]map[string]any, 0)
 	if inboundID != "" {
 		rows, err := s.db.Query(`SELECT remote_client_id, COALESCE(email, ''), enable, COALESCE(expiry_time, ''), up, down, all_time, COALESCE(last_online, ''), COALESCE(last_seen_at, '')
@@ -2453,6 +2502,7 @@ type financeResponse struct {
 	Currency           string           `json:"currency"`
 	EffectiveUserCount int              `json:"effectiveUserCount"`
 	MonthIncome        float64          `json:"monthIncome"`
+	CashIncome         float64          `json:"cashIncome"`
 	MonthCost          float64          `json:"monthCost"`
 	GrossProfit        float64          `json:"grossProfit"`
 	Breakdown          []map[string]any `json:"breakdown,omitempty"`
@@ -2486,12 +2536,21 @@ func (s *Server) financeSummary(period string) (financeResponse, error) {
 	// before the month ended, had not expired at the month start, and was not
 	// explicitly disabled. This preserves the central/X-Panel disabled state
 	// while keeping historical periods stable as time moves forward.
-	if err := s.db.QueryRow(`SELECT COUNT(*), COALESCE(SUM(monthly_fee), 0)
+	if err := s.db.QueryRow(`SELECT COUNT(*)
 FROM users
 WHERE currency = 'CNY'
   AND status <> 'disabled'
   AND datetime(created_at) < datetime(?)
-  AND (expiry_time IS NULL OR datetime(expiry_time) >= datetime(?))`, end, start).Scan(&result.EffectiveUserCount, &result.MonthIncome); err != nil {
+	  AND (expiry_time IS NULL OR datetime(expiry_time) >= datetime(?))`, end, start).Scan(&result.EffectiveUserCount); err != nil {
+		return financeResponse{}, err
+	}
+	result.MonthIncome, err = s.accruedUserIncome(start, end)
+	if err != nil {
+		return financeResponse{}, err
+	}
+	if err := s.db.QueryRow(`SELECT COALESCE(SUM(amount), 0) FROM user_billing_records
+WHERE currency = 'CNY' AND status = 'confirmed' AND paid_at IS NOT NULL
+  AND datetime(paid_at) >= datetime(?) AND datetime(paid_at) < datetime(?)`, start, end).Scan(&result.CashIncome); err != nil {
 		return financeResponse{}, err
 	}
 	var nodeCost, otherCost, exitCost float64

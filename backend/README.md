@@ -94,7 +94,7 @@ go run ./cmd/seed-demo --database .\data\panel.db
 - `POST /api/nodes/{id}/sync` 写入一次立即同步请求事件并返回 `queued`。中央服务不反向调用 X-Panel，节点 Agent 会在下一次周期同步中执行。
 - `GET /api/nodes/{id}/costs` 查询节点成本记录；`POST /api/nodes/{id}/costs` 录入节点月成本；`PATCH /api/nodes/{id}/costs/{costId}` 修改成本类别、金额和备注。生效日期属于历史版本，不能在编辑时改动；日期变化应新增一条成本记录。
 - 节点详情中的成本记录按生效日期展示，财务汇总按所选月份与有效区间计算节点成本。
-- `GET /api/costs/summary?period=YYYY-MM` 返回有效用户数、用户月费收入、节点/出口 IP/其他成本和预计毛利润。收入按统计月份计算：用户需在该月结束前创建、统计月开始时尚未到期且未停用；不使用当前状态筛选历史月份。成本按月份半开区间与记录有效区间求交集，避免下月生效成本提前计入。
+- `GET /api/costs/summary?period=YYYY-MM` 返回有效用户数、用户应计收入、已确认实收、节点/出口 IP/其他成本和预计毛利润。确认收费记录按服务区间分摊（年费按实际覆盖天数），未有收费历史的旧用户继续回退到月费；成本按月份半开区间与记录有效区间求交集，避免下月生效成本提前计入。
 - 线路和出口 IP 列表/详情返回“配置归属用户数”：仅统计当前有效且未停用用户；出口 IP 还要求线路、出口 IP 资产和绑定均为启用状态。
 - 管理员 Bearer 写请求若携带 Origin/Referer，必须匹配 `XPANEL_CORS_ORIGINS`；无浏览器来源头的 CLI 客户端仍可使用。当前认证不使用 Cookie，因此这是面向未来 Cookie 迁移的纵深 CSRF 防护。
 - refresh token 为单次使用并在轮换时撤销旧会话；管理员 logout 会撤销当前会话；同一 Agent 重新注册会撤销该节点旧 Token。所有受保护接口均检查会话/节点凭据、有效期和启用状态。
@@ -105,7 +105,8 @@ go run ./cmd/seed-demo --database .\data\panel.db
 
 - `GET /api/users/{id}` 返回业务用户、主 Inbound、Client/Email 设备、线路机、当前用户路径、路径历史和已分配线路兼容快照；
 - `GET /api/users/{id}/path-assets` 返回该用户可用的路径资源：用户主 Inbound 所属线路机、启用的落地节点及其基础设施 Inbound、线路机出口 IP 和独立 S5 出口 IP。落地 Inbound 仅作为路径资源，不会创建或展示为业务用户；没有成功同步时会返回 `inboundState=pending`，而不是静默空列表；
-- `PATCH /api/users/{id}` 仅更新中央维护的 `displayName`、`monthlyFee`、`currency`（当前仅支持 `CNY`）和 `notes`，并写入 `audit_logs`；
+- `PATCH /api/users/{id}` 更新中央维护的 `displayName`、`billingCycle`（月付/年付）、`billingAmount`、`currency`（当前仅支持 `CNY`）和 `notes`，并写入 `audit_logs`；`monthlyFee` 仍兼容为月均金额字段；
+- `GET /api/users/{id}/renewals` 查询 Agent 发现 Inbound 到期时间延长后生成的候选；`POST /api/users/{id}/renewals/{candidateId}/confirm` 确认收费并创建不可变收费记录；`POST .../reject` 标记为非收费变更。Agent 永远不会自动把到期延长直接计为收款。
 - `PUT /api/users/{id}/route` 是旧线路模板分配兼容接口；可选 `routeExitIpId` 固定到该线路已绑定的某个出口 IP，省略时按线路出口池权重分配；`DELETE /api/users/{id}/route` 解除当前线路并保留历史关系。新日常流程应使用下方的 `user_paths` 接口；这些操作只更新中央配置，不会直接改写 X-Panel/Xray；
 - `PUT /api/users/{id}/path` 保存新的直接路径。线路机由用户主 Inbound 自动确定；线路机直出只能绑定线路机出口 IP，经落地机时必须同时指定启用的落地节点和该节点的基础设施 Inbound，并绑定该落地机出口 IP；独立 S5 不得与落地节点混用。保存新路径会关闭旧路径并保留历史；`DELETE /api/users/{id}/path` 解除当前路径但不删除历史；
 - 用户详情页不会修改 X-Panel/Xray，也不会写入 X-Panel 的到期、启用、Client 或流量字段。

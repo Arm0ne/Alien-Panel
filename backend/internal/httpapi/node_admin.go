@@ -532,6 +532,10 @@ func (s *Server) deleteNode(w http.ResponseWriter, r *http.Request) {
 		writeFailure(w, http.StatusInternalServerError, internalErrorCode, "could not delete node user inbound bindings")
 		return
 	}
+	if err := execDelete("renewal candidate inbound references", `UPDATE user_renewal_candidates SET inbound_id = NULL WHERE inbound_id IN (SELECT id FROM inbounds WHERE node_id = ?)`, id); err != nil {
+		writeFailure(w, http.StatusInternalServerError, internalErrorCode, "could not preserve renewal history")
+		return
+	}
 	if err := execDelete("clients", `DELETE FROM clients WHERE node_id = ? OR inbound_id IN (SELECT id FROM inbounds WHERE node_id = ?)`, id, id); err != nil {
 		writeFailure(w, http.StatusInternalServerError, internalErrorCode, "could not delete node clients")
 		return
