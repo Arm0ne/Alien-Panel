@@ -1,1 +1,0 @@
-import{Ii as e,Vi as t,Zi as n}from"./router-CqaEVYAA.js";import{t as r}from"./exception-base-tMWDNRfr.js";var i=t({name:`403`,__name:`index`,setup(t){return(t,i)=>{let a=r;return n(),e(a,{type:`403`})}}});export{i as default};

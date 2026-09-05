@@ -1,1 +1,0 @@
-import{Hi as e,qi as t,ra as n}from"./router-C4wCC4tn.js";import{t as r}from"./exception-base-DZsRQwQ8.js";var i=t({name:`403`,__name:`index`,setup(t){return(t,i)=>{let a=r;return n(),e(a,{type:`403`})}}});export{i as default};

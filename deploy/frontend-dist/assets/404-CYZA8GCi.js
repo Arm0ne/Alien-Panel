@@ -1,0 +1,1 @@
+import{Hi as e,qi as t,ra as n}from"./router-DxH1-4bP.js";import{t as r}from"./exception-base-H4qoDDm5.js";var i=t({name:`404`,__name:`index`,setup(t){return(t,i)=>{let a=r;return n(),e(a,{type:`404`})}}});export{i as default};
