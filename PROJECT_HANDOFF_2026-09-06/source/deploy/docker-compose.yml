@@ -1,0 +1,37 @@
+services:
+  central:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.central
+    image: xpanel-central:local
+    restart: unless-stopped
+    env_file:
+      - ../.env
+    environment:
+      XPANEL_LISTEN: 0.0.0.0:8090
+      XPANEL_DATABASE: /var/lib/xpanel-central/panel.db
+    volumes:
+      - central-data:/var/lib/xpanel-central
+    expose:
+      - "8090"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8090/health/ready"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+
+  web:
+    image: nginx:1.27-alpine
+    restart: unless-stopped
+    depends_on:
+      central:
+        condition: service_healthy
+    ports:
+      - "${XPANEL_BIND_ADDRESS:-127.0.0.1}:${XPANEL_PUBLIC_PORT:-18080}:80"
+    volumes:
+      - ../frontend-dist:/usr/share/nginx/html:ro
+      - ./nginx.docker.conf:/etc/nginx/conf.d/default.conf:ro
+
+volumes:
+  central-data:

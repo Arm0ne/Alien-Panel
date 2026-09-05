@@ -1,0 +1,13 @@
+{
+  "success": true,
+  "data": {
+    "xray_running": true,
+    "xrayVersion": "1.8.5",
+    "panelVersion": "2.5.0",
+    "cpuPercent": "8.5",
+    "memoryUsed": "2000",
+    "memoryTotal": "4000",
+    "diskUsed": "5000",
+    "diskTotal": "9000"
+  }
+}

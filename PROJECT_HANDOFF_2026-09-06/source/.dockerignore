@@ -1,0 +1,15 @@
+.git
+.gitignore
+**/.git
+**/node_modules
+frontend/dist
+backend/data
+*.db
+*.db-shm
+*.db-wal
+*.log
+OPERATIONS_RUNBOOK.md
+CENTRAL_PANEL_DESIGN.md
+CENTRAL_PANEL_DEVELOPMENT_PLAN.md
+X_PANEL_CAPABILITIES.md
+XRAY_CORE_CAPABILITIES.md
