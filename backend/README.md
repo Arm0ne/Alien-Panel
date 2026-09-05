@@ -89,7 +89,7 @@ go run ./cmd/seed-demo --database .\data\panel.db
 - 节点创建同时生成 15 分钟有效、只能使用一次的在线安装 Token；`POST /api/agent/v1/bootstrap` 由 Ubuntu/Debian 一键安装脚本兑换正式 Agent Token，安装 Token 只保存哈希且兑换后立即失效；管理员可通过 `POST /api/nodes/{id}/install-token` 重新生成安装 Token；
 - `PATCH /api/nodes/{id}` 修改节点元数据或启用状态。停用后该节点的 Agent heartbeat、完整同步和立即同步请求都会被拒绝，重新启用后恢复认证；兼容的 Agent register 流程不会覆盖管理员的停用状态；
 - `DELETE /api/nodes/{id}` 为直接删除：节点、Agent Token、Inbound/Client、流量快照、同步记录、成本、出口 IP、用户路径以及旧线路兼容记录会在一个事务中清理；业务用户本身不会删除，删除后可重新使用原 Node Key；
-- `POST /api/nodes` 的 `exitIps` 可传入最多 100 个 IPv4/IPv6 地址，创建时作为该节点的出口 IP 资产原子写入；`publicIp` 仍表示节点主公网/管理地址，不替代出口资产列表。出口 IP 的服务商、成本、有效期和备注可在出口 IP 页面补充；
+- `POST /api/nodes` 的 `managementUrl` 用于记录可点击的 X-Panel/运维管理地址（含协议、端口和可选路径），创建时会自动解析 `panelBasePath`；`publicIp` 仅为旧客户端保留的兼容字段。`exitIps` 可传入最多 100 个 IPv4/IPv6 地址，作为该节点的独立出口 IP 资产原子写入；出口 IP 的服务商、成本、有效期和备注可在出口 IP 页面补充；
 - `GET /api/nodes/{id}` 返回节点元数据、Inbound、该节点拥有的公网出口 IP（线路机和落地机）、最近同步运行和状态事件；
 - `POST /api/nodes/{id}/sync` 写入一次立即同步请求事件并返回 `queued`。中央服务不反向调用 X-Panel，节点 Agent 会在下一次周期同步中执行。
 - `GET /api/nodes/{id}/costs` 查询节点成本记录；`POST /api/nodes/{id}/costs` 录入节点月成本；`PATCH /api/nodes/{id}/costs/{costId}` 修改成本类别、金额和备注。生效日期属于历史版本，不能在编辑时改动；日期变化应新增一条成本记录。

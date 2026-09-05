@@ -803,7 +803,12 @@ components:
         name: { type: string, minLength: 1, maxLength: 120 }
         type: { type: string, enum: [relay, landing] }
         hostname: { type: string, maxLength: 255 }
-        publicIp: { type: string, maxLength: 100, description: Optional primary public/management address; not the node exit IP list }
+        managementUrl:
+          type: string
+          maxLength: 2048
+          description: Full browser/X-Panel management URL, including scheme, port and optional panel base path
+          pattern: '^https?://[^\\s]+$'
+        publicIp: { type: string, maxLength: 100, description: Legacy compatibility field; use managementUrl for new nodes }
         exitIps:
           type: array
           maxItems: 100
@@ -820,7 +825,12 @@ components:
         name: { type: string, minLength: 1, maxLength: 120 }
         type: { type: string, enum: [relay, landing, unknown] }
         hostname: { type: string, maxLength: 255 }
-        publicIp: { type: string, maxLength: 100 }
+        managementUrl:
+          type: string
+          maxLength: 2048
+          description: Full browser/X-Panel management URL; empty clears the value
+          pattern: '^https?://[^\\s]+$'
+        publicIp: { type: string, maxLength: 100, description: Legacy compatibility field }
         region: { type: string, maxLength: 120 }
         provider: { type: string, maxLength: 200 }
         panelBasePath: { type: string, minLength: 1, maxLength: 200 }
@@ -951,6 +961,7 @@ components:
         status: { type: string, enum: [online, degraded, offline, disabled, unknown] }
         enabled: { type: boolean }
         host: { type: string }
+        managementUrl: { type: [string, 'null'], description: Full clickable browser/X-Panel management URL }
         lastSeenAt: { type: [string, 'null'], format: date-time }
         lastSyncAt: { type: [string, 'null'], format: date-time }
         inboundState: { type: string, enum: [ready, pending, empty] }
@@ -1159,6 +1170,7 @@ components:
         status: { type: string, enum: [online, degraded, offline, disabled, unknown] }
         enabled: { type: boolean }
         host: { type: string }
+        managementUrl: { type: [string, 'null'], description: Full clickable browser/X-Panel management URL }
         xpanelVersion: { type: [string, 'null'] }
         xrayVersion: { type: [string, 'null'] }
         cpuUsage: { type: [number, 'null'] }
@@ -1183,6 +1195,7 @@ components:
         host: { type: string }
         exitIpCount: { type: integer, minimum: 0 }
         hostname: { type: [string, 'null'] }
+        managementUrl: { type: [string, 'null'], description: Full clickable browser/X-Panel management URL }
         publicIp: { type: [string, 'null'] }
         region: { type: [string, 'null'] }
         provider: { type: [string, 'null'] }

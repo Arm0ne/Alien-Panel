@@ -1511,6 +1511,53 @@ func TestNodeAdminRegistrationAndToggle(t *testing.T) {
 	}
 }
 
+func TestNodeManagementURLIsCanonicalAndEditable(t *testing.T) {
+	server, _ := testServer(t)
+	ts := httptest.NewServer(server.Handler())
+	defer ts.Close()
+
+	login := doJSON(t, ts.Client(), http.MethodPost, ts.URL+"/api/auth/login", "", map[string]string{"userName": "admin", "password": "test-password"})
+	token := login["data"].(map[string]any)["token"].(string)
+	created := doJSON(t, ts.Client(), http.MethodPost, ts.URL+"/api/nodes", token, map[string]any{
+		"nodeKey": "management-url-node", "name": "管理地址节点", "type": "relay",
+		"managementUrl": "https://node.example:18086/Alien/",
+	})
+	if created["code"] != successCode {
+		t.Fatalf("create node response = %#v", created)
+	}
+	nodeID := created["data"].(map[string]any)["nodeId"].(string)
+
+	list := doJSON(t, ts.Client(), http.MethodGet, ts.URL+"/api/nodes?keyword=node.example", token, nil)
+	items := list["data"].(map[string]any)["items"].([]any)
+	if len(items) != 1 {
+		t.Fatalf("management URL search returned %#v", list)
+	}
+	listed := items[0].(map[string]any)
+	if listed["managementUrl"] != "https://node.example:18086/Alien" || listed["host"] != "https://node.example:18086/Alien" {
+		t.Fatalf("unexpected canonical management URL in list: %#v", listed)
+	}
+
+	detail := doJSON(t, ts.Client(), http.MethodGet, ts.URL+"/api/nodes/"+nodeID, token, nil)
+	detailData := detail["data"].(map[string]any)
+	if detailData["managementUrl"] != "https://node.example:18086/Alien" || detailData["host"] != "https://node.example:18086/Alien" || detailData["panelBasePath"] != "/Alien" {
+		t.Fatalf("unexpected canonical management URL in detail: %#v", detailData)
+	}
+
+	updatedStatus, updated := doJSONWithStatus(t, ts.Client(), http.MethodPatch, ts.URL+"/api/nodes/"+nodeID, token, map[string]any{
+		"managementUrl": "http://new-node.example:2053/Panel/",
+	})
+	if updatedStatus != http.StatusOK || updated["code"] != successCode || updated["data"].(map[string]any)["managementUrl"] != "http://new-node.example:2053/Panel" || updated["data"].(map[string]any)["panelBasePath"] != "/Panel" {
+		t.Fatalf("update management URL status=%d response=%#v", updatedStatus, updated)
+	}
+
+	invalidStatus, invalid := doJSONWithStatus(t, ts.Client(), http.MethodPatch, ts.URL+"/api/nodes/"+nodeID, token, map[string]any{
+		"managementUrl": "https://user:pass@node.example/Panel",
+	})
+	if invalidStatus != http.StatusBadRequest || invalid["code"] != validationCode {
+		t.Fatalf("invalid management URL status=%d response=%#v", invalidStatus, invalid)
+	}
+}
+
 func TestNodeAdminGeneratesNodeKeyWhenOmitted(t *testing.T) {
 	server, _ := testServer(t)
 	ts := httptest.NewServer(server.Handler())

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 )
@@ -14,10 +15,13 @@ import (
 // addresses. X-Panel credentials stay on the node and are never entered into
 // the central panel.
 type nodeCreateRequest struct {
-	NodeKey       string   `json:"nodeKey"`
-	Name          string   `json:"name"`
-	Type          string   `json:"type"`
-	Hostname      string   `json:"hostname"`
+	NodeKey       string `json:"nodeKey"`
+	Name          string `json:"name"`
+	Type          string `json:"type"`
+	Hostname      string `json:"hostname"`
+	ManagementURL string `json:"managementUrl"`
+	// PublicIP is retained for older API clients. New UI flows use
+	// managementUrl and keep node exit IPs in the exit_ips asset table.
 	PublicIP      string   `json:"publicIp"`
 	ExitIPs       []string `json:"exitIps"`
 	Region        string   `json:"region"`
@@ -29,6 +33,7 @@ type nodeUpdateRequest struct {
 	Name          *string `json:"name"`
 	Type          *string `json:"type"`
 	Hostname      *string `json:"hostname"`
+	ManagementURL *string `json:"managementUrl"`
 	PublicIP      *string `json:"publicIp"`
 	Region        *string `json:"region"`
 	Provider      *string `json:"provider"`
@@ -43,6 +48,7 @@ type nodeAdminValues struct {
 	Name          string
 	Type          string
 	Hostname      string
+	ManagementURL string
 	PublicIP      string
 	Region        string
 	Provider      string
@@ -70,8 +76,13 @@ func validateNodeMetadata(values nodeAdminValues, requireType bool) error {
 	if values.Type != "" && values.Type != "relay" && values.Type != "landing" && values.Type != "unknown" {
 		return errors.New("type must be relay, landing, or unknown")
 	}
-	if len(values.Hostname) > 255 || len(values.PublicIP) > 100 || len(values.Region) > 120 || len(values.Provider) > 200 {
+	if len(values.Hostname) > 255 || len(values.ManagementURL) > 2048 || len(values.PublicIP) > 100 || len(values.Region) > 120 || len(values.Provider) > 200 {
 		return errors.New("node metadata is too long")
+	}
+	if values.ManagementURL != "" {
+		if _, err := normalizeManagementURL(values.ManagementURL); err != nil {
+			return err
+		}
 	}
 	if values.PublicIP != "" && net.ParseIP(values.PublicIP) == nil {
 		return errors.New("publicIp must be a valid IP address")
@@ -91,6 +102,7 @@ func nodeCreateValues(request nodeCreateRequest) (nodeAdminValues, error) {
 		Name:          strings.TrimSpace(request.Name),
 		Type:          strings.TrimSpace(request.Type),
 		Hostname:      strings.TrimSpace(request.Hostname),
+		ManagementURL: strings.TrimSpace(request.ManagementURL),
 		PublicIP:      strings.TrimSpace(request.PublicIP),
 		Region:        strings.TrimSpace(request.Region),
 		Provider:      strings.TrimSpace(request.Provider),
@@ -116,7 +128,55 @@ func nodeCreateValues(request nodeCreateRequest) (nodeAdminValues, error) {
 		// keeps it easy to copy while avoiding collisions across nodes.
 		values.NodeKey = "node-" + generated[:16]
 	}
+	if values.ManagementURL != "" {
+		normalized, err := normalizeManagementURL(values.ManagementURL)
+		if err != nil {
+			return nodeAdminValues{}, err
+		}
+		values.ManagementURL = normalized
+		values.PanelBasePath = managementURLBasePath(normalized)
+	}
 	return values, validateNodeMetadata(values, true)
+}
+
+// normalizeManagementURL validates and canonicalizes the full browser/X-Panel
+// management URL. It intentionally rejects credentials, queries and fragments
+// so a node record can safely be displayed as a clickable maintenance link.
+func normalizeManagementURL(raw string) (string, error) {
+	value := strings.TrimSpace(raw)
+	if value == "" {
+		return "", nil
+	}
+	if strings.ContainsAny(value, "\r\n\t ") {
+		return "", errors.New("managementUrl must not contain whitespace")
+	}
+	parsed, err := url.Parse(value)
+	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
+		return "", errors.New("managementUrl must be an http or https URL with a host")
+	}
+	if parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
+		return "", errors.New("managementUrl must not contain credentials, query, or fragment")
+	}
+	if parsed.Path == "" {
+		parsed.Path = "/"
+	}
+	parsed.Path = "/" + strings.Trim(strings.TrimSpace(parsed.Path), "/")
+	if parsed.Path == "/" {
+		return parsed.String(), nil
+	}
+	return strings.TrimRight(parsed.String(), "/"), nil
+}
+
+func managementURLBasePath(value string) string {
+	parsed, err := url.Parse(value)
+	if err != nil || parsed.Path == "" {
+		return "/"
+	}
+	path := "/" + strings.Trim(parsed.Path, "/")
+	if path == "/" {
+		return "/"
+	}
+	return path
 }
 
 func nodeAdminData(id string, values nodeAdminValues) map[string]any {
@@ -129,7 +189,7 @@ func nodeAdminData(id string, values nodeAdminValues) map[string]any {
 	}
 	return map[string]any{
 		"id": id, "nodeKey": values.NodeKey, "name": values.Name, "type": values.Type,
-		"hostname": nullableString(values.Hostname), "publicIp": nullableString(values.PublicIP),
+		"hostname": nullableString(values.Hostname), "managementUrl": nullableString(values.ManagementURL), "publicIp": nullableString(values.PublicIP),
 		"region": nullableString(values.Region), "provider": nullableString(values.Provider),
 		"panelBasePath": values.PanelBasePath, "enabled": values.Enabled, "status": status,
 	}
@@ -180,8 +240,8 @@ func (s *Server) createNode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer tx.Rollback()
-	_, err = tx.Exec(`INSERT INTO nodes (id, node_key, name, type, hostname, public_ip, region, provider, panel_base_path, enabled, health_status, created_at, updated_at)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 'unknown', ?, ?)`, nodeID, values.NodeKey, values.Name, values.Type, nullableRouteValue(values.Hostname), nullableRouteValue(values.PublicIP), nullableRouteValue(values.Region), nullableRouteValue(values.Provider), values.PanelBasePath, now, now)
+	_, err = tx.Exec(`INSERT INTO nodes (id, node_key, name, type, hostname, management_url, public_ip, region, provider, panel_base_path, enabled, health_status, created_at, updated_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 'unknown', ?, ?)`, nodeID, values.NodeKey, values.Name, values.Type, nullableRouteValue(values.Hostname), nullableRouteValue(values.ManagementURL), nullableRouteValue(values.PublicIP), nullableRouteValue(values.Region), nullableRouteValue(values.Provider), values.PanelBasePath, now, now)
 	if err != nil {
 		if strings.Contains(strings.ToLower(err.Error()), "unique") {
 			writeFailure(w, http.StatusConflict, validationCode, "nodeKey already exists")
@@ -321,8 +381,8 @@ func (s *Server) updateNode(w http.ResponseWriter, r *http.Request) {
 
 	var existing nodeAdminValues
 	var enabled int
-	err := s.db.QueryRow(`SELECT node_key, name, type, COALESCE(hostname, ''), COALESCE(public_ip, ''), COALESCE(region, ''), COALESCE(provider, ''), COALESCE(panel_base_path, '/'), enabled, health_status
-FROM nodes WHERE id = ? AND deleted_at IS NULL`, id).Scan(&existing.NodeKey, &existing.Name, &existing.Type, &existing.Hostname, &existing.PublicIP, &existing.Region, &existing.Provider, &existing.PanelBasePath, &enabled, &existing.HealthStatus)
+	err := s.db.QueryRow(`SELECT node_key, name, type, COALESCE(hostname, ''), COALESCE(management_url, ''), COALESCE(public_ip, ''), COALESCE(region, ''), COALESCE(provider, ''), COALESCE(panel_base_path, '/'), enabled, health_status
+FROM nodes WHERE id = ? AND deleted_at IS NULL`, id).Scan(&existing.NodeKey, &existing.Name, &existing.Type, &existing.Hostname, &existing.ManagementURL, &existing.PublicIP, &existing.Region, &existing.Provider, &existing.PanelBasePath, &enabled, &existing.HealthStatus)
 	if errors.Is(err, sql.ErrNoRows) {
 		writeFailure(w, http.StatusNotFound, notFoundCode, "node not found")
 		return
@@ -338,7 +398,7 @@ FROM nodes WHERE id = ? AND deleted_at IS NULL`, id).Scan(&existing.NodeKey, &ex
 		writeFailure(w, http.StatusBadRequest, validationCode, "invalid node payload")
 		return
 	}
-	if request.Name == nil && request.Type == nil && request.Hostname == nil && request.PublicIP == nil && request.Region == nil && request.Provider == nil && request.PanelBasePath == nil && request.Enabled == nil {
+	if request.Name == nil && request.Type == nil && request.Hostname == nil && request.ManagementURL == nil && request.PublicIP == nil && request.Region == nil && request.Provider == nil && request.PanelBasePath == nil && request.Enabled == nil {
 		writeFailure(w, http.StatusBadRequest, validationCode, "node update payload is empty")
 		return
 	}
@@ -351,6 +411,18 @@ FROM nodes WHERE id = ? AND deleted_at IS NULL`, id).Scan(&existing.NodeKey, &ex
 	}
 	if request.Hostname != nil {
 		updated.Hostname = strings.TrimSpace(*request.Hostname)
+	}
+	if request.ManagementURL != nil {
+		updated.ManagementURL = strings.TrimSpace(*request.ManagementURL)
+		if updated.ManagementURL != "" {
+			normalized, normalizeErr := normalizeManagementURL(updated.ManagementURL)
+			if normalizeErr != nil {
+				writeFailure(w, http.StatusBadRequest, validationCode, normalizeErr.Error())
+				return
+			}
+			updated.ManagementURL = normalized
+			updated.PanelBasePath = managementURLBasePath(normalized)
+		}
 	}
 	if request.PublicIP != nil {
 		updated.PublicIP = strings.TrimSpace(*request.PublicIP)
@@ -379,8 +451,8 @@ FROM nodes WHERE id = ? AND deleted_at IS NULL`, id).Scan(&existing.NodeKey, &ex
 	}
 
 	now := time.Now().UTC().Format(time.RFC3339Nano)
-	if _, err := s.db.Exec(`UPDATE nodes SET name = ?, type = ?, hostname = ?, public_ip = ?, region = ?, provider = ?, panel_base_path = ?, enabled = ?, updated_at = ? WHERE id = ?`,
-		updated.Name, updated.Type, nullableRouteValue(updated.Hostname), nullableRouteValue(updated.PublicIP), nullableRouteValue(updated.Region), nullableRouteValue(updated.Provider), updated.PanelBasePath, boolInt(updated.Enabled), now, id); err != nil {
+	if _, err := s.db.Exec(`UPDATE nodes SET name = ?, type = ?, hostname = ?, management_url = ?, public_ip = ?, region = ?, provider = ?, panel_base_path = ?, enabled = ?, updated_at = ? WHERE id = ?`,
+		updated.Name, updated.Type, nullableRouteValue(updated.Hostname), nullableRouteValue(updated.ManagementURL), nullableRouteValue(updated.PublicIP), nullableRouteValue(updated.Region), nullableRouteValue(updated.Provider), updated.PanelBasePath, boolInt(updated.Enabled), now, id); err != nil {
 		writeFailure(w, http.StatusInternalServerError, internalErrorCode, "could not update node")
 		return
 	}

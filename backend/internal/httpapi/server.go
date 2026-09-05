@@ -824,9 +824,9 @@ func (s *Server) nodes(w http.ResponseWriter, r *http.Request) {
 	where := []string{"n.deleted_at IS NULL"}
 	args := make([]any, 0, 4)
 	if query.keyword != "" {
-		where = append(where, `(n.name LIKE ? OR n.hostname LIKE ? OR n.public_ip LIKE ?)`)
+		where = append(where, `(n.name LIKE ? OR n.hostname LIKE ? OR n.management_url LIKE ? OR n.public_ip LIKE ?)`)
 		like := "%" + query.keyword + "%"
-		args = append(args, like, like, like)
+		args = append(args, like, like, like, like)
 	}
 	if query.status != "" && query.status != "all" {
 		if query.status == "disabled" {
@@ -847,7 +847,7 @@ func (s *Server) nodes(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	rows, err := s.db.Query(`SELECT n.id, n.name, n.type, n.health_status, n.enabled,
-COALESCE(NULLIF(n.public_ip, ''), n.hostname, ''), COALESCE(n.xpanel_version, ''), COALESCE(n.xray_version, ''),
+COALESCE(n.management_url, ''), COALESCE(NULLIF(n.management_url, ''), NULLIF(n.public_ip, ''), n.hostname, ''), COALESCE(n.xpanel_version, ''), COALESCE(n.xray_version, ''),
 COALESCE(n.cpu_usage, 0), COALESCE(n.memory_used, 0), COALESCE(n.memory_total, 0), COALESCE(n.disk_used, 0), COALESCE(n.disk_total, 0),
 COALESCE(n.last_seen_at, ''), COALESCE((SELECT COALESCE(sr.finished_at, sr.started_at) FROM sync_runs sr WHERE sr.node_id = n.id AND sr.status = 'success'
 ORDER BY COALESCE(sr.finished_at, sr.started_at) DESC LIMIT 1), ''), COALESCE((SELECT SUM(c.monthly_amount) FROM node_costs c WHERE c.node_id = n.id AND c.currency = 'CNY'
@@ -861,12 +861,12 @@ COALESCE((SELECT COUNT(*) FROM exit_ips e WHERE COALESCE(e.owner_node_id, e.land
 	defer rows.Close()
 	items := make([]map[string]any, 0)
 	for rows.Next() {
-		var id, name, nodeType, status, host, xpanel, xray, lastSeen, lastSync string
+		var id, name, nodeType, status, managementURL, host, xpanel, xray, lastSeen, lastSync string
 		var enabled int
 		var cpuUsage, memoryUsed, memoryTotal, diskUsed, diskTotal float64
 		var exitIPCount int
 		var monthlyCost float64
-		if err := rows.Scan(&id, &name, &nodeType, &status, &enabled, &host, &xpanel, &xray, &cpuUsage, &memoryUsed, &memoryTotal, &diskUsed, &diskTotal, &lastSeen, &lastSync, &monthlyCost, &exitIPCount); err != nil {
+		if err := rows.Scan(&id, &name, &nodeType, &status, &enabled, &managementURL, &host, &xpanel, &xray, &cpuUsage, &memoryUsed, &memoryTotal, &diskUsed, &diskTotal, &lastSeen, &lastSync, &monthlyCost, &exitIPCount); err != nil {
 			writeFailure(w, http.StatusInternalServerError, internalErrorCode, "could not decode nodes")
 			return
 		}
@@ -875,7 +875,7 @@ COALESCE((SELECT COUNT(*) FROM exit_ips e WHERE COALESCE(e.owner_node_id, e.land
 			displayStatus = "disabled"
 		}
 		items = append(items, map[string]any{
-			"id": id, "name": name, "type": nodeType, "status": displayStatus, "enabled": enabled == 1, "host": host,
+			"id": id, "name": name, "type": nodeType, "status": displayStatus, "enabled": enabled == 1, "host": host, "managementUrl": nullableString(managementURL),
 			"xpanelVersion": nullableString(xpanel), "xrayVersion": nullableString(xray),
 			"cpuUsage": cpuUsage, "memoryUsed": memoryUsed, "memoryTotal": memoryTotal, "diskUsed": diskUsed, "diskTotal": diskTotal,
 			"lastSeenAt": nullableString(lastSeen), "lastSyncAt": nullableString(lastSync), "monthlyCost": monthlyCost, "currency": "CNY", "exitIpCount": exitIPCount,
@@ -896,14 +896,14 @@ func (s *Server) nodeDetail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var nodeID, nodeKey, name, nodeType, status, hostname, publicIP, region, provider, panelBasePath, agentVersion, xpanelVersion, xrayVersion, lastSeen, lastSync, dataAt string
+	var nodeID, nodeKey, name, nodeType, status, hostname, managementURL, publicIP, region, provider, panelBasePath, agentVersion, xpanelVersion, xrayVersion, lastSeen, lastSync, dataAt string
 	var cpuUsage sql.NullFloat64
 	var memoryUsed, memoryTotal, diskUsed, diskTotal sql.NullInt64
 	var enabled int
 	var userCount int
 	var trafficBytes int64
 	err := s.db.QueryRow(`SELECT n.id, n.node_key, n.name, n.type, n.health_status,
-COALESCE(n.hostname, ''), COALESCE(n.public_ip, ''), COALESCE(n.region, ''), COALESCE(n.provider, ''),
+	COALESCE(n.hostname, ''), COALESCE(n.management_url, ''), COALESCE(n.public_ip, ''), COALESCE(n.region, ''), COALESCE(n.provider, ''),
 COALESCE(n.panel_base_path, ''), COALESCE(n.agent_version, ''), COALESCE(n.xpanel_version, ''), COALESCE(n.xray_version, ''),
  n.cpu_usage, n.memory_used, n.memory_total, n.disk_used, n.disk_total,
 COALESCE(n.last_seen_at, ''),
@@ -916,7 +916,7 @@ ORDER BY COALESCE(sr.finished_at, sr.started_at) DESC LIMIT 1), ''),
 COALESCE((SELECT SUM(COALESCE(i.up, 0) + COALESCE(i.down, 0)) FROM inbounds i WHERE i.node_id = n.id AND i.deleted_at IS NULL), 0),
 n.enabled
 FROM nodes n WHERE n.id = ? AND n.deleted_at IS NULL`, id).Scan(&nodeID, &nodeKey, &name, &nodeType, &status,
-		&hostname, &publicIP, &region, &provider, &panelBasePath, &agentVersion, &xpanelVersion, &xrayVersion,
+		&hostname, &managementURL, &publicIP, &region, &provider, &panelBasePath, &agentVersion, &xpanelVersion, &xrayVersion,
 		&cpuUsage, &memoryUsed, &memoryTotal, &diskUsed, &diskTotal,
 		&lastSeen, &lastSync, &dataAt, &userCount, &trafficBytes, &enabled)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -934,7 +934,7 @@ FROM nodes n WHERE n.id = ? AND n.deleted_at IS NULL`, id).Scan(&nodeID, &nodeKe
 
 	result := map[string]any{
 		"id": nodeID, "nodeKey": nodeKey, "name": name, "type": nodeType, "status": status,
-		"host": firstNonEmpty(publicIP, hostname), "hostname": nullableString(hostname), "publicIp": nullableString(publicIP),
+		"host": firstNonEmpty(managementURL, publicIP, hostname), "managementUrl": nullableString(managementURL), "hostname": nullableString(hostname), "publicIp": nullableString(publicIP),
 		"region": nullableString(region), "provider": nullableString(provider), "panelBasePath": nullableString(panelBasePath),
 		"agentVersion": nullableString(agentVersion), "xpanelVersion": nullableString(xpanelVersion), "xrayVersion": nullableString(xrayVersion),
 		"cpuUsage": nullableFloat(cpuUsage), "memoryUsed": nullableInt(memoryUsed), "memoryTotal": nullableInt(memoryTotal),

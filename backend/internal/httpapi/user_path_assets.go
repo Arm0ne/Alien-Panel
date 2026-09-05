@@ -30,10 +30,10 @@ func (s *Server) userPathAssets(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var relayID, relayName, relayType, relayStatus, relayHost, relayLastSeen, relayLastSync string
+	var relayID, relayName, relayType, relayStatus, relayManagementURL, relayHost, relayLastSeen, relayLastSync string
 	var relayEnabled int
 	err := s.db.QueryRow(`SELECT n.id, n.name, n.type, n.health_status, n.enabled,
-COALESCE(NULLIF(n.public_ip, ''), n.hostname, ''), COALESCE(n.last_seen_at, ''),
+COALESCE(n.management_url, ''), COALESCE(NULLIF(n.management_url, ''), NULLIF(n.public_ip, ''), n.hostname, ''), COALESCE(n.last_seen_at, ''),
 COALESCE((SELECT COALESCE(sr.finished_at, sr.started_at) FROM sync_runs sr
  WHERE sr.node_id = n.id AND sr.status = 'success'
  ORDER BY COALESCE(sr.finished_at, sr.started_at) DESC LIMIT 1), '')
@@ -43,7 +43,7 @@ JOIN nodes n ON n.id = i.node_id
 WHERE ui.user_id = ? AND ui.is_primary = 1 AND ui.active_to IS NULL
   AND i.deleted_at IS NULL AND i.enable = 1 AND i.kind = 'user'
   AND n.type = 'relay' AND n.deleted_at IS NULL`, userID).Scan(
-		&relayID, &relayName, &relayType, &relayStatus, &relayEnabled, &relayHost, &relayLastSeen, &relayLastSync,
+		&relayID, &relayName, &relayType, &relayStatus, &relayEnabled, &relayManagementURL, &relayHost, &relayLastSeen, &relayLastSync,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		writeFailure(w, http.StatusConflict, validationCode, "user has no active primary inbound")
@@ -85,7 +85,7 @@ WHERE ui.user_id = ? AND ui.is_primary = 1 AND ui.active_to IS NULL
 	dataAt := s.latestSuccessfulSyncAt()
 	relayData := map[string]any{
 		"id": relayID, "name": relayName, "type": relayType, "status": relayStatus,
-		"enabled": relayEnabled == 1, "host": relayHost,
+		"enabled": relayEnabled == 1, "host": relayHost, "managementUrl": nullableString(relayManagementURL),
 		"lastSeenAt": nullableString(relayLastSeen), "lastSyncAt": nullableString(relayLastSync),
 	}
 	writeSuccess(w, map[string]any{
@@ -100,7 +100,7 @@ WHERE ui.user_id = ? AND ui.is_primary = 1 AND ui.active_to IS NULL
 
 func (s *Server) readLandingPathAssets() ([]map[string]any, error) {
 	rows, err := s.db.Query(`SELECT n.id, n.name, n.type, n.health_status, n.enabled,
-COALESCE(NULLIF(n.public_ip, ''), n.hostname, ''), COALESCE(n.last_seen_at, ''),
+COALESCE(n.management_url, ''), COALESCE(NULLIF(n.management_url, ''), NULLIF(n.public_ip, ''), n.hostname, ''), COALESCE(n.last_seen_at, ''),
 COALESCE((SELECT COALESCE(sr.finished_at, sr.started_at) FROM sync_runs sr
  WHERE sr.node_id = n.id AND sr.status = 'success'
  ORDER BY COALESCE(sr.finished_at, sr.started_at) DESC LIMIT 1), '')
@@ -109,18 +109,18 @@ FROM nodes n WHERE n.type = 'landing' AND n.deleted_at IS NULL ORDER BY n.name A
 		return nil, err
 	}
 	type landingNodeRow struct {
-		id, name, nodeType, status, host, lastSeen, lastSync string
-		enabled                                              int
+		id, name, nodeType, status, managementURL, host, lastSeen, lastSync string
+		enabled                                                             int
 	}
 	nodeRows := make([]landingNodeRow, 0)
 	for rows.Next() {
-		var id, name, nodeType, status, host, lastSeen, lastSync string
+		var id, name, nodeType, status, managementURL, host, lastSeen, lastSync string
 		var enabled int
-		if err := rows.Scan(&id, &name, &nodeType, &status, &enabled, &host, &lastSeen, &lastSync); err != nil {
+		if err := rows.Scan(&id, &name, &nodeType, &status, &enabled, &managementURL, &host, &lastSeen, &lastSync); err != nil {
 			_ = rows.Close()
 			return nil, err
 		}
-		nodeRows = append(nodeRows, landingNodeRow{id: id, name: name, nodeType: nodeType, status: status, enabled: enabled, host: host, lastSeen: lastSeen, lastSync: lastSync})
+		nodeRows = append(nodeRows, landingNodeRow{id: id, name: name, nodeType: nodeType, status: status, enabled: enabled, managementURL: managementURL, host: host, lastSeen: lastSeen, lastSync: lastSync})
 	}
 	if err := rows.Err(); err != nil {
 		_ = rows.Close()
@@ -136,7 +136,7 @@ FROM nodes n WHERE n.type = 'landing' AND n.deleted_at IS NULL ORDER BY n.name A
 		if status == "" {
 			status = "unknown"
 		}
-		id, name, nodeType, enabled, host, lastSeen, lastSync := node.id, node.name, node.nodeType, node.enabled, node.host, node.lastSeen, node.lastSync
+		id, name, nodeType, enabled, managementURL, host, lastSeen, lastSync := node.id, node.name, node.nodeType, node.enabled, node.managementURL, node.host, node.lastSeen, node.lastSync
 		inbounds, inboundState, err := s.readLandingPathInbounds(id, lastSync)
 		if err != nil {
 			return nil, err
@@ -146,7 +146,7 @@ FROM nodes n WHERE n.type = 'landing' AND n.deleted_at IS NULL ORDER BY n.name A
 			return nil, err
 		}
 		items = append(items, map[string]any{
-			"id": id, "name": name, "type": nodeType, "status": status, "enabled": enabled == 1, "host": host,
+			"id": id, "name": name, "type": nodeType, "status": status, "enabled": enabled == 1, "host": host, "managementUrl": nullableString(managementURL),
 			"lastSeenAt": nullableString(lastSeen), "lastSyncAt": nullableString(lastSync),
 			"inboundState": inboundState, "inbounds": inbounds, "exitIps": exitIPs,
 		})

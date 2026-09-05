@@ -1,0 +1,1 @@
+import{Ii as e,Ki as t,ji as n}from"./router-sWkMTNCb.js";import{t as r}from"./exception-base-fx8OSlC2.js";var i=e({name:`404`,__name:`index`,setup(e){return(e,i)=>{let a=r;return t(),n(a,{type:`404`})}}});export{i as default};
