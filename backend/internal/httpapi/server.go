@@ -82,6 +82,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /api/dashboard", s.requireAuth(http.HandlerFunc(s.dashboard)))
 	mux.Handle("GET /api/users", s.requireAuth(http.HandlerFunc(s.users)))
 	mux.Handle("GET /api/users/{id}", s.requireAuth(http.HandlerFunc(s.userDetail)))
+	mux.Handle("GET /api/users/{id}/traffic", s.requireAuth(http.HandlerFunc(s.userTraffic)))
 	mux.Handle("GET /api/users/{id}/path-assets", s.requireAuth(http.HandlerFunc(s.userPathAssets)))
 	mux.Handle("PATCH /api/users/{id}", s.requireAuth(http.HandlerFunc(s.updateUser)))
 	mux.Handle("PUT /api/users/{id}/path", s.requireAuth(http.HandlerFunc(s.assignUserPath)))

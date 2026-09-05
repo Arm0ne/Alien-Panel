@@ -807,6 +807,62 @@ func TestDashboardUsesTrafficDeltas(t *testing.T) {
 	}
 }
 
+func TestUserTrafficTrendUsesRelayInboundDeltas(t *testing.T) {
+	server, database := testServer(t)
+	now := time.Now().UTC()
+	nowText := now.Format(time.RFC3339Nano)
+	statements := []struct {
+		query string
+		args  []any
+	}{
+		{"INSERT INTO nodes (id, node_key, name, type, health_status, created_at, updated_at) VALUES ('trend-relay', 'trend-relay', '趋势线路机', 'relay', 'online', ?, ?)", []any{nowText, nowText}},
+		{"INSERT INTO nodes (id, node_key, name, type, health_status, created_at, updated_at) VALUES ('trend-landing', 'trend-landing', '趋势落地机', 'landing', 'online', ?, ?)", []any{nowText, nowText}},
+		{"INSERT INTO users (id, display_name, status, created_at, updated_at) VALUES ('trend-user', '流量趋势用户', 'active', ?, ?)", []any{nowText, nowText}},
+		{"INSERT INTO inbounds (id, node_id, remote_inbound_id, user_id, kind, tag, first_seen_at, last_seen_at) VALUES ('trend-relay-inbound', 'trend-relay', 'trend-relay-1', 'trend-user', 'user', 'trend-relay-inbound', ?, ?)", []any{nowText, nowText}},
+		{"INSERT INTO inbounds (id, node_id, remote_inbound_id, kind, tag, first_seen_at, last_seen_at) VALUES ('trend-landing-inbound', 'trend-landing', 'trend-landing-1', 'infrastructure', 'trend-landing-inbound', ?, ?)", []any{nowText, nowText}},
+		{"INSERT INTO user_inbounds (id, user_id, inbound_id, is_primary, active_from) VALUES ('trend-mapping', 'trend-user', 'trend-relay-inbound', 1, ?)", []any{nowText}},
+		{"INSERT INTO traffic_snapshots (id, node_id, inbound_id, collected_at, up, down, all_time, source) VALUES ('trend-s1', 'trend-relay', 'trend-relay-inbound', ?, 100, 200, 300, 'xpanel')", []any{now.Add(-50 * time.Minute).Format(time.RFC3339Nano)}},
+		{"INSERT INTO traffic_snapshots (id, node_id, inbound_id, collected_at, up, down, all_time, source) VALUES ('trend-s2', 'trend-relay', 'trend-relay-inbound', ?, 300, 500, 800, 'xpanel')", []any{now.Add(-40 * time.Minute).Format(time.RFC3339Nano)}},
+		{"INSERT INTO traffic_snapshots (id, node_id, inbound_id, collected_at, up, down, all_time, source) VALUES ('trend-s3', 'trend-relay', 'trend-relay-inbound', ?, 600, 900, 1500, 'xpanel')", []any{now.Add(-30 * time.Minute).Format(time.RFC3339Nano)}},
+		{"INSERT INTO traffic_snapshots (id, node_id, inbound_id, collected_at, up, down, all_time, source, reset_detected) VALUES ('trend-s4', 'trend-relay', 'trend-relay-inbound', ?, 10, 20, 30, 'xpanel', 1)", []any{now.Add(-20 * time.Minute).Format(time.RFC3339Nano)}},
+	}
+	for _, statement := range statements {
+		if _, err := database.Exec(statement.query, statement.args...); err != nil {
+			t.Fatalf("seed traffic trend data: %v", err)
+		}
+	}
+
+	ts := httptest.NewServer(server.Handler())
+	defer ts.Close()
+	login := doJSON(t, ts.Client(), http.MethodPost, ts.URL+"/api/auth/login", "", map[string]string{"userName": "admin", "password": "test-password"})
+	token := login["data"].(map[string]any)["token"].(string)
+
+	trend := doJSON(t, ts.Client(), http.MethodGet, ts.URL+"/api/users/trend-user/traffic?range=1h", token, nil)
+	if trend["code"] != successCode {
+		t.Fatalf("traffic trend response = %#v", trend)
+	}
+	data := trend["data"].(map[string]any)
+	if data["range"] != "1h" || data["bucket"] != "1m" {
+		t.Fatalf("traffic trend metadata = %#v", data)
+	}
+	points := data["points"].([]any)
+	if len(points) != 3 {
+		t.Fatalf("traffic trend points = %d, want 3", len(points))
+	}
+	summary := data["summary"].(map[string]any)
+	if summary["uploadBytes"] != float64(510) || summary["downloadBytes"] != float64(720) || summary["totalBytes"] != float64(1230) {
+		t.Fatalf("traffic trend summary = %#v", summary)
+	}
+	if points[2].(map[string]any)["resetDetected"] != true {
+		t.Fatalf("reset flag missing from trend point = %#v", points[2])
+	}
+
+	invalid := doJSON(t, ts.Client(), http.MethodGet, ts.URL+"/api/users/trend-user/traffic?range=30d", token, nil)
+	if invalid["code"] != validationCode {
+		t.Fatalf("invalid range response = %#v", invalid)
+	}
+}
+
 func TestOperationalStatusRefresh(t *testing.T) {
 	server, database := testServer(t)
 	now := time.Now().UTC()

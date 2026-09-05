@@ -174,6 +174,32 @@ paths:
                 $ref: '#/components/schemas/EnvelopeUserDetail'
         '400': { description: Validation failed }
         '404': { description: User not found }
+  /users/{id}/traffic:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema: { type: string }
+      - name: range
+        in: query
+        required: false
+        description: Time window and aggregation granularity.
+        schema: { type: string, enum: [1h, 6h, 1d, 7d], default: 1h }
+    get:
+      summary: Read a user's rate-based traffic trend
+      description: >-
+        Reads only the primary user Inbound on a relay node. Cumulative X-Panel
+        snapshots are converted to upload/download deltas and rates; landing
+        infrastructure Inbounds are excluded.
+      responses:
+        '200':
+          description: Traffic trend points and summary
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EnvelopeUserTrafficTrend'
+        '400': { description: Invalid range }
+        '404': { description: User not found }
   /users/{id}/route:
     parameters:
       - name: id
@@ -916,6 +942,51 @@ components:
         code: { type: string, example: '0000' }
         msg: { type: string, example: ok }
         data: { $ref: '#/components/schemas/UserDetail' }
+    EnvelopeUserTrafficTrend:
+      type: object
+      required: [code, msg, data]
+      properties:
+        code: { type: string, example: '0000' }
+        msg: { type: string, example: ok }
+        data: { $ref: '#/components/schemas/UserTrafficTrend' }
+    UserTrafficTrend:
+      type: object
+      required: [range, from, to, bucket, dataAt, points, summary]
+      properties:
+        range: { type: string, enum: [1h, 6h, 1d, 7d] }
+        from: { type: string, format: date-time }
+        to: { type: string, format: date-time }
+        bucket: { type: string, enum: [1m, 5m, 15m, 1h] }
+        dataAt: { type: [string, 'null'], format: date-time }
+        points:
+          type: array
+          items: { $ref: '#/components/schemas/UserTrafficPoint' }
+        summary: { $ref: '#/components/schemas/UserTrafficSummary' }
+    UserTrafficPoint:
+      type: object
+      required: [time, uploadBytes, downloadBytes, uploadRate, downloadRate, sampleCount, resetDetected, hasGap]
+      properties:
+        time: { type: string, format: date-time }
+        uploadBytes: { type: integer, format: int64 }
+        downloadBytes: { type: integer, format: int64 }
+        uploadRate: { type: number, format: double }
+        downloadRate: { type: number, format: double }
+        sampleCount: { type: integer, minimum: 0 }
+        resetDetected: { type: boolean }
+        hasGap: { type: boolean }
+    UserTrafficSummary:
+      type: object
+      required: [uploadBytes, downloadBytes, totalBytes, averageUploadRate, averageDownloadRate, peakUploadRate, peakDownloadRate, sampleCount, coverage]
+      properties:
+        uploadBytes: { type: integer, format: int64 }
+        downloadBytes: { type: integer, format: int64 }
+        totalBytes: { type: integer, format: int64 }
+        averageUploadRate: { type: number, format: double }
+        averageDownloadRate: { type: number, format: double }
+        peakUploadRate: { type: number, format: double }
+        peakDownloadRate: { type: number, format: double }
+        sampleCount: { type: integer, minimum: 0 }
+        coverage: { type: number, format: double, minimum: 0, maximum: 1 }
     EnvelopeUserPathAssets:
       type: object
       required: [code, msg, data]
