@@ -8,16 +8,18 @@ func TestDisplayVersion(t *testing.T) {
 		Version, Commit = originalVersion, originalCommit
 	})
 
-	Version, Commit = "release-abc123", "abc123"
-	if got := DisplayVersion(); got != "release-abc123" {
-		t.Fatalf("DisplayVersion() = %q, want release-abc123", got)
+	Version, Commit = "v1.0.1", "abc123"
+	if got := DisplayVersion(); got != "v1.0.1" {
+		t.Fatalf("DisplayVersion() = %q, want v1.0.1", got)
 	}
-	Version, Commit = "v0.1.0", "abc123"
-	if got := DisplayVersion(); got != "v0.1.0 (abc123)" {
-		t.Fatalf("DisplayVersion() = %q, want v0.1.0 (abc123)", got)
+	if got := BuildIdentity(); got != "v1.0.1 (abc123)" {
+		t.Fatalf("BuildIdentity() = %q, want v1.0.1 (abc123)", got)
 	}
 	Version, Commit = "", ""
 	if got := DisplayVersion(); got != "dev" {
 		t.Fatalf("DisplayVersion() = %q, want dev", got)
+	}
+	if got := BuildIdentity(); got != "dev" {
+		t.Fatalf("BuildIdentity() = %q, want dev", got)
 	}
 }

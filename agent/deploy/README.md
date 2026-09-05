@@ -22,6 +22,16 @@ service. X-Panel credentials are read from `/dev/tty` so the command also
 works when the script is piped from `curl`; they are never sent to the central
 panel. The installer token expires after 15 minutes and cannot be reused.
 
+## Agent version releases
+
+The version shown in the central panel and by `xpanel-agent --version` comes
+from [`agent/VERSION`](../VERSION). Before making a new Agent release, update
+that file to the next semantic version (for example `v1.0.2`), run
+`deploy/build-bundle.ps1`, and commit the regenerated `release/xpanel-agent`
+and `release/xpanel-agent.sha256` files. The build commit remains in the Agent
+startup log for diagnostics, but is not presented as its operator-facing
+version.
+
 Build a static Linux binary from the `agent/` directory and copy it to
 `/usr/local/bin/xpanel-agent` on the node. Then run `install.sh` as root.
 

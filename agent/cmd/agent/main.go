@@ -57,7 +57,7 @@ func main() {
 		logger.Error("create agent runner", "error", err)
 		os.Exit(1)
 	}
-	logger.Info("agent started", "node_key", cfg.NodeKey, "node_type", cfg.NodeType, "agent_version", buildinfo.DisplayVersion())
+	logger.Info("agent started", "node_key", cfg.NodeKey, "node_type", cfg.NodeType, "agent_version", buildinfo.DisplayVersion(), "agent_build", buildinfo.BuildIdentity())
 
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)

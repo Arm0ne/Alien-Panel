@@ -11,3 +11,6 @@ powershell -ExecutionPolicy Bypass -File .\deploy\build-bundle.ps1
 ```
 
 Commit the updated files before running the GitHub one-command installer.
+
+The Agent's displayed version comes from `agent/VERSION`. Update it to the
+next semantic version before rebuilding a release bundle.

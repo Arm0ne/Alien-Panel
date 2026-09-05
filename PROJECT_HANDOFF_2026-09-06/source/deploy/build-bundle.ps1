@@ -10,8 +10,14 @@ $Frontend = Join-Path $Root 'frontend'
 $Deploy = Join-Path $Root 'deploy'
 $Release = Join-Path $Root 'release'
 $FrontendDist = Join-Path $Deploy 'frontend-dist'
-$AgentVersion = (git -C $Root describe --tags --always --dirty 2>$null).Trim()
-if ([string]::IsNullOrWhiteSpace($AgentVersion)) { $AgentVersion = 'dev' }
+$AgentVersionFile = Join-Path $Root 'agent/VERSION'
+if (-not (Test-Path -LiteralPath $AgentVersionFile)) {
+  throw "Agent version file is missing: $AgentVersionFile"
+}
+$AgentVersion = (Get-Content -LiteralPath $AgentVersionFile -Raw).Trim()
+if ($AgentVersion -notmatch '^v\d+\.\d+\.\d+(?:-[0-9A-Za-z]+(?:\.[0-9A-Za-z]+)*)?(?:\+[0-9A-Za-z]+(?:\.[0-9A-Za-z]+)*)?$') {
+  throw "Agent version must use semantic versioning, for example v1.0.1: $AgentVersion"
+}
 $AgentCommit = (git -C $Root rev-parse --short=12 HEAD 2>$null).Trim()
 $AgentBuildTime = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
 $AgentLdFlags = "-X xpanel-central/agent/internal/buildinfo.Version=$AgentVersion -X xpanel-central/agent/internal/buildinfo.Commit=$AgentCommit -X xpanel-central/agent/internal/buildinfo.BuildTime=$AgentBuildTime"

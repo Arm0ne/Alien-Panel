@@ -12,14 +12,21 @@ var (
 	BuildTime = ""
 )
 
-// DisplayVersion is stable enough to store on the central service and show to
-// operators. Version normally contains a Git describe value; commit is added
-// only when it is not already part of that value.
+// DisplayVersion is the released semantic version stored on the central
+// service and shown to operators.
 func DisplayVersion() string {
 	version := strings.TrimSpace(Version)
 	if version == "" {
 		version = "dev"
 	}
+	return version
+}
+
+// BuildIdentity adds the source commit to the release version for diagnostic
+// logs. It is intentionally separate from DisplayVersion so the UI does not
+// expose an implementation-specific build identifier as the Agent version.
+func BuildIdentity() string {
+	version := DisplayVersion()
 	commit := strings.TrimSpace(Commit)
 	if commit == "" || strings.Contains(version, commit) {
 		return version
