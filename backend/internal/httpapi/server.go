@@ -1043,7 +1043,7 @@ FROM exit_ips e WHERE COALESCE(e.owner_node_id, e.landing_node_id) = ? ORDER BY 
 
 	syncRuns := make([]map[string]any, 0)
 	rows, err = s.db.Query(`SELECT id, sync_id, started_at, COALESCE(finished_at, ''), status, inbound_count, client_count, COALESCE(error_message, '')
-FROM sync_runs WHERE node_id = ? ORDER BY started_at DESC LIMIT 20`, id)
+FROM sync_runs WHERE node_id = ? ORDER BY started_at DESC LIMIT 5`, id)
 	if err != nil {
 		writeFailure(w, http.StatusInternalServerError, internalErrorCode, "could not read node sync runs")
 		return
