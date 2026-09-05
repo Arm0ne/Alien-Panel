@@ -43,6 +43,13 @@ func TestAgentExpiryExtensionCreatesConfirmableRenewal(t *testing.T) {
 	if count != 1 {
 		t.Fatalf("pending renewal count = %d, want 1", count)
 	}
+	var renewalEvents int
+	if err := database.QueryRow(`SELECT COUNT(*) FROM node_events WHERE event_type = 'renewal_candidate_detected' AND requires_action = 1`).Scan(&renewalEvents); err != nil {
+		t.Fatal(err)
+	}
+	if renewalEvents != 1 {
+		t.Fatalf("renewal event count = %d, want 1", renewalEvents)
+	}
 
 	login := doJSON(t, ts.Client(), http.MethodPost, ts.URL+"/api/auth/login", "", map[string]string{"userName": "admin", "password": "test-password"})
 	token := login["data"].(map[string]any)["token"].(string)
@@ -52,6 +59,11 @@ func TestAgentExpiryExtensionCreatesConfirmableRenewal(t *testing.T) {
 		t.Fatalf("renewal list = %#v", list)
 	}
 	candidateID := items[0].(map[string]any)["id"].(string)
+	events := doJSON(t, ts.Client(), http.MethodGet, ts.URL+"/api/events?status=pending", token, nil)
+	eventData := events["data"].(map[string]any)
+	if events["code"] != successCode || eventData["total"] != float64(1) {
+		t.Fatalf("pending events = %#v", events)
+	}
 	confirmed := doJSON(t, ts.Client(), http.MethodPost, ts.URL+"/api/users/billing-user/renewals/"+candidateID+"/confirm", token, map[string]any{"amount": 1080, "billingCycle": "annual"})
 	if confirmed["code"] != successCode {
 		t.Fatalf("renewal confirmation = %#v", confirmed)
@@ -65,6 +77,10 @@ func TestAgentExpiryExtensionCreatesConfirmableRenewal(t *testing.T) {
 	}
 	if records != 1 || pending != 0 {
 		t.Fatalf("billing records=%d pending=%d", records, pending)
+	}
+	counts := doJSON(t, ts.Client(), http.MethodGet, ts.URL+"/api/events/summary", token, nil)
+	if counts["code"] != successCode || counts["data"].(map[string]any)["pendingCount"] != float64(0) {
+		t.Fatalf("event summary after confirmation = %#v", counts)
 	}
 }
 

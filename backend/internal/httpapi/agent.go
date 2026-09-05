@@ -333,7 +333,11 @@ ON CONFLICT(node_id, remote_inbound_id) DO UPDATE SET tag = excluded.tag, remark
 			return
 		}
 		if resetDetected {
-			_, err := tx.Exec(`INSERT INTO node_events (id, node_id, event_type, severity, message, created_at) VALUES (?, ?, 'traffic_reset', 'warning', ?, ?)`, newID(), principal.NodeID, "Inbound "+remoteInboundID+" cumulative traffic moved backwards; a new baseline was recorded", now)
+			err := insertNodeEventTx(tx, nodeEventSpec{
+				NodeID: principal.NodeID, EventType: "traffic_reset", Category: "node", Severity: "warning",
+				Title: "流量累计值发生回退", Message: "Inbound " + remoteInboundID + " 累计流量回退，已建立新基线",
+				ResourceType: "inbound", ResourceID: inboundID, ActionType: "inspect_traffic", Source: "agent", CorrelationID: syncRunID, OccurredAt: observedAt,
+			})
 			if err != nil {
 				s.failSync(w, tx, syncRunID, fmt.Errorf("record traffic reset %s: %w", remoteInboundID, err))
 				return
@@ -366,11 +370,23 @@ ON CONFLICT(node_id, inbound_id, remote_client_id) DO UPDATE SET email = exclude
 		s.failSync(w, tx, syncRunID, fmt.Errorf("mark or archive missing inbounds: %w", err))
 		return
 	}
+	var previousHealth string
+	_ = tx.QueryRow(`SELECT health_status FROM nodes WHERE id = ?`, principal.NodeID).Scan(&previousHealth)
+	newHealth := healthStatus(payload.Status.XrayRunning)
 	if _, err := tx.Exec(`UPDATE nodes SET health_status = ?, xpanel_version = CASE WHEN ? <> '' THEN ? ELSE xpanel_version END, xray_version = CASE WHEN ? <> '' THEN ? ELSE xray_version END,
 cpu_usage = ?, memory_used = ?, memory_total = ?, disk_used = ?, disk_total = ?, last_seen_at = ?, updated_at = ? WHERE id = ?`, healthStatus(payload.Status.XrayRunning), payload.Status.XPanelVersion, payload.Status.XPanelVersion, payload.Status.XrayVersion, payload.Status.XrayVersion,
 		payload.Status.CPUUsage, nullableMetric(payload.Status.MemoryUsed), nullableMetric(payload.Status.MemoryTotal), nullableMetric(payload.Status.DiskUsed), nullableMetric(payload.Status.DiskTotal), observedAt.Format(time.RFC3339Nano), now, principal.NodeID); err != nil {
 		s.failSync(w, tx, syncRunID, fmt.Errorf("update node after sync: %w", err))
 		return
+	}
+	if previousHealth == "offline" && newHealth != "offline" {
+		if err := insertNodeEventTx(tx, nodeEventSpec{
+			NodeID: principal.NodeID, EventType: "node_recovered", Category: "node", Severity: "info", Title: "节点已恢复在线",
+			Message: "节点已重新完成 Agent 同步", ResourceType: "node", ResourceID: principal.NodeID, Source: "agent", CorrelationID: syncRunID, OccurredAt: observedAt,
+		}); err != nil {
+			s.failSync(w, tx, syncRunID, fmt.Errorf("record node recovery: %w", err))
+			return
+		}
 	}
 	if _, err := tx.Exec(`UPDATE sync_runs SET finished_at = ?, status = 'success', inbound_count = ?, client_count = ? WHERE id = ?`, now, len(payload.Inbounds), clientCount, syncRunID); err != nil {
 		s.failSync(w, tx, syncRunID, fmt.Errorf("finish sync run: %w", err))
@@ -475,6 +491,32 @@ VALUES (?, ?, ?, ?, ?, ?)`, userID, inboundDisplayName(inbound, remoteInboundID)
 VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'CNY', 'pending')`, newID(), userID, inboundID, candidateOldExpiry, expiryText, now, billingCycle, suggestedAmount); err != nil {
 					return fmt.Errorf("record renewal candidate: %w", err)
 				}
+				var candidateID string
+				if err := tx.QueryRow(`SELECT id FROM user_renewal_candidates WHERE user_id = ? AND inbound_id = ? AND new_expiry_at = ?`, userID, inboundID, expiryText).Scan(&candidateID); err != nil {
+					return fmt.Errorf("read renewal candidate: %w", err)
+				}
+				payload := map[string]any{
+					"candidateId": candidateID, "userId": userID, "inboundId": inboundID,
+					"oldExpiryAt": candidateOldExpiry, "newExpiryAt": expiryText,
+					"billingCycle": billingCycle, "suggestedAmount": suggestedAmount, "currency": "CNY",
+				}
+				var eventUserName string
+				_ = tx.QueryRow(`SELECT COALESCE(display_name, '') FROM users WHERE id = ?`, userID).Scan(&eventUserName)
+				if eventUserName == "" {
+					eventUserName = userID
+				}
+				payload["userName"] = eventUserName
+				var eventNodeID string
+				_ = tx.QueryRow(`SELECT node_id FROM inbounds WHERE id = ?`, inboundID).Scan(&eventNodeID)
+				if err := insertNodeEventTx(tx, nodeEventSpec{
+					NodeID: eventNodeID, EventType: "renewal_candidate_detected", Category: "business", Severity: "warning",
+					Title: "检测到续费变更，待确认", Message: "用户「" + eventUserName + "」到期时间由 " + candidateOldExpiry + " 延长至 " + expiryText + "，请确认是否计入收费",
+					RequiresAction: true, EventStatus: "open", ResourceType: "renewal", ResourceID: candidateID,
+					ActionType: "confirm_renewal", Payload: payload, DedupeKey: "renewal-candidate:" + candidateID,
+					Source: "agent", CorrelationID: candidateID, OccurredAt: observedAt,
+				}); err != nil {
+					return fmt.Errorf("record renewal event: %w", err)
+				}
 			}
 		}
 		if _, err := tx.Exec(`UPDATE users
@@ -561,8 +603,11 @@ WHERE node_id = ? AND deleted_at IS NULL AND (last_seen_at IS NULL OR last_seen_
 			label += " (" + inbound.tag + ")"
 		}
 		if inbound.oldMissingCount == 0 {
-			if _, err := tx.Exec(`INSERT INTO node_events (id, node_id, event_type, severity, message, created_at) VALUES (?, ?, 'inbound_missing', 'warning', ?, ?)`,
-				newID(), nodeID, "Inbound "+label+" was absent from a successful snapshot; it will be archived only after three consecutive missing snapshots", observedAtText); err != nil {
+			if err := insertNodeEventTx(tx, nodeEventSpec{
+				NodeID: nodeID, EventType: "inbound_missing", Category: "node", Severity: "warning",
+				Title: "Inbound 暂时缺失", Message: "Inbound " + label + " 未出现在成功同步快照中，连续三次缺失后才会归档",
+				ResourceType: "inbound", ResourceID: inbound.id, ActionType: "inspect_inbound", Source: "agent", OccurredAt: observedAt,
+			}); err != nil {
 				return fmt.Errorf("record inbound missing %s: %w", inbound.remoteID, err)
 			}
 		}
@@ -572,8 +617,11 @@ WHERE node_id = ? AND deleted_at IS NULL AND (last_seen_at IS NULL OR last_seen_
 		if _, err := tx.Exec(`UPDATE inbounds SET deleted_at = ? WHERE id = ? AND deleted_at IS NULL`, observedAtText, inbound.id); err != nil {
 			return fmt.Errorf("archive inbound %s: %w", inbound.remoteID, err)
 		}
-		if _, err := tx.Exec(`INSERT INTO node_events (id, node_id, event_type, severity, message, created_at) VALUES (?, ?, 'inbound_archived', 'warning', ?, ?)`,
-			newID(), nodeID, "Inbound "+label+" was absent from three consecutive successful snapshots and was archived; historical data was retained", observedAtText); err != nil {
+		if err := insertNodeEventTx(tx, nodeEventSpec{
+			NodeID: nodeID, EventType: "inbound_archived", Category: "node", Severity: "warning",
+			Title: "Inbound 已归档", Message: "Inbound " + label + " 连续三次同步缺失，已归档并保留历史数据",
+			ResourceType: "inbound", ResourceID: inbound.id, ActionType: "inspect_inbound", Source: "agent", OccurredAt: observedAt,
+		}); err != nil {
 			return fmt.Errorf("record inbound archive %s: %w", inbound.remoteID, err)
 		}
 	}
@@ -594,7 +642,19 @@ func detectTrafficReset(tx *sql.Tx, inboundID string, observedAt time.Time, allT
 
 func (s *Server) failSync(w http.ResponseWriter, tx *sql.Tx, syncRunID string, err error) error {
 	message := err.Error()
-	_, _ = tx.Exec(`UPDATE sync_runs SET finished_at = ?, status = 'failed', error_message = ? WHERE id = ?`, time.Now().UTC().Format(time.RFC3339Nano), message, syncRunID)
+	now := time.Now().UTC()
+	finishedAt := now.Format(time.RFC3339Nano)
+	_, _ = tx.Exec(`UPDATE sync_runs SET finished_at = ?, status = 'failed', error_message = ? WHERE id = ?`, finishedAt, message, syncRunID)
+	var nodeID string
+	if scanErr := tx.QueryRow(`SELECT node_id FROM sync_runs WHERE id = ?`, syncRunID).Scan(&nodeID); scanErr == nil {
+		if eventErr := insertNodeEventTx(tx, nodeEventSpec{
+			NodeID: nodeID, EventType: "sync_failed", Category: "sync", Severity: "error", Title: "节点同步失败",
+			Message: message, ResourceType: "sync_run", ResourceID: syncRunID, ActionType: "retry_sync",
+			Source: "agent", CorrelationID: syncRunID, OccurredAt: now,
+		}); eventErr != nil {
+			s.logger.Warn("record sync failure event", "sync_id", syncRunID, "error", eventErr)
+		}
+	}
 	_ = tx.Commit()
 	writeFailure(w, http.StatusInternalServerError, internalErrorCode, "could not apply node sync")
 	return err
@@ -602,9 +662,21 @@ func (s *Server) failSync(w http.ResponseWriter, tx *sql.Tx, syncRunID string, e
 
 func (s *Server) updateNodeHeartbeat(nodeID string, observedAt time.Time, status agentStatusPayload) error {
 	now := time.Now().UTC().Format(time.RFC3339Nano)
+	var previousHealth string
+	_ = s.db.QueryRow(`SELECT health_status FROM nodes WHERE id = ?`, nodeID).Scan(&previousHealth)
+	newHealth := healthStatus(status.XrayRunning)
 	_, err := s.db.Exec(`UPDATE nodes SET health_status = ?, xpanel_version = CASE WHEN ? <> '' THEN ? ELSE xpanel_version END, xray_version = CASE WHEN ? <> '' THEN ? ELSE xray_version END,
 cpu_usage = ?, memory_used = ?, memory_total = ?, disk_used = ?, disk_total = ?, last_seen_at = ?, updated_at = ? WHERE id = ?`, healthStatus(status.XrayRunning), status.XPanelVersion, status.XPanelVersion, status.XrayVersion, status.XrayVersion,
 		status.CPUUsage, nullableMetric(status.MemoryUsed), nullableMetric(status.MemoryTotal), nullableMetric(status.DiskUsed), nullableMetric(status.DiskTotal), observedAt.Format(time.RFC3339Nano), now, nodeID)
+	if err == nil && previousHealth == "offline" && newHealth != "offline" {
+		eventErr := insertNodeEvent(s.db, nodeEventSpec{
+			NodeID: nodeID, EventType: "node_recovered", Category: "node", Severity: "info", Title: "节点已恢复在线",
+			Message: "节点已重新收到 Agent 心跳", ResourceType: "node", ResourceID: nodeID, Source: "agent", OccurredAt: observedAt,
+		})
+		if eventErr != nil {
+			s.logger.Warn("record node recovery event", "node_id", nodeID, "error", eventErr)
+		}
+	}
 	return err
 }
 

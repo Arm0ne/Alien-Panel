@@ -765,15 +765,51 @@ paths:
                 $ref: '#/components/schemas/EnvelopeFinanceSummary'
   /events:
     get:
-      summary: Synchronization and anomaly events
-      description: Every paginated response includes dataAt, the newest successful Agent snapshot time, or null when no snapshot exists.
+      summary: Operator event center
+      description: Returns public business events and actionable node alerts. Internal sync scheduler records are kept in sync_runs and are not listed here.
       parameters:
         - $ref: '#/components/parameters/Page'
         - $ref: '#/components/parameters/PageSize'
         - $ref: '#/components/parameters/Keyword'
         - $ref: '#/components/parameters/Severity'
+        - $ref: '#/components/parameters/Status'
+        - $ref: '#/components/parameters/EventCategory'
       responses:
         '200': { description: Paginated events }
+  /events/summary:
+    get:
+      summary: Event notification counts
+      responses:
+        '200': { description: Pending and unread event counts }
+  /events/read-all:
+    post:
+      summary: Mark all public events as read
+      responses:
+        '200': { description: Events marked as read }
+  /events/{id}/read:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema: { type: string }
+    post:
+      summary: Mark one event as read
+      responses:
+        '200': { description: Event marked as read }
+        '404': { description: Event not found }
+  /events/{id}/resolve:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema: { type: string }
+    post:
+      summary: Resolve a non-renewal event
+      description: Renewal events must be confirmed or marked as non-billable through the renewal endpoints.
+      responses:
+        '200': { description: Event resolved }
+        '404': { description: Event not found }
+        '409': { description: Renewal event requires a billing action }
   /health/live:
     get:
       security: []
@@ -807,6 +843,7 @@ components:
     Status:
       name: status
       in: query
+      description: For events, use pending, alerts, open, unread, or resolved.
       schema: { type: string }
     NodeId:
       name: node_id
@@ -820,6 +857,10 @@ components:
       name: severity
       in: query
       schema: { type: string, enum: [info, warning, error] }
+    EventCategory:
+      name: category
+      in: query
+      schema: { type: string, enum: [business, node, sync, system] }
     AgentRegistrationToken:
       name: X-Agent-Registration-Token
       in: header

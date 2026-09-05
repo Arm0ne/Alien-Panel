@@ -1,0 +1,1 @@
+import{Vi as e,Wi as t,ma as n,ra as r}from"./router-C4wCC4tn.js";var i={class:`inline-block`,viewBox:`0 0 24 24`,width:`1em`,height:`1em`};function a(n,a){return r(),t(`svg`,i,[...a[0]||=[e(`path`,{fill:`currentColor`,d:`M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6z`},null,-1)]])}var o=n({name:`mdi-plus`,render:a});export{o as t};

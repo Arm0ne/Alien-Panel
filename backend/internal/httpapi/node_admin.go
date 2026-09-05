@@ -458,12 +458,17 @@ FROM nodes WHERE id = ? AND deleted_at IS NULL`, id).Scan(&existing.NodeKey, &ex
 	}
 	if existing.Enabled != updated.Enabled {
 		eventType := "node_disabled"
-		message := "Node disabled by administrator"
+		title := "节点已停用"
+		message := "管理员停用了节点"
 		if updated.Enabled {
 			eventType = "node_enabled"
-			message = "Node enabled by administrator"
+			title = "节点已启用"
+			message = "管理员启用了节点"
 		}
-		if _, err := s.db.Exec(`INSERT INTO node_events (id, node_id, event_type, severity, message, created_at) VALUES (?, ?, ?, 'info', ?, ?)`, newID(), id, eventType, message, now); err != nil {
+		if err := insertNodeEvent(s.db, nodeEventSpec{
+			NodeID: id, EventType: eventType, Category: "node", Severity: "info", Title: title, Message: message,
+			ResourceType: "node", ResourceID: id, Source: "admin", OccurredAt: time.Now().UTC(),
+		}); err != nil {
 			s.logger.Warn("record node status change", "node_id", id, "error", err)
 		}
 	}

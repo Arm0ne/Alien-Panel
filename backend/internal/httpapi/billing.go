@@ -88,6 +88,10 @@ FROM user_renewal_candidates WHERE id = ? AND user_id = ?`, candidateID, userID)
 	}
 	now := time.Now().UTC()
 	nowText := now.Format(time.RFC3339Nano)
+	resolvedBy := ""
+	if current, ok := r.Context().Value(principalContextKey{}).(principal); ok {
+		resolvedBy = current.UserID
+	}
 	if !confirm {
 		notes := ""
 		if payload.Notes != nil {
@@ -95,6 +99,10 @@ FROM user_renewal_candidates WHERE id = ? AND user_id = ?`, candidateID, userID)
 		}
 		if _, err := tx.Exec(`UPDATE user_renewal_candidates SET status = 'rejected', processed_at = ?, notes = ? WHERE id = ?`, nowText, nullableDBString(notes), candidateID); err != nil {
 			writeFailure(w, http.StatusInternalServerError, internalErrorCode, "could not reject renewal candidate")
+			return
+		}
+		if err := resolveRenewalEventTx(tx, candidateID, "renewal_non_billable", map[string]any{"candidateId": candidateID, "userId": userID, "notes": notes}, now, resolvedBy); err != nil {
+			writeFailure(w, http.StatusInternalServerError, internalErrorCode, "could not close renewal event")
 			return
 		}
 		if err := tx.Commit(); err != nil {
@@ -152,6 +160,13 @@ FROM user_renewal_candidates WHERE id = ? AND user_id = ?`, candidateID, userID)
 	}
 	if _, err := tx.Exec(`UPDATE user_renewal_candidates SET status = 'confirmed', processed_at = ?, notes = ? WHERE id = ? AND status = 'pending'`, nowText, nullableDBString(notes), candidateID); err != nil {
 		writeFailure(w, http.StatusInternalServerError, internalErrorCode, "could not confirm renewal candidate")
+		return
+	}
+	if err := resolveRenewalEventTx(tx, candidateID, "renewal_confirmed", map[string]any{
+		"candidateId": candidateID, "userId": userID, "billingCycle": cycle, "amount": amount, "currency": currency,
+		"serviceFrom": serviceFrom.UTC().Format(time.RFC3339Nano), "serviceTo": serviceTo.UTC().Format(time.RFC3339Nano),
+	}, now, resolvedBy); err != nil {
+		writeFailure(w, http.StatusInternalServerError, internalErrorCode, "could not close renewal event")
 		return
 	}
 	if _, err := tx.Exec(`INSERT INTO user_billing_records

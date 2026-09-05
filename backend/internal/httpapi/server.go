@@ -59,6 +59,9 @@ func NewServer(cfg config.Config, database *sql.DB, logger *slog.Logger) (*Serve
 	if err := server.ensureAdmin(); err != nil {
 		return nil, err
 	}
+	if err := server.ensurePendingRenewalEvents(); err != nil {
+		return nil, fmt.Errorf("ensure pending renewal events: %w", err)
+	}
 	return server, nil
 }
 
@@ -117,6 +120,10 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("PATCH /api/exit-ips/{id}", s.requireAuth(http.HandlerFunc(s.updateExitIP)))
 	mux.Handle("DELETE /api/exit-ips/{id}", s.requireAuth(http.HandlerFunc(s.deleteExitIP)))
 	mux.Handle("GET /api/costs/summary", s.requireAuth(http.HandlerFunc(s.finance)))
+	mux.Handle("GET /api/events/summary", s.requireAuth(http.HandlerFunc(s.eventSummary)))
+	mux.Handle("POST /api/events/read-all", s.requireAuth(http.HandlerFunc(s.markAllEventsRead)))
+	mux.Handle("POST /api/events/{id}/read", s.requireAuth(http.HandlerFunc(s.markEventRead)))
+	mux.Handle("POST /api/events/{id}/resolve", s.requireAuth(http.HandlerFunc(s.resolveEvent)))
 	mux.Handle("GET /api/events", s.requireAuth(http.HandlerFunc(s.events)))
 
 	return s.withSecurityHeaders(s.withRequestID(s.withCORS(mux)))
@@ -1122,23 +1129,24 @@ FROM sync_runs WHERE node_id = ? ORDER BY started_at DESC LIMIT 5`, id)
 	result["syncRuns"] = syncRuns
 
 	statusHistory := make([]map[string]any, 0)
-	rows, err = s.db.Query(`SELECT e.id, e.event_type, e.severity, e.message, e.created_at, e.acknowledged
-FROM node_events e WHERE e.node_id = ? ORDER BY e.created_at DESC LIMIT 30`, id)
+	rows, err = s.db.Query(`SELECT e.id, e.event_type, e.severity, COALESCE(e.title, ''), e.message, e.created_at, e.acknowledged,
+e.requires_action, e.event_status
+FROM node_events e WHERE e.node_id = ? AND e.visibility = 'public' ORDER BY e.created_at DESC LIMIT 30`, id)
 	if err != nil {
 		writeFailure(w, http.StatusInternalServerError, internalErrorCode, "could not read node status history")
 		return
 	}
 	for rows.Next() {
-		var eventID, eventType, severity, message, occurredAt string
-		var acknowledged int
-		if err := rows.Scan(&eventID, &eventType, &severity, &message, &occurredAt, &acknowledged); err != nil {
+		var eventID, eventType, severity, title, message, occurredAt, eventStatus string
+		var acknowledged, requiresAction int
+		if err := rows.Scan(&eventID, &eventType, &severity, &title, &message, &occurredAt, &acknowledged, &requiresAction, &eventStatus); err != nil {
 			_ = rows.Close()
 			writeFailure(w, http.StatusInternalServerError, internalErrorCode, "could not decode node status history")
 			return
 		}
 		statusHistory = append(statusHistory, map[string]any{
-			"id": eventID, "type": eventType, "severity": severity, "message": message,
-			"occurredAt": occurredAt, "acknowledged": acknowledged == 1,
+			"id": eventID, "type": eventType, "severity": severity, "title": firstNonEmpty(title, eventType), "message": message,
+			"occurredAt": occurredAt, "acknowledged": acknowledged == 1, "requiresAction": requiresAction == 1, "status": eventStatus,
 		})
 	}
 	if err := rows.Err(); err != nil {
@@ -1176,7 +1184,9 @@ func (s *Server) requestNodeSync(w http.ResponseWriter, r *http.Request) {
 	requestID := newID()
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	message := "管理员请求立即同步；Agent 将在下一次轮询中执行（请求 " + requestID + ")"
-	if _, err := s.db.Exec(`INSERT INTO node_events (id, node_id, event_type, severity, message, created_at) VALUES (?, ?, 'sync_requested', 'info', ?, ?)`, requestID, id, message, now); err != nil {
+	if _, err := s.db.Exec(`INSERT INTO node_events
+(id, node_id, event_type, severity, message, created_at, event_category, title, visibility, requires_action, event_status, action_type, source, correlation_id)
+VALUES (?, ?, 'sync_requested', 'info', ?, ?, 'sync', '立即同步请求', 'internal', 0, 'resolved', 'inspect_sync_run', 'admin', ?)`, requestID, id, message, now, requestID); err != nil {
 		s.logger.Error("record node sync request", "node_id", id, "error", err)
 		writeFailure(w, http.StatusInternalServerError, internalErrorCode, "could not request node sync")
 		return
@@ -2579,16 +2589,32 @@ WHERE currency = 'CNY' AND status = 'confirmed' AND paid_at IS NOT NULL
 
 func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 	query := parseListQuery(r)
-	where := []string{"1 = 1"}
-	args := make([]any, 0, 3)
+	where := []string{"e.visibility = 'public'"}
+	args := make([]any, 0, 6)
 	if query.keyword != "" {
-		where = append(where, `(e.event_type LIKE ? OR e.message LIKE ? OR n.name LIKE ?)`)
+		where = append(where, `(e.event_type LIKE ? OR e.title LIKE ? OR e.message LIKE ? OR n.name LIKE ? OR COALESCE(e.resource_id, '') LIKE ?)`)
 		like := "%" + query.keyword + "%"
-		args = append(args, like, like, like)
+		args = append(args, like, like, like, like, like)
 	}
 	if query.severity != "" {
 		where = append(where, "e.severity = ?")
 		args = append(args, query.severity)
+	}
+	if query.category != "" {
+		where = append(where, "e.event_category = ?")
+		args = append(args, query.category)
+	}
+	switch query.status {
+	case "pending":
+		where = append(where, "e.requires_action = 1 AND e.event_status NOT IN ('resolved', 'dismissed')")
+	case "unread":
+		where = append(where, "e.acknowledged = 0 AND e.event_status NOT IN ('resolved', 'dismissed')")
+	case "resolved":
+		where = append(where, "e.event_status = 'resolved'")
+	case "open":
+		where = append(where, "e.event_status NOT IN ('resolved', 'dismissed')")
+	case "alerts":
+		where = append(where, "e.severity IN ('warning', 'error') AND e.event_status NOT IN ('resolved', 'dismissed')")
 	}
 	base := `FROM node_events e LEFT JOIN nodes n ON n.id = e.node_id WHERE ` + strings.Join(where, " AND ")
 	var total int
@@ -2596,7 +2622,9 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 		writeFailure(w, http.StatusInternalServerError, internalErrorCode, "could not count events")
 		return
 	}
-	rows, err := s.db.Query(`SELECT e.id, e.event_type, e.severity, COALESCE(n.name, ''), e.message, e.created_at, e.acknowledged
+	rows, err := s.db.Query(`SELECT e.id, e.event_type, e.event_category, e.severity, COALESCE(e.title, ''), COALESCE(n.id, ''), COALESCE(n.name, ''), e.message, e.created_at,
+e.acknowledged, e.requires_action, e.event_status, COALESCE(e.resource_type, ''), COALESCE(e.resource_id, ''), COALESCE(e.action_type, ''),
+COALESCE(e.payload_json, ''), COALESCE(e.read_at, ''), COALESCE(e.resolved_at, ''), COALESCE(e.resolved_by, ''), COALESCE(e.source, ''), COALESCE(e.correlation_id, '')
 `+base+` ORDER BY e.created_at DESC LIMIT ? OFFSET ?`, append(args, query.pageSize, query.offset)...)
 	if err != nil {
 		writeFailure(w, http.StatusInternalServerError, internalErrorCode, "could not read events")
@@ -2605,15 +2633,28 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 	defer rows.Close()
 	items := make([]map[string]any, 0)
 	for rows.Next() {
-		var id, eventType, severity, nodeName, message, occurredAt string
-		var acknowledged int
-		if err := rows.Scan(&id, &eventType, &severity, &nodeName, &message, &occurredAt, &acknowledged); err != nil {
+		var id, eventType, category, severity, title, nodeID, nodeName, message, occurredAt string
+		var resourceType, resourceID, actionType, payloadJSON, readAt, resolvedAt, resolvedBy, source, correlationID string
+		var acknowledged, requiresAction int
+		var eventStatus string
+		if err := rows.Scan(&id, &eventType, &category, &severity, &title, &nodeID, &nodeName, &message, &occurredAt, &acknowledged, &requiresAction, &eventStatus,
+			&resourceType, &resourceID, &actionType, &payloadJSON, &readAt, &resolvedAt, &resolvedBy, &source, &correlationID); err != nil {
 			writeFailure(w, http.StatusInternalServerError, internalErrorCode, "could not decode events")
 			return
 		}
+		var payload any
+		if strings.TrimSpace(payloadJSON) != "" {
+			if err := json.Unmarshal([]byte(payloadJSON), &payload); err != nil {
+				payload = nil
+			}
+		}
 		items = append(items, map[string]any{
-			"id": id, "type": eventType, "severity": severity, "nodeName": nullableString(nodeName),
-			"message": message, "occurredAt": occurredAt, "acknowledged": acknowledged == 1,
+			"id": id, "type": eventType, "category": category, "severity": severity, "title": firstNonEmpty(title, eventType),
+			"nodeId": nullableString(nodeID), "nodeName": nullableString(nodeName), "message": message, "occurredAt": occurredAt, "acknowledged": acknowledged == 1,
+			"requiresAction": requiresAction == 1, "status": eventStatus,
+			"resourceType": nullableString(resourceType), "resourceId": nullableString(resourceID), "actionType": nullableString(actionType),
+			"payload": payload, "readAt": nullableString(readAt), "resolvedAt": nullableString(resolvedAt), "resolvedBy": nullableString(resolvedBy),
+			"source": nullableString(source), "correlationId": nullableString(correlationID),
 		})
 	}
 	writeSuccess(w, s.pageResponse(items, total, query))
@@ -2752,6 +2793,7 @@ type listQuery struct {
 	nodeID   string
 	nodeType string
 	severity string
+	category string
 }
 
 func parseListQuery(r *http.Request) listQuery {
@@ -2764,7 +2806,7 @@ func parseListQuery(r *http.Request) listQuery {
 		page: page, pageSize: pageSize, offset: (page - 1) * pageSize,
 		keyword: strings.TrimSpace(r.URL.Query().Get("keyword")), status: strings.TrimSpace(r.URL.Query().Get("status")),
 		nodeID: strings.TrimSpace(r.URL.Query().Get("node_id")), nodeType: strings.TrimSpace(r.URL.Query().Get("node_type")),
-		severity: strings.TrimSpace(r.URL.Query().Get("severity")),
+		severity: strings.TrimSpace(r.URL.Query().Get("severity")), category: strings.TrimSpace(r.URL.Query().Get("category")),
 	}
 }
 
