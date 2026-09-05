@@ -1,1 +1,0 @@
-import{Ii as e,Vi as t,Zi as n}from"./router-BQSgyjEO.js";import{t as r}from"./exception-base-CAP1hv3a.js";var i=t({name:`500`,__name:`index`,setup(t){return(t,i)=>{let a=r;return n(),e(a,{type:`500`})}}});export{i as default};

@@ -307,6 +307,9 @@ func (s *Server) agentSync(w http.ResponseWriter, r *http.Request) {
 			expiryText = time.Unix(inbound.ExpiryTime, 0).UTC().Format(time.RFC3339Nano)
 			expiry = expiryText
 		}
+		var previousExpiryText, previousSeenText string
+		_ = tx.QueryRow(`SELECT COALESCE(expiry_time, ''), COALESCE(last_seen_at, '') FROM inbounds WHERE node_id = ? AND remote_inbound_id = ? AND deleted_at IS NULL`, principal.NodeID, remoteInboundID).
+			Scan(&previousExpiryText, &previousSeenText)
 		_, err := tx.Exec(`INSERT INTO inbounds (id, node_id, remote_inbound_id, tag, remark, protocol, port, listen, enable, expiry_time, up, down, all_time, client_count, config_hash, first_seen_at, last_seen_at, missing_since, missing_sync_count, deleted_at)
 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, 0, NULL)
 ON CONFLICT(node_id, remote_inbound_id) DO UPDATE SET tag = excluded.tag, remark = excluded.remark, protocol = excluded.protocol, port = excluded.port, listen = excluded.listen, enable = excluded.enable, expiry_time = excluded.expiry_time, up = excluded.up, down = excluded.down, all_time = excluded.all_time, client_count = excluded.client_count, config_hash = excluded.config_hash, last_seen_at = excluded.last_seen_at, missing_since = NULL, missing_sync_count = 0, deleted_at = NULL`,
@@ -320,7 +323,7 @@ ON CONFLICT(node_id, remote_inbound_id) DO UPDATE SET tag = excluded.tag, remark
 			s.failSync(w, tx, syncRunID, fmt.Errorf("find inbound %s: %w", remoteInboundID, err))
 			return
 		}
-		if err := s.ensureRelayInboundUser(tx, nodeType, inboundID, remoteInboundID, inbound, expiryText, observedAt); err != nil {
+		if err := s.ensureRelayInboundUserWithHistory(tx, nodeType, inboundID, remoteInboundID, inbound, expiryText, previousExpiryText, previousSeenText, observedAt); err != nil {
 			s.failSync(w, tx, syncRunID, fmt.Errorf("ensure business user for inbound %s: %w", remoteInboundID, err))
 			return
 		}
@@ -387,6 +390,10 @@ cpu_usage = ?, memory_used = ?, memory_total = ?, disk_used = ?, disk_total = ?,
 // expiry. Landing-node and explicitly infrastructure-classified Inbounds stay
 // outside the business-user list.
 func (s *Server) ensureRelayInboundUser(tx *sql.Tx, nodeType, inboundID, remoteInboundID string, inbound agentInboundPayload, expiryText string, observedAt time.Time) error {
+	return s.ensureRelayInboundUserWithHistory(tx, nodeType, inboundID, remoteInboundID, inbound, expiryText, "", "", observedAt)
+}
+
+func (s *Server) ensureRelayInboundUserWithHistory(tx *sql.Tx, nodeType, inboundID, remoteInboundID string, inbound agentInboundPayload, expiryText, previousExpiryText, previousSeenText string, observedAt time.Time) error {
 	if nodeType != "relay" {
 		// A landing/unknown node may have been synchronized by an older
 		// version that incorrectly attached its Inbound to a business user.
@@ -439,8 +446,18 @@ VALUES (?, ?, ?, ?, ?, ?)`, userID, inboundDisplayName(inbound, remoteInboundID)
 			Scan(&oldExpiry, &billingCycle, &billingAmount, &monthlyFee); err != nil {
 			return fmt.Errorf("read previous user billing state: %w", err)
 		}
-		if oldExpiry != "" && expiryText != "" {
-			oldTime, oldErr := time.Parse(time.RFC3339Nano, oldExpiry)
+		candidateOldExpiry := previousExpiryText
+		if candidateOldExpiry == "" {
+			candidateOldExpiry = oldExpiry
+		}
+		// If the previous snapshot had no expiry (the X-Panel value was 0)
+		// but this is not the first sync, retain a meaningful baseline instead
+		// of silently dropping the renewal suggestion.
+		if candidateOldExpiry == "" && previousSeenText != "" {
+			candidateOldExpiry = previousSeenText
+		}
+		if candidateOldExpiry != "" && expiryText != "" {
+			oldTime, oldErr := time.Parse(time.RFC3339Nano, candidateOldExpiry)
 			newTime, newErr := time.Parse(time.RFC3339Nano, expiryText)
 			if oldErr == nil && newErr == nil && newTime.After(oldTime) {
 				if billingCycle != "annual" {
@@ -455,7 +472,7 @@ VALUES (?, ?, ?, ?, ?, ?)`, userID, inboundDisplayName(inbound, remoteInboundID)
 				}
 				if _, err := tx.Exec(`INSERT OR IGNORE INTO user_renewal_candidates
 (id, user_id, inbound_id, old_expiry_at, new_expiry_at, detected_at, suggested_cycle, suggested_amount, currency, status)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'CNY', 'pending')`, newID(), userID, inboundID, oldExpiry, expiryText, now, billingCycle, suggestedAmount); err != nil {
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'CNY', 'pending')`, newID(), userID, inboundID, candidateOldExpiry, expiryText, now, billingCycle, suggestedAmount); err != nil {
 					return fmt.Errorf("record renewal candidate: %w", err)
 				}
 			}
