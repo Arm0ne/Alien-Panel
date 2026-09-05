@@ -198,7 +198,7 @@ func parseInbound(raw json.RawMessage) (Inbound, error) {
 		Port:       intField(object, "port"),
 		Listen:     stringField(object, "listen"),
 		Enable:     boolField(object, "enable", "enabled"),
-		ExpiryTime: intField(object, "expiry_time", "expiryTime"),
+		ExpiryTime: timestampField(object, "expiry_time", "expiryTime"),
 		Up:         intField(object, "up", "upload"),
 		Down:       intField(object, "down", "download"),
 		AllTime:    intField(object, "all_time", "allTime", "total"),
@@ -244,7 +244,7 @@ func parseClient(raw json.RawMessage) (Client, error) {
 		RemoteID:   remoteID,
 		Email:      email,
 		Enable:     boolField(object, "enable", "enabled"),
-		ExpiryTime: intField(object, "expiry_time", "expiryTime"),
+		ExpiryTime: timestampField(object, "expiry_time", "expiryTime"),
 		Up:         intField(object, "up", "upload"),
 		Down:       intField(object, "down", "download"),
 		AllTime:    intField(object, "all_time", "allTime", "total"),
@@ -462,7 +462,7 @@ func timestampField(object map[string]json.RawMessage, keys ...string) int64 {
 	if text == "" {
 		return 0
 	}
-	for _, layout := range []string{time.RFC3339Nano, time.RFC3339, "2006-01-02 15:04:05"} {
+	for _, layout := range []string{time.RFC3339Nano, time.RFC3339, "2006-01-02 15:04:05", "2006-01-02"} {
 		if parsed, err := time.Parse(layout, text); err == nil {
 			return parsed.Unix()
 		}

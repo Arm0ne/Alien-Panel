@@ -44,7 +44,7 @@ func TestParseInboundsSupportsSettingsClientsAndTraffic(t *testing.T) {
 		t.Fatalf("inbound count = %d", len(inbounds))
 	}
 	inbound := inbounds[0]
-	if inbound.RemoteID != 15 || inbound.Port != 443 || inbound.AllTime != 579 {
+	if inbound.RemoteID != 15 || inbound.Port != 443 || inbound.AllTime != 579 || inbound.ExpiryTime != 1792022400 {
 		t.Fatalf("inbound = %+v", inbound)
 	}
 	if len(inbound.Clients) != 2 {
@@ -55,6 +55,27 @@ func TestParseInboundsSupportsSettingsClientsAndTraffic(t *testing.T) {
 	}
 	if inbound.ConfigHash == "" || len(inbound.ConfigHash) != 64 {
 		t.Fatalf("ConfigHash = %q", inbound.ConfigHash)
+	}
+}
+
+func TestParseInboundsNormalizesExpiryTimestampVariants(t *testing.T) {
+	payload := json.RawMessage(`[
+      {"id": 1, "expiryTime": "2026-09-05T00:00:00Z"},
+      {"id": 2, "expiry_time": "1788566400000"},
+      {"id": 3, "expiryTime": "2026-09-05"}
+    ]`)
+	inbounds, err := ParseInbounds(payload)
+	if err != nil {
+		t.Fatalf("ParseInbounds() error = %v", err)
+	}
+	if len(inbounds) != 3 {
+		t.Fatalf("inbound count = %d", len(inbounds))
+	}
+	want := []int64{1788566400, 1788566400, 1788566400}
+	for index, inbound := range inbounds {
+		if inbound.ExpiryTime != want[index] {
+			t.Fatalf("inbound %d expiry = %d, want %d", inbound.RemoteID, inbound.ExpiryTime, want[index])
+		}
 	}
 }
 

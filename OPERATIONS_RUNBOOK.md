@@ -161,6 +161,8 @@ amd64，会下载并校验 Agent、使用一次性安装 Token 换取节点凭�
 
 Agent 只读采集 X-Panel 累计计数，不调用 `QueryStats(reset=true)`。中央收到重复 `sync_id` 时返回原结果，不重复写入资源或快照。
 
+Agent 会将 X-Panel 的 Inbound/Client 到期字段统一解析为中央时间格式，兼容 Unix 秒、毫秒和日期字符串。升级解析逻辑后，需在节点重新执行前台生成的一键安装命令，或替换 `/usr/local/bin/xpanel-agent` 后执行 `systemctl restart xpanel-agent`。
+
 ## 3. 日常管理
 
 - “节点管理”中的停用会立即拒绝该节点的 heartbeat、sync 和立即同步请求；重新启用后恢复认证。
