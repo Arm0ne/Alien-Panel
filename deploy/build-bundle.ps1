@@ -51,6 +51,10 @@ try {
   if ($null -eq $oldCgo) { Remove-Item Env:CGO_ENABLED -ErrorAction SilentlyContinue } else { $env:CGO_ENABLED = $oldCgo }
 }
 
+$AgentChecksum = Join-Path $Release 'xpanel-agent.sha256'
+(Get-FileHash -LiteralPath (Join-Path $Release 'xpanel-agent') -Algorithm SHA256).Hash.ToLowerInvariant() |
+  Set-Content -LiteralPath $AgentChecksum -NoNewline -Encoding ascii
+
 Write-Host 'Bundle ready:'
-Get-Item (Join-Path $FrontendDist 'index.html'), (Join-Path $Release 'xpanel-central') |
+Get-Item (Join-Path $FrontendDist 'index.html'), (Join-Path $Release 'xpanel-central'), (Join-Path $Release 'xpanel-agent.sha256') |
   Select-Object FullName, Length

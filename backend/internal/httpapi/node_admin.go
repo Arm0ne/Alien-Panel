@@ -36,6 +36,8 @@ type nodeUpdateRequest struct {
 	Enabled       *bool   `json:"enabled"`
 }
 
+const nodeInstallTokenTTL = 15 * time.Minute
+
 type nodeAdminValues struct {
 	NodeKey       string
 	Name          string
@@ -166,6 +168,12 @@ func (s *Server) createNode(w http.ResponseWriter, r *http.Request) {
 		writeFailure(w, http.StatusInternalServerError, internalErrorCode, "could not issue node credential")
 		return
 	}
+	installToken, err := randomToken()
+	if err != nil {
+		writeFailure(w, http.StatusInternalServerError, internalErrorCode, "could not issue installer credential")
+		return
+	}
+	installTokenExpiresAt := time.Now().UTC().Add(nodeInstallTokenTTL).Format(time.RFC3339Nano)
 	tx, err := s.db.Begin()
 	if err != nil {
 		writeFailure(w, http.StatusInternalServerError, internalErrorCode, "could not begin node creation")
@@ -184,6 +192,10 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 'unknown', ?, ?)`, nodeID, values.NodeKey,
 	}
 	if _, err := tx.Exec(`INSERT INTO node_credentials (id, node_id, token_hash, last_rotated_at, created_at) VALUES (?, ?, ?, ?, ?)`, newID(), nodeID, hashToken(token), now, now); err != nil {
 		writeFailure(w, http.StatusInternalServerError, internalErrorCode, "could not save node credential")
+		return
+	}
+	if _, err := tx.Exec(`INSERT INTO node_install_tokens (id, node_id, token_hash, expires_at, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?)`, newID(), nodeID, hashToken(installToken), installTokenExpiresAt, currentAdminID(r), now); err != nil {
+		writeFailure(w, http.StatusInternalServerError, internalErrorCode, "could not save installer credential")
 		return
 	}
 	for _, address := range exitIPs {
@@ -211,8 +223,64 @@ VALUES (?, 'node', ?, ?, ?, 0, 'CNY', 1, ?, ?)`, newID(), nodeID, address, famil
 	// included in the audit record or any later node detail/list response.
 	writeSuccess(w, map[string]any{
 		"nodeId": nodeID, "nodeKey": values.NodeKey, "name": values.Name, "type": values.Type,
-		"token": token, "enabled": true, "exitIpCount": len(exitIPs),
+		"token": token, "installerToken": installToken, "installerTokenExpiresAt": installTokenExpiresAt,
+		"enabled": true, "exitIpCount": len(exitIPs),
 	})
+}
+
+// issueNodeInstallToken creates a fresh short-lived token for an existing
+// node. It is intentionally separate from the long-lived node credential so
+// the one-line command can be safely regenerated without exposing the Agent
+// bearer token in the browser.
+func (s *Server) issueNodeInstallToken(w http.ResponseWriter, r *http.Request) {
+	id := strings.TrimSpace(r.PathValue("id"))
+	if id == "" {
+		writeFailure(w, http.StatusBadRequest, validationCode, "node id is required")
+		return
+	}
+	var name string
+	if err := s.db.QueryRow(`SELECT name FROM nodes WHERE id = ? AND deleted_at IS NULL`, id).Scan(&name); errors.Is(err, sql.ErrNoRows) {
+		writeFailure(w, http.StatusNotFound, notFoundCode, "node not found")
+		return
+	} else if err != nil {
+		writeFailure(w, http.StatusInternalServerError, internalErrorCode, "could not read node")
+		return
+	}
+	installToken, err := randomToken()
+	if err != nil {
+		writeFailure(w, http.StatusInternalServerError, internalErrorCode, "could not issue installer credential")
+		return
+	}
+	now := time.Now().UTC()
+	nowText := now.Format(time.RFC3339Nano)
+	expiresAt := now.Add(nodeInstallTokenTTL).Format(time.RFC3339Nano)
+	tx, err := s.db.BeginTx(r.Context(), nil)
+	if err != nil {
+		writeFailure(w, http.StatusInternalServerError, internalErrorCode, "could not begin installer credential rotation")
+		return
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(r.Context(), `UPDATE node_install_tokens SET used_at = ? WHERE node_id = ? AND used_at IS NULL`, nowText, id); err != nil {
+		writeFailure(w, http.StatusInternalServerError, internalErrorCode, "could not revoke previous installer credentials")
+		return
+	}
+	if _, err := tx.ExecContext(r.Context(), `INSERT INTO node_install_tokens (id, node_id, token_hash, expires_at, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?)`, newID(), id, hashToken(installToken), expiresAt, currentAdminID(r), nowText); err != nil {
+		writeFailure(w, http.StatusInternalServerError, internalErrorCode, "could not save installer credential")
+		return
+	}
+	if err := tx.Commit(); err != nil {
+		writeFailure(w, http.StatusInternalServerError, internalErrorCode, "could not complete installer credential rotation")
+		return
+	}
+	s.writeAuditLog(r, "node.install_token.issue", "node", id, nil, map[string]any{"expiresAt": expiresAt})
+	writeSuccess(w, map[string]any{"nodeId": id, "nodeName": name, "installerToken": installToken, "installerTokenExpiresAt": expiresAt})
+}
+
+func currentAdminID(r *http.Request) any {
+	if current, ok := r.Context().Value(principalContextKey{}).(principal); ok && current.UserID != "" {
+		return current.UserID
+	}
+	return nil
 }
 
 func normalizeNodeExitIPs(addresses []string) ([]string, error) {
@@ -418,6 +486,10 @@ func (s *Server) deleteNode(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := execDelete("Agent credentials", `DELETE FROM node_credentials WHERE node_id = ?`, id); err != nil {
 		writeFailure(w, http.StatusInternalServerError, internalErrorCode, "could not delete node Agent credentials")
+		return
+	}
+	if err := execDelete("Agent installer credentials", `DELETE FROM node_install_tokens WHERE node_id = ?`, id); err != nil {
+		writeFailure(w, http.StatusInternalServerError, internalErrorCode, "could not delete node installer credentials")
 		return
 	}
 	if err := execDelete("node", `DELETE FROM nodes WHERE id = ?`, id); err != nil {

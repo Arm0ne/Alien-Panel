@@ -149,6 +149,16 @@ Agent 引导 Token，启动中央服务和内置 Nginx，默认通过
 
 5. 检查 Agent 日志和中央节点详情。首次成功同步会建立线路机 Inbound 与业务用户的映射；落地机 Inbound 不会自动建立业务用户。
 
+### Ubuntu/Debian 一键安装
+
+节点接入成功后，优先使用前台生成的一行命令。它只支持 Ubuntu/Debian
+amd64，会下载并校验 Agent、使用一次性安装 Token 换取节点凭据、在目标机
+本地询问 X-Panel 用户名和密码，然后自动安装并启动 `xpanel-agent.service`。
+密码从目标终端读取，不会上传中央面板；安装 Token 15 分钟后失效且只能使用一次。
+如果需要手动部署，仍可按上面的 YAML 和 systemd 步骤执行。
+节点创建窗口关闭后，可在节点详情点击“重新生成部署命令”再次生成 Token；停用节点
+不能生成可用命令，重新启用后再操作。
+
 Agent 只读采集 X-Panel 累计计数，不调用 `QueryStats(reset=true)`。中央收到重复 `sync_id` 时返回原结果，不重复写入资源或快照。
 
 ## 3. 日常管理

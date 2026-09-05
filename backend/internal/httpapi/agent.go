@@ -31,6 +31,12 @@ type agentRegisterRequest struct {
 	XrayVersion   string `json:"xray_version"`
 }
 
+type agentBootstrapRequest struct {
+	InstallToken string `json:"install_token"`
+	Hostname     string `json:"hostname"`
+	AgentVersion string `json:"agent_version"`
+}
+
 type agentStatusPayload struct {
 	XrayRunning   bool    `json:"xray_running"`
 	XrayVersion   string  `json:"xray_version"`
@@ -150,6 +156,72 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 'unknown', ?, ?)`, nodeID, strings.TrimSpa
 		return
 	}
 	writeSuccess(w, map[string]any{"nodeId": nodeID, "nodeKey": payload.NodeKey, "token": token})
+}
+
+// agentBootstrap exchanges a short-lived installer token for the normal node
+// bearer token. The installer token is bound to a pre-created node, consumed
+// atomically, and never stored in plaintext.
+func (s *Server) agentBootstrap(w http.ResponseWriter, r *http.Request) {
+	var payload agentBootstrapRequest
+	if err := decodeAgentJSON(r, &payload); err != nil || strings.TrimSpace(payload.InstallToken) == "" {
+		writeFailure(w, http.StatusBadRequest, validationCode, "install_token is required")
+		return
+	}
+	now := time.Now().UTC()
+	nowText := now.Format(time.RFC3339Nano)
+	tx, err := s.db.BeginTx(r.Context(), nil)
+	if err != nil {
+		writeFailure(w, http.StatusInternalServerError, internalErrorCode, "could not begin Agent bootstrap")
+		return
+	}
+	defer tx.Rollback()
+
+	var nodeID, nodeKey, nodeName, nodeType string
+	err = tx.QueryRowContext(r.Context(), `SELECT n.id, n.node_key, n.name, n.type
+FROM node_install_tokens it JOIN nodes n ON n.id = it.node_id
+WHERE it.token_hash = ? AND it.used_at IS NULL AND it.expires_at > ?
+  AND n.enabled = 1 AND n.deleted_at IS NULL`, hashToken(strings.TrimSpace(payload.InstallToken)), nowText).
+		Scan(&nodeID, &nodeKey, &nodeName, &nodeType)
+	if errors.Is(err, sql.ErrNoRows) {
+		writeFailure(w, http.StatusUnauthorized, unauthorizedCode, "installer token is invalid, expired, or already used")
+		return
+	}
+	if err != nil {
+		s.logger.Error("read Agent installer token", "error", err)
+		writeFailure(w, http.StatusInternalServerError, internalErrorCode, "could not read Agent installer token")
+		return
+	}
+	if _, err := tx.ExecContext(r.Context(), `UPDATE node_install_tokens SET used_at = ? WHERE token_hash = ? AND used_at IS NULL`, nowText, hashToken(strings.TrimSpace(payload.InstallToken))); err != nil {
+		writeFailure(w, http.StatusInternalServerError, internalErrorCode, "could not consume Agent installer token")
+		return
+	}
+	if _, err := tx.ExecContext(r.Context(), `UPDATE node_credentials SET revoked_at = ? WHERE node_id = ? AND revoked_at IS NULL`, nowText, nodeID); err != nil {
+		writeFailure(w, http.StatusInternalServerError, internalErrorCode, "could not rotate node credentials")
+		return
+	}
+	centralToken, err := randomToken()
+	if err != nil {
+		writeFailure(w, http.StatusInternalServerError, internalErrorCode, "could not issue node credential")
+		return
+	}
+	if _, err := tx.ExecContext(r.Context(), `INSERT INTO node_credentials (id, node_id, token_hash, last_rotated_at, created_at) VALUES (?, ?, ?, ?, ?)`, newID(), nodeID, hashToken(centralToken), nowText, nowText); err != nil {
+		writeFailure(w, http.StatusInternalServerError, internalErrorCode, "could not save node credential")
+		return
+	}
+	if _, err := tx.ExecContext(r.Context(), `UPDATE nodes SET hostname = CASE WHEN ? <> '' THEN ? ELSE hostname END,
+agent_version = CASE WHEN ? <> '' THEN ? ELSE agent_version END, updated_at = ? WHERE id = ?`,
+		strings.TrimSpace(payload.Hostname), strings.TrimSpace(payload.Hostname), strings.TrimSpace(payload.AgentVersion), strings.TrimSpace(payload.AgentVersion), nowText, nodeID); err != nil {
+		writeFailure(w, http.StatusInternalServerError, internalErrorCode, "could not update node bootstrap metadata")
+		return
+	}
+	if err := tx.Commit(); err != nil {
+		writeFailure(w, http.StatusInternalServerError, internalErrorCode, "could not complete Agent bootstrap")
+		return
+	}
+	writeSuccess(w, map[string]any{
+		"node_id": nodeID, "node_key": nodeKey, "node_name": nodeName, "node_type": nodeType,
+		"central_token": centralToken,
+	})
 }
 
 func (s *Server) agentHeartbeat(w http.ResponseWriter, r *http.Request) {

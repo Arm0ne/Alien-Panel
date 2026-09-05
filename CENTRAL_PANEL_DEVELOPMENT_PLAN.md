@@ -67,6 +67,7 @@
 - W10-01 本地测试环境检查已完成：新增 Linux/Windows staging smoke 脚本，自动验证健康检查、安全响应头及可选管理员登录；本地 `http://localhost:8090` 冒烟通过；同时补充 Nginx 反向代理模板，公网 staging 尚未部署。
 - 出口资产来源模型已完成：`exit_ips` 支持线路机/落地机节点公网出口和独立 S5，线路绑定增加 `scope=relay|landing|external`，旧 `landingNodeId` 数据与接口保持兼容；前端出口 IP 页面改为来源选择，线路绑定按出口位置筛选，线路机节点详情也展示直出 IP。
 - 用户路径模型整改已完成：新增 `user_paths` 作为日常主流程；线路机从用户主 Inbound 自动确定，用户详情直接选择可选落地机/落地 Inbound 和固定出口 IP（支持线路机直出、落地机出口、独立 S5），更换/解除路径保留历史并记录审计日志。旧 `routes`、`user_routes`、`route_exit_ips` 及接口保留兼容，不再作为新用户分配的前置步骤。
+- W10-02 Agent 一键部署已完成：节点接入向导针对 Ubuntu/Debian amd64 生成一行在线安装命令；中央签发 15 分钟一次性安装 Token，目标机脚本通过 GitHub 下载并校验 Agent、在本机读取 X-Panel 凭据、自动安装 systemd 服务并兑换正式节点凭据；手动 YAML 部署继续保留。
 - 当前本地开发服务地址：前端 `http://localhost:9527`，中央后端 `http://localhost:8090`；公网测试服务器联调尚未开始。
 
 下一步优先级：

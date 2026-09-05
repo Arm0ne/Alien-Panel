@@ -104,6 +104,16 @@ Before exposing the service:
 3. Verify `GET /health/live` and `GET /health/ready` through the HTTPS domain,
    and confirm the response headers before registering an Agent.
 
+### Ubuntu/Debian one-line Agent installation
+
+The node onboarding dialog generates a short-lived, single-use installer
+command for Ubuntu/Debian amd64. It downloads the Agent from GitHub, exchanges
+the installer token for the node credential, verifies the Agent checksum, asks
+for the target node's local X-Panel credentials, and installs the systemd
+service. The password is read from the target terminal and is never sent to
+the central panel. The existing manual YAML installation remains available as
+a fallback.
+
 ### Uploading the Vue frontend
 
 Build on the local Windows workstation and upload to a temporary directory:

@@ -1435,8 +1435,31 @@ func TestNodeAdminRegistrationAndToggle(t *testing.T) {
 	createdData := created["data"].(map[string]any)
 	nodeID := createdData["nodeId"].(string)
 	nodeToken := createdData["token"].(string)
-	if nodeID == "" || nodeToken == "" || createdData["nodeKey"] != "admin-landing-1" || createdData["type"] != "landing" {
+	installerToken, _ := createdData["installerToken"].(string)
+	if nodeID == "" || nodeToken == "" || installerToken == "" || createdData["nodeKey"] != "admin-landing-1" || createdData["type"] != "landing" {
 		t.Fatalf("unexpected node registration data: %#v", createdData)
+	}
+	installerExpiry, _ := createdData["installerTokenExpiresAt"].(string)
+	if _, err := time.Parse(time.RFC3339Nano, installerExpiry); err != nil {
+		t.Fatalf("invalid installer token expiry: %q", installerExpiry)
+	}
+
+	bootstrapStatus, bootstrap := doJSONWithStatus(t, ts.Client(), http.MethodPost, ts.URL+"/api/agent/v1/bootstrap", "", map[string]any{
+		"install_token": installerToken, "hostname": "landing-host", "agent_version": "0.2.0",
+	})
+	if bootstrapStatus != http.StatusOK || bootstrap["code"] != successCode {
+		t.Fatalf("Agent bootstrap status=%d response=%#v", bootstrapStatus, bootstrap)
+	}
+	bootstrapData := bootstrap["data"].(map[string]any)
+	bootstrappedToken, _ := bootstrapData["central_token"].(string)
+	if bootstrappedToken == "" || bootstrapData["node_key"] != "admin-landing-1" || bootstrapData["node_type"] != "landing" {
+		t.Fatalf("unexpected Agent bootstrap response: %#v", bootstrapData)
+	}
+	secondBootstrapStatus, secondBootstrap := doJSONWithStatus(t, ts.Client(), http.MethodPost, ts.URL+"/api/agent/v1/bootstrap", "", map[string]any{
+		"install_token": installerToken,
+	})
+	if secondBootstrapStatus != http.StatusUnauthorized || secondBootstrap["code"] != unauthorizedCode {
+		t.Fatalf("reused installer token status=%d response=%#v", secondBootstrapStatus, secondBootstrap)
 	}
 
 	list := doJSON(t, ts.Client(), http.MethodGet, ts.URL+"/api/nodes?page_size=20", token, nil)
@@ -1475,7 +1498,7 @@ func TestNodeAdminRegistrationAndToggle(t *testing.T) {
 		t.Fatalf("enable node status=%d response=%#v", enabledStatus, enabled)
 	}
 
-	heartbeat := doJSON(t, ts.Client(), http.MethodPost, ts.URL+"/api/agent/v1/heartbeat", nodeToken, map[string]any{
+	heartbeat := doJSON(t, ts.Client(), http.MethodPost, ts.URL+"/api/agent/v1/heartbeat", bootstrappedToken, map[string]any{
 		"node_key": "admin-landing-1", "observed_at": time.Now().UTC().Format(time.RFC3339), "status": map[string]any{"xray_running": true},
 	})
 	if heartbeat["code"] != successCode {
@@ -1504,6 +1527,46 @@ func TestNodeAdminGeneratesNodeKeyWhenOmitted(t *testing.T) {
 	nodeKey, _ := created["data"].(map[string]any)["nodeKey"].(string)
 	if !strings.HasPrefix(nodeKey, "node-") || len(nodeKey) != len("node-")+16 {
 		t.Fatalf("generated node key = %q", nodeKey)
+	}
+}
+
+func TestNodeAdminRotatesInstallerToken(t *testing.T) {
+	server, _ := testServer(t)
+	ts := httptest.NewServer(server.Handler())
+	defer ts.Close()
+
+	login := doJSON(t, ts.Client(), http.MethodPost, ts.URL+"/api/auth/login", "", map[string]string{"userName": "admin", "password": "test-password"})
+	adminToken := login["data"].(map[string]any)["token"].(string)
+	created := doJSON(t, ts.Client(), http.MethodPost, ts.URL+"/api/nodes", adminToken, map[string]any{
+		"name": "安装 Token 轮换节点", "type": "relay",
+	})
+	if created["code"] != successCode {
+		t.Fatalf("create node response = %#v", created)
+	}
+	createdData := created["data"].(map[string]any)
+	nodeID := createdData["nodeId"].(string)
+	firstToken := createdData["installerToken"].(string)
+	rotatedStatus, rotated := doJSONWithStatus(t, ts.Client(), http.MethodPost, ts.URL+"/api/nodes/"+nodeID+"/install-token", adminToken, nil)
+	if rotatedStatus != http.StatusOK || rotated["code"] != successCode {
+		t.Fatalf("rotate installer token status=%d response=%#v", rotatedStatus, rotated)
+	}
+	rotatedData := rotated["data"].(map[string]any)
+	secondToken := rotatedData["installerToken"].(string)
+	if secondToken == "" || secondToken == firstToken || rotatedData["nodeId"] != nodeID {
+		t.Fatalf("unexpected rotated installer token: %#v", rotatedData)
+	}
+
+	oldStatus, oldResponse := doJSONWithStatus(t, ts.Client(), http.MethodPost, ts.URL+"/api/agent/v1/bootstrap", "", map[string]any{"install_token": firstToken})
+	if oldStatus != http.StatusUnauthorized || oldResponse["code"] != unauthorizedCode {
+		t.Fatalf("rotated installer token remained usable status=%d response=%#v", oldStatus, oldResponse)
+	}
+	newStatus, newResponse := doJSONWithStatus(t, ts.Client(), http.MethodPost, ts.URL+"/api/agent/v1/bootstrap", "", map[string]any{"install_token": secondToken})
+	if newStatus != http.StatusOK || newResponse["code"] != successCode {
+		t.Fatalf("new installer token status=%d response=%#v", newStatus, newResponse)
+	}
+	reusedStatus, reusedResponse := doJSONWithStatus(t, ts.Client(), http.MethodPost, ts.URL+"/api/agent/v1/bootstrap", "", map[string]any{"install_token": secondToken})
+	if reusedStatus != http.StatusUnauthorized || reusedResponse["code"] != unauthorizedCode {
+		t.Fatalf("rotated installer token reused status=%d response=%#v", reusedStatus, reusedResponse)
 	}
 }
 

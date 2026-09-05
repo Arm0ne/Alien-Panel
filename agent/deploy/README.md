@@ -1,5 +1,27 @@
 # Agent deployment
 
+## Ubuntu/Debian online installer
+
+The central panel's node onboarding dialog generates a one-line command for
+Ubuntu/Debian amd64 servers. The command downloads `install-online.sh` from
+the public repository, exchanges a short-lived single-use installer token,
+asks for the local X-Panel username/password, and installs the Agent as a
+quiet systemd service:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/Arm0ne/Alien-Panel/main/agent/deploy/install-online.sh \
+  | sudo bash -s -- --central-url https://panel.example.com/api \
+  --install-token <one-time-token> \
+  --xpanel-url http://127.0.0.1:2053 --xpanel-base-path /
+```
+
+The installer supports Ubuntu/Debian amd64 only. It verifies the downloaded
+Agent against `release/xpanel-agent.sha256`, creates the `xpanel-agent` system
+user, writes `/etc/xpanel-agent/agent.yaml` with mode `0600`, and starts the
+service. X-Panel credentials are read from `/dev/tty` so the command also
+works when the script is piped from `curl`; they are never sent to the central
+panel. The installer token expires after 15 minutes and cannot be reused.
+
 Build a static Linux binary from the `agent/` directory and copy it to
 `/usr/local/bin/xpanel-agent` on the node. Then run `install.sh` as root.
 
