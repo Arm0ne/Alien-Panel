@@ -9,20 +9,20 @@
 推荐使用 HTTPS 域名和宿主机 Nginx/Caddy。将本目录提交到 GitHub 后，在 Ubuntu/Debian amd64 服务器执行：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Arm0ne/Alien-Panel/main/Alien-Panel-v1.0.0-production/install.sh \
+curl -fsSL https://raw.githubusercontent.com/Arm0ne/Alien-Panel/main/install.sh \
   | sudo bash -s -- --repo https://github.com/Arm0ne/Alien-Panel.git --ref main --domain panel.example.com
 ```
 
 仓库使用默认值时可以进一步缩短为：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Arm0ne/Alien-Panel/main/Alien-Panel-v1.0.0-production/install.sh | sudo bash -s -- --domain panel.example.com
+curl -fsSL https://raw.githubusercontent.com/Arm0ne/Alien-Panel/main/install.sh | sudo bash -s -- --domain panel.example.com
 ```
 
 如果只做临时公网测试，不使用域名：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Arm0ne/Alien-Panel/main/Alien-Panel-v1.0.0-production/install.sh \
+curl -fsSL https://raw.githubusercontent.com/Arm0ne/Alien-Panel/main/install.sh \
   | sudo bash -s -- --repo https://github.com/Arm0ne/Alien-Panel.git --ref main
 ```
 

@@ -11,20 +11,20 @@
 脚本入口是本目录的 `install.sh`，它可以从 GitHub raw URL 直接执行。脚本本身会下载同一版本目录的压缩包，校验 SHA-256，再复制运行所需文件到安装目录。
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Arm0ne/Alien-Panel/main/Alien-Panel-v1.0.0-production/install.sh \
+curl -fsSL https://raw.githubusercontent.com/Arm0ne/Alien-Panel/main/install.sh \
   | sudo bash -s -- --repo https://github.com/Arm0ne/Alien-Panel.git --ref main --domain panel.example.com
 ```
 
 使用默认仓库和 `main` 分支时，命令可以简化为：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Arm0ne/Alien-Panel/main/Alien-Panel-v1.0.0-production/install.sh | sudo bash -s -- --domain panel.example.com
+curl -fsSL https://raw.githubusercontent.com/Arm0ne/Alien-Panel/main/install.sh | sudo bash -s -- --domain panel.example.com
 ```
 
 临时测试端口：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Arm0ne/Alien-Panel/main/Alien-Panel-v1.0.0-production/install.sh \
+curl -fsSL https://raw.githubusercontent.com/Arm0ne/Alien-Panel/main/install.sh \
   | sudo bash -s -- --repo https://github.com/Arm0ne/Alien-Panel.git --ref main --port 18080
 ```
 
@@ -92,7 +92,7 @@ sudo docker compose -p alien-panel -f deploy/docker-compose.yml logs --tail=100 
 重复执行相同命令即可：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Arm0ne/Alien-Panel/main/Alien-Panel-v1.0.0-production/install.sh \
+curl -fsSL https://raw.githubusercontent.com/Arm0ne/Alien-Panel/main/install.sh \
   | sudo bash -s -- --repo https://github.com/Arm0ne/Alien-Panel.git --ref main --domain panel.example.com
 ```
 

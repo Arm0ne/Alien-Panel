@@ -9,7 +9,7 @@ set -Eeuo pipefail
 # under /opt/alien-panel, and starts the two-container deployment.
 
 PRODUCT_NAME="Alien-Panel"
-PACKAGE_DIR_NAME="Alien-Panel-v1.0.0-production"
+PACKAGE_DIR_NAME="Alien-Panel"
 DEFAULT_REPO="https://github.com/Arm0ne/Alien-Panel.git"
 DEFAULT_REF="main"
 DEFAULT_INSTALL_DIR="/opt/alien-panel"

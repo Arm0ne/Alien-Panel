@@ -5,7 +5,7 @@
 Compose 项目。
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Arm0ne/Alien-Panel/main/Alien-Panel-v1.0.0-production/install.sh \
+curl -fsSL https://raw.githubusercontent.com/Arm0ne/Alien-Panel/main/install.sh \
   | sudo bash -s -- --repo https://github.com/Arm0ne/Alien-Panel.git --ref main
 ```
 
