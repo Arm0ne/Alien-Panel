@@ -1,0 +1,1 @@
+import{$i as e,Ji as t,ca as n}from"./router-CCMKz-_h.js";import{t as r}from"./exception-base-D5xdgVKB.js";var i=e({name:`404`,__name:`index`,setup(e){return(e,i)=>{let a=r;return n(),t(a,{type:`404`})}}});export{i as default};

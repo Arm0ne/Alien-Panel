@@ -1,0 +1,25 @@
+{
+  "success": true,
+  "msg": "success",
+  "obj": [
+    {
+      "id": 101,
+      "remark": "customer-v1",
+      "protocol": "vless",
+      "port": "443",
+      "listen": "0.0.0.0",
+      "enable": true,
+      "expiryTime": "1792022400",
+      "up": 100,
+      "down": 250,
+      "settings": {
+        "clients": [
+          {"id": "v1-client", "email": "v1-phone", "enable": true, "expiryTime": 1792022400}
+        ]
+      },
+      "clientStats": [
+        {"id": "v1-client", "email": "v1-phone", "up": 10, "down": 20, "allTime": 30, "lastOnline": 1791000000}
+      ]
+    }
+  ]
+}

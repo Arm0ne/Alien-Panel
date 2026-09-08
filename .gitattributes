@@ -1,0 +1,6 @@
+# Keep files executed on Linux and checksum manifests in LF format.
+*.sh text eol=lf
+*.sha256 text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+Dockerfile* text eol=lf

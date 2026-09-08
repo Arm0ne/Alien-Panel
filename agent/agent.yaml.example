@@ -1,0 +1,11 @@
+node_key: relay-001
+node_name: relay-001
+node_type: relay
+central_url: https://central.example.com/api
+central_token: replace-with-node-token
+xpanel_url: http://127.0.0.1:2053
+xpanel_base_path: /
+xpanel_username: admin
+xpanel_password: replace-with-xpanel-password
+sync_interval: 60s
+http_timeout: 15s

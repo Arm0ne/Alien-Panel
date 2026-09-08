@@ -1,0 +1,11 @@
+# Local development and runtime output
+backend/data/
+backend/*.db
+backend/*.db-wal
+backend/*.db-shm
+backend/*.log
+backend/*.exe
+agent/*.exe
+frontend/node_modules/
+frontend/dist/
+*.tmp

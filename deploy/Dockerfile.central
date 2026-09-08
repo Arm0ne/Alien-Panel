@@ -1,0 +1,17 @@
+# Runtime-only image for the central panel. The release binary is built on the
+# development machine (or by CI), so a test server does not need Go installed.
+FROM alpine:3.22
+
+RUN addgroup -S xpanel-central \
+    && adduser -S -D -H -G xpanel-central xpanel-central \
+    && install -d -o xpanel-central -g xpanel-central -m 0750 /var/lib/xpanel-central
+
+COPY release/xpanel-central /usr/local/bin/xpanel-central
+RUN chmod 0755 /usr/local/bin/xpanel-central
+
+USER xpanel-central
+WORKDIR /var/lib/xpanel-central
+VOLUME ["/var/lib/xpanel-central"]
+
+EXPOSE 8090
+ENTRYPOINT ["/usr/local/bin/xpanel-central"]

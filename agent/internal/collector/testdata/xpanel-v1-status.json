@@ -1,0 +1,10 @@
+{
+  "success": true,
+  "obj": {
+    "xray": {"state": "running", "version": "1.8.4"},
+    "cpu": 6.25,
+    "mem": {"current": 1048576, "total": 4194304},
+    "disk": {"current": 2147483648, "total": 8589934592},
+    "xpanel_version": "2.4.7"
+  }
+}
