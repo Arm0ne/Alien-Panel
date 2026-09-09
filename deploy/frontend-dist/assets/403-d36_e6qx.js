@@ -1,1 +1,0 @@
-import{Zi as e,da as t,na as n}from"./router-Dj5ayp1M.js";import{t as r}from"./exception-base-DPO9TygT.js";var i=n({name:`403`,__name:`index`,setup(n){return(n,i)=>{let a=r;return t(),e(a,{type:`403`})}}});export{i as default};
