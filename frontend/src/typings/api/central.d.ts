@@ -332,6 +332,17 @@ declare namespace Api {
       clientCount: number;
     }
 
+    interface NodeListStats {
+      total: number;
+      online: number;
+      relay: number;
+      landing: number;
+    }
+
+    interface NodeListResult extends PageResult<NodeSummary> {
+      stats: NodeListStats;
+    }
+
     interface NodeCreatePayload {
       /** Optional advanced override; the central service generates one when omitted. */
       nodeKey?: string;

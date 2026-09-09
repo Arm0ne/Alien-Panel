@@ -19,6 +19,7 @@ const deletingNodeId = ref('');
 const errorMessage = ref('');
 const rows = ref<Api.Central.NodeSummary[]>([]);
 const total = ref(0);
+const stats = ref<Api.Central.NodeListStats | null>(null);
 const dataAt = ref('');
 const selectedType = ref('all');
 const onboardingVisible = ref(false);
@@ -469,10 +470,12 @@ async function loadNodes() {
     errorMessage.value = '中央后端暂不可用，无法读取节点数据';
     rows.value = [];
     total.value = 0;
+    stats.value = null;
     dataAt.value = '';
   } else {
     rows.value = data.items;
     total.value = data.total;
+    stats.value = data.stats;
     dataAt.value = data.dataAt || '';
   }
   loading.value = false;
@@ -530,23 +533,45 @@ onMounted(loadNodes);
         </NButton>
       </template>
       <template #toolbar>
-        <div class="border-b border-gray-200 p-16px dark:border-gray-700">
-          <NSpace wrap>
-            <NInput
-              v-model:value="filters.keyword"
-              clearable
-              class="w-220px"
-              placeholder="搜索节点名称或地址"
-              @keyup.enter="submitFilters"
-            />
-            <NSelect v-model:value="selectedType" :options="typeOptions" class="w-140px" />
-            <NSelect v-model:value="filters.status" :options="statusOptions" class="w-140px" />
-            <NButton type="primary" @click="submitFilters">
-              <template #icon><icon-mdi-magnify /></template>
-              查询
-            </NButton>
-            <NButton @click="resetFilters">重置</NButton>
-          </NSpace>
+        <div>
+          <div v-if="stats" class="nodes-kpis p-16px pb-0">
+            <NCard :bordered="false" size="small">
+              <NStatistic label="节点总数" :value="stats.total" />
+              <div class="mt-4px text-12px text-gray-400">已接入且未删除的节点</div>
+            </NCard>
+            <NCard :bordered="false" size="small">
+              <NStatistic label="在线节点" :value="stats.online">
+                <template #suffix>/ {{ stats.total }}</template>
+              </NStatistic>
+              <div class="mt-4px text-12px text-gray-400">启用且健康状态正常</div>
+            </NCard>
+            <NCard :bordered="false" size="small">
+              <NStatistic label="线路机" :value="stats.relay" />
+              <div class="mt-4px text-12px text-info">承载业务用户 Inbound</div>
+            </NCard>
+            <NCard :bordered="false" size="small">
+              <NStatistic label="落地机" :value="stats.landing" />
+              <div class="mt-4px text-12px text-warning">用于落地出口和路径</div>
+            </NCard>
+          </div>
+          <div class="border-b border-gray-200 p-16px dark:border-gray-700">
+            <NSpace wrap>
+              <NInput
+                v-model:value="filters.keyword"
+                clearable
+                class="w-220px"
+                placeholder="搜索节点名称或地址"
+                @keyup.enter="submitFilters"
+              />
+              <NSelect v-model:value="selectedType" :options="typeOptions" class="w-140px" />
+              <NSelect v-model:value="filters.status" :options="statusOptions" class="w-140px" />
+              <NButton type="primary" @click="submitFilters">
+                <template #icon><icon-mdi-magnify /></template>
+                查询
+              </NButton>
+              <NButton @click="resetFilters">重置</NButton>
+            </NSpace>
+          </div>
         </div>
       </template>
       <NDataTable
@@ -707,3 +732,17 @@ onMounted(loadNodes);
     </NModal>
   </div>
 </template>
+
+<style scoped>
+.nodes-kpis {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 12px;
+}
+
+@media (min-width: 768px) {
+  .nodes-kpis {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+}
+</style>

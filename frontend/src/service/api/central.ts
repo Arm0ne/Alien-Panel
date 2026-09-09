@@ -153,7 +153,7 @@ export function clearUserRoute(id: string) {
 }
 
 export function fetchNodes(params: Api.Central.PageParams = {}) {
-  return request<Api.Central.PageResult<Api.Central.NodeSummary>>({ url: '/nodes', params });
+  return request<Api.Central.NodeListResult>({ url: '/nodes', params });
 }
 
 /** Create a central node record and issue a one-time Agent token. */

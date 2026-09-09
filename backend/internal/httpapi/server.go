@@ -943,6 +943,12 @@ func (s *Server) nodes(w http.ResponseWriter, r *http.Request) {
 		writeFailure(w, http.StatusInternalServerError, internalErrorCode, "could not count nodes")
 		return
 	}
+	stats, err := s.nodeListStats()
+	if err != nil {
+		s.logger.Error("read node list statistics", "error", err)
+		writeFailure(w, http.StatusInternalServerError, internalErrorCode, "could not read node statistics")
+		return
+	}
 	rows, err := s.db.Query(`SELECT n.id, n.name, n.type, n.health_status, n.sync_status, COALESCE(n.last_sync_error, ''), n.enabled,
 	COALESCE(n.management_url, ''), COALESCE(NULLIF(n.management_url, ''), NULLIF(n.public_ip, ''), n.hostname, ''), COALESCE(n.region, ''), COALESCE(n.xray_version, ''),
 COALESCE(n.cpu_usage, 0), COALESCE(n.memory_used, 0), COALESCE(n.memory_total, 0), COALESCE(n.disk_used, 0), COALESCE(n.disk_total, 0),
@@ -997,7 +1003,29 @@ WHERE c.enable = 1), 0)
 			"userCount": userCount, "paidUserCount": paidUserCount, "freeUserCount": freeUserCount, "clientCount": clientCount,
 		})
 	}
-	writeSuccess(w, s.pageResponse(items, total, query))
+	response := s.pageResponse(items, total, query)
+	response["stats"] = stats
+	writeSuccess(w, response)
+}
+
+// nodeListStats keeps the node management cards aligned with the dashboard
+// counts while the table itself remains paginated and filterable.
+func (s *Server) nodeListStats() (map[string]int, error) {
+	var total, online, relay, landing int
+	for _, item := range []struct {
+		target *int
+		query  string
+	}{
+		{&total, `SELECT COUNT(*) FROM nodes WHERE deleted_at IS NULL`},
+		{&online, `SELECT COUNT(*) FROM nodes WHERE deleted_at IS NULL AND health_status = 'online' AND enabled = 1`},
+		{&relay, `SELECT COUNT(*) FROM nodes WHERE deleted_at IS NULL AND type = 'relay' AND enabled = 1`},
+		{&landing, `SELECT COUNT(*) FROM nodes WHERE deleted_at IS NULL AND type = 'landing' AND enabled = 1`},
+	} {
+		if err := s.db.QueryRow(item.query).Scan(item.target); err != nil {
+			return nil, err
+		}
+	}
+	return map[string]int{"total": total, "online": online, "relay": relay, "landing": landing}, nil
 }
 
 // nodeDetail returns the latest central snapshot for one node. The nested

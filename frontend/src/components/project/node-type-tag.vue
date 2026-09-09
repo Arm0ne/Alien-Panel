@@ -9,9 +9,9 @@ interface Props {
 
 const props = withDefaults(defineProps<Props>(), { type: 'unknown' });
 
-const typeMap: Record<string, { label: string; type: 'info' | 'success' | 'default' }> = {
+const typeMap: Record<string, { label: string; type: 'info' | 'warning' | 'default' }> = {
   relay: { label: '线路机', type: 'info' },
-  landing: { label: '落地机', type: 'success' },
+  landing: { label: '落地机', type: 'warning' },
   unknown: { label: '未知类型', type: 'default' }
 };
 

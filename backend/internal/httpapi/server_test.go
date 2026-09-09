@@ -1108,7 +1108,12 @@ func TestNodeListIncludesCurrentRelayCapacity(t *testing.T) {
 	if result["code"] != successCode {
 		t.Fatalf("node list response: %#v", result)
 	}
-	items := result["data"].(map[string]any)["items"].([]any)
+	data := result["data"].(map[string]any)
+	stats := data["stats"].(map[string]any)
+	if stats["total"] != float64(2) || stats["online"] != float64(2) || stats["relay"] != float64(1) || stats["landing"] != float64(1) {
+		t.Fatalf("node stats = %#v, want total=2 online=2 relay=1 landing=1", stats)
+	}
+	items := data["items"].([]any)
 	byID := make(map[string]map[string]any, len(items))
 	for _, item := range items {
 		row := item.(map[string]any)
