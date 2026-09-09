@@ -115,7 +115,11 @@ onMounted(loadFinance);
     </template>
 
     <div v-if="summary" class="finance-content p-16px">
-      <div class="grid grid-cols-1 gap-12px sm:grid-cols-2 xl:grid-cols-5">
+      <div class="grid grid-cols-1 gap-12px sm:grid-cols-2 xl:grid-cols-6">
+        <NCard size="small" embedded>
+          <NStatistic label="服务期折算收入" :value="formatMoney(summary.monthIncome, summary.currency)" />
+          <div class="mt-4px text-12px text-gray-500">年费按月折算，用于经营分析</div>
+        </NCard>
         <NCard size="small" embedded>
           <NStatistic label="本期实收" :value="formatMoney(summary.cashIncome, summary.currency)" />
           <div class="mt-4px text-12px text-gray-500">{{ orders.length }} 笔已确认订单</div>
