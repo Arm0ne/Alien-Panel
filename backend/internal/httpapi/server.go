@@ -90,6 +90,9 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/users/{id}/renewals/{candidateId}/confirm", s.requireAuth(http.HandlerFunc(s.confirmUserRenewal)))
 	mux.Handle("POST /api/users/{id}/renewals/{candidateId}/reject", s.requireAuth(http.HandlerFunc(s.rejectUserRenewal)))
 	mux.Handle("POST /api/users/{id}/billing-records", s.requireAuth(http.HandlerFunc(s.createBillingRecord)))
+	mux.Handle("POST /api/users/{id}/billing-records/{recordId}/verify", s.requireAuth(http.HandlerFunc(s.verifyBillingRecord)))
+	mux.Handle("POST /api/users/{id}/billing-records/{recordId}/cancel", s.requireAuth(http.HandlerFunc(s.cancelBillingRecord)))
+	mux.Handle("POST /api/billing/import", s.requireAuth(http.HandlerFunc(s.importBillingRecords)))
 	mux.Handle("GET /api/users/{id}/traffic", s.requireAuth(http.HandlerFunc(s.userTraffic)))
 	mux.Handle("GET /api/users/{id}/path-assets", s.requireAuth(http.HandlerFunc(s.userPathAssets)))
 	mux.Handle("PATCH /api/users/{id}", s.requireAuth(http.HandlerFunc(s.updateUser)))
@@ -2684,11 +2687,11 @@ WHERE currency = 'CNY'
 		return financeResponse{}, err
 	}
 	if err := s.db.QueryRow(`SELECT COALESCE(SUM(amount), 0) FROM user_billing_records
-WHERE currency = 'CNY' AND status = 'confirmed' AND paid_at IS NOT NULL
+WHERE currency = 'CNY' AND status = 'confirmed' AND COALESCE(verification_status, 'verified') = 'verified' AND paid_at IS NOT NULL
   AND datetime(paid_at) >= datetime(?) AND datetime(paid_at) < datetime(?)`, start, end).Scan(&result.CashIncome); err != nil {
 		return financeResponse{}, err
 	}
-	if err := s.db.QueryRow(`SELECT COALESCE(SUM(amount), 0) FROM user_billing_records WHERE currency = 'CNY' AND status = 'confirmed'`).Scan(&result.CumulativeCash); err != nil {
+	if err := s.db.QueryRow(`SELECT COALESCE(SUM(amount), 0) FROM user_billing_records WHERE currency = 'CNY' AND status = 'confirmed' AND COALESCE(verification_status, 'verified') = 'verified'`).Scan(&result.CumulativeCash); err != nil {
 		return financeResponse{}, err
 	}
 	var nodeCost, otherCost, exitCost float64
@@ -2725,7 +2728,7 @@ WHERE currency = 'CNY' AND status = 'confirmed' AND paid_at IS NOT NULL
 func (s *Server) financeOperations(period, start, end string, result *financeResponse) error {
 	result.CashBreakdown = make([]map[string]any, 0)
 	rows, err := s.db.Query(`SELECT COALESCE(order_type, 'initial'), COUNT(*), COALESCE(SUM(amount), 0)
-FROM user_billing_records WHERE currency = 'CNY' AND status = 'confirmed' AND paid_at IS NOT NULL
+FROM user_billing_records WHERE currency = 'CNY' AND status = 'confirmed' AND COALESCE(verification_status, 'verified') = 'verified' AND paid_at IS NOT NULL
   AND datetime(paid_at) >= datetime(?) AND datetime(paid_at) < datetime(?) GROUP BY COALESCE(order_type, 'initial') ORDER BY amount DESC`, start, end)
 	if err != nil {
 		return err
@@ -2749,7 +2752,7 @@ FROM user_billing_records WHERE currency = 'CNY' AND status = 'confirmed' AND pa
 FROM user_billing_records b LEFT JOIN users u ON u.id = b.user_id
 LEFT JOIN user_inbounds ui ON ui.user_id = b.user_id AND ui.is_primary = 1 AND ui.active_to IS NULL
 LEFT JOIN inbounds i ON i.id = ui.inbound_id LEFT JOIN nodes n ON n.id = i.node_id
-WHERE b.status = 'confirmed' AND b.paid_at IS NOT NULL AND datetime(b.paid_at) >= datetime(?) AND datetime(b.paid_at) < datetime(?)
+WHERE b.status = 'confirmed' AND COALESCE(b.verification_status, 'verified') = 'verified' AND b.paid_at IS NOT NULL AND datetime(b.paid_at) >= datetime(?) AND datetime(b.paid_at) < datetime(?)
 ORDER BY datetime(b.paid_at) DESC, b.created_at DESC LIMIT 500`, start, end)
 	if err != nil {
 		return err
@@ -2792,10 +2795,10 @@ ORDER BY effective_from DESC`, end, start, end, start, end, start)
 	if err := s.db.QueryRow(`SELECT COUNT(*) FROM users WHERE deleted_at IS NULL AND COALESCE(billing_type, 'paid') = 'paid' AND expiry_time IS NOT NULL AND datetime(expiry_time) >= datetime(?) AND datetime(expiry_time) < datetime(?)`, start, end).Scan(&due); err != nil {
 		return err
 	}
-	if err := s.db.QueryRow(`SELECT COUNT(DISTINCT user_id) FROM user_billing_records WHERE status = 'confirmed' AND order_type = 'renewal' AND paid_at IS NOT NULL AND datetime(paid_at) >= datetime(?) AND datetime(paid_at) < datetime(?)`, start, end).Scan(&renewed); err != nil {
+	if err := s.db.QueryRow(`SELECT COUNT(DISTINCT user_id) FROM user_billing_records WHERE status = 'confirmed' AND COALESCE(verification_status, 'verified') = 'verified' AND order_type = 'renewal' AND paid_at IS NOT NULL AND datetime(paid_at) >= datetime(?) AND datetime(paid_at) < datetime(?)`, start, end).Scan(&renewed); err != nil {
 		return err
 	}
-	if err := s.db.QueryRow(`SELECT COUNT(DISTINCT user_id) FROM user_billing_records WHERE status = 'confirmed' AND order_type = 'recovery' AND paid_at IS NOT NULL AND datetime(paid_at) >= datetime(?) AND datetime(paid_at) < datetime(?)`, start, end).Scan(&recovery); err != nil {
+	if err := s.db.QueryRow(`SELECT COUNT(DISTINCT user_id) FROM user_billing_records WHERE status = 'confirmed' AND COALESCE(verification_status, 'verified') = 'verified' AND order_type = 'recovery' AND paid_at IS NOT NULL AND datetime(paid_at) >= datetime(?) AND datetime(paid_at) < datetime(?)`, start, end).Scan(&recovery); err != nil {
 		return err
 	}
 	result.Renewal = map[string]any{"dueUsers": due, "renewedUsers": renewed, "notRenewedUsers": maxInt(due-renewed, 0), "renewalRate": renewalRate(renewed, due), "recoveryUsers": recovery}

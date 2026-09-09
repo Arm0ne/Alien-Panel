@@ -5,13 +5,16 @@ import { NButton } from 'naive-ui';
 import type { DataTableColumns } from 'naive-ui';
 import {
   assignUserPath,
+  cancelUserBillingRecord,
   createUserBillingRecord,
   confirmUserRenewal,
   clearUserPath,
   fetchUserDetail,
   fetchUserPathAssets,
   fetchUsers,
+  importUserBillingRecords,
   rejectUserRenewal,
+  verifyUserBillingRecord,
   updateUser
 } from '@/service/api';
 import ModulePage from '@/components/project/module-page.vue';
@@ -51,6 +54,26 @@ const initialOrderForm = reactive({
   notes: ''
 });
 const initialOrderSaving = ref(false);
+const orderModalVisible = ref(false);
+const orderSaving = ref(false);
+const orderForm = reactive({
+  billingCycle: 'monthly' as Api.Central.BillingCycle,
+  amount: null as number | null,
+  serviceFrom: null as string | null,
+  serviceTo: null as string | null,
+  paidAt: new Date().toISOString().slice(0, 10),
+  orderType: 'renewal' as 'initial' | 'renewal' | 'recovery',
+  notes: ''
+});
+const verifyModalVisible = ref(false);
+const verifySaving = ref(false);
+const verifyRecord = ref<Api.Central.UserBillingRecord | null>(null);
+const verifyPaidAt = ref('');
+const verifyNotes = ref('');
+const importModalVisible = ref(false);
+const importText = ref('');
+const importPreview = ref<Api.Central.BillingImportResult | null>(null);
+const importLoading = ref(false);
 const pathAssets = ref<Api.Central.UserPathAssets | null>(null);
 const pathLandingInbounds = ref<Api.Central.NodeInboundDetail[]>([]);
 const pathAssetsLoading = ref(false);
@@ -202,6 +225,199 @@ async function createInitialOrder() {
   copyDetailToForm(data);
   window.$message?.success('首笔订单已确认并计入实收');
   void loadUsers();
+}
+
+function resetOrderForm() {
+  orderForm.billingCycle = detail.value?.billingCycle || 'monthly';
+  orderForm.amount = detail.value?.billingAmount ?? detail.value?.monthlyFee ?? 0;
+  const records = detail.value?.billingRecords || [];
+  const latest = records.reduce<string | null>((value, record) => (value && value > record.serviceTo ? value : record.serviceTo), null);
+  orderForm.serviceFrom = latest ? toDateInputValue(latest) : null;
+  orderForm.serviceTo = detail.value?.expiresAt ? toDateInputValue(detail.value.expiresAt) : null;
+  orderForm.paidAt = new Date().toISOString().slice(0, 10);
+  orderForm.orderType = records.length === 0 ? 'initial' : 'renewal';
+  orderForm.notes = '';
+}
+
+function openOrderModal() {
+  resetOrderForm();
+  orderModalVisible.value = true;
+}
+
+async function createAdditionalOrder() {
+  if (!detail.value) return;
+  if (orderForm.amount === null || !Number.isFinite(orderForm.amount) || orderForm.amount < 0) {
+    window.$message?.warning('请填写有效的订单金额');
+    return;
+  }
+  const serviceFrom = dayToRFC3339(orderForm.serviceFrom);
+  const serviceTo = dayToRFC3339(orderForm.serviceTo);
+  if (!serviceFrom || !serviceTo || new Date(serviceTo) <= new Date(serviceFrom)) {
+    window.$message?.warning('请填写正确的服务区间');
+    return;
+  }
+  orderSaving.value = true;
+  const { data, error } = await createUserBillingRecord(detail.value.id, {
+    billingCycle: orderForm.billingCycle,
+    amount: orderForm.amount,
+    serviceFrom,
+    serviceTo,
+    paidAt: dayToRFC3339(orderForm.paidAt, true),
+    orderType: orderForm.orderType,
+    notes: orderForm.notes.trim()
+  });
+  orderSaving.value = false;
+  if (error || !data) {
+    window.$message?.error('订单保存失败，请检查服务区间是否与已有记录重叠');
+    return;
+  }
+  detail.value = data;
+  copyDetailToForm(data);
+  orderModalVisible.value = false;
+  window.$message?.success('订单已保存');
+  void loadUsers();
+}
+
+function openVerifyModal(record: Api.Central.UserBillingRecord) {
+  verifyRecord.value = record;
+  verifyPaidAt.value = toDateInputValue(record.paidAt) || new Date().toISOString().slice(0, 10);
+  verifyNotes.value = record.notes || '';
+  verifyModalVisible.value = true;
+}
+
+async function submitVerifyRecord() {
+  if (!detail.value || !verifyRecord.value) return;
+  if (!verifyPaidAt.value) {
+    window.$message?.warning('请填写实际收款日期');
+    return;
+  }
+  verifySaving.value = true;
+  const { data, error } = await verifyUserBillingRecord(detail.value.id, verifyRecord.value.id, {
+    paidAt: dayToRFC3339(verifyPaidAt.value, true),
+    notes: verifyNotes.value.trim()
+  });
+  verifySaving.value = false;
+  if (error || !data) {
+    window.$message?.error('历史订单核验失败');
+    return;
+  }
+  detail.value = data;
+  copyDetailToForm(data);
+  verifyModalVisible.value = false;
+  window.$message?.success('历史订单已核验并计入财务');
+  void loadUsers();
+}
+
+function cancelRecord(record: Api.Central.UserBillingRecord) {
+  if (!detail.value) return;
+  const cancel = async () => {
+    const { data, error } = await cancelUserBillingRecord(detail.value!.id, record.id, { notes: '管理员取消错误或重复的历史账单' });
+    if (error || !data) {
+      window.$message?.error('取消订单失败');
+      return;
+    }
+    detail.value = data;
+    copyDetailToForm(data);
+    window.$message?.success('订单已取消，财务统计已排除');
+    void loadUsers();
+  };
+  if (!window.$dialog) {
+    void cancel();
+    return;
+  }
+  window.$dialog.warning({
+    title: '取消订单',
+    content: '取消后该订单不会再计入收入，但记录仍会保留在历史中。确定继续吗？',
+    positiveText: '取消订单',
+    negativeText: '返回',
+    onPositiveClick: cancel
+  });
+}
+
+function parseCsvLine(line: string) {
+  const values: string[] = [];
+  let value = '';
+  let quoted = false;
+  for (let index = 0; index < line.length; index += 1) {
+    const char = line[index];
+    if (char === '"') {
+      if (quoted && line[index + 1] === '"') {
+        value += '"';
+        index += 1;
+      } else quoted = !quoted;
+    } else if (char === ',' && !quoted) {
+      values.push(value.trim());
+      value = '';
+    } else value += char;
+  }
+  values.push(value.trim());
+  return values;
+}
+
+function parseBillingCsv(value: string) {
+  const lines = value.split(/\r?\n/).map(line => line.trim()).filter(Boolean);
+  if (lines.length < 2) throw new Error('CSV 至少需要一行表头和一行数据');
+  const headers = parseCsvLine(lines[0]);
+  const required = ['billingCycle', 'amount', 'serviceFrom', 'serviceTo'];
+  for (const name of required) {
+    if (!headers.includes(name)) throw new Error(`CSV 缺少列：${name}`);
+  }
+  return lines.slice(1).map((line, rowIndex) => {
+    const values = parseCsvLine(line);
+    const row = Object.fromEntries(headers.map((header, index) => [header, values[index] || ''])) as Record<string, string>;
+    if (!row.userId && (!row.nodeId || !row.remoteInboundId)) throw new Error(`第 ${rowIndex + 2} 行缺少 userId 或 nodeId + remoteInboundId`);
+    return {
+      userId: row.userId || undefined,
+      nodeId: row.nodeId || undefined,
+      remoteInboundId: row.remoteInboundId || undefined,
+      billingCycle: row.billingCycle as Api.Central.BillingCycle,
+      amount: Number(row.amount),
+      serviceFrom: row.serviceFrom,
+      serviceTo: row.serviceTo,
+      paidAt: row.paidAt || undefined,
+      orderType: (row.orderType || 'renewal') as 'initial' | 'renewal' | 'recovery',
+      verified: row.verified === '' || ['true', '1', 'yes', '是'].includes(row.verified.toLowerCase()),
+      notes: row.notes || undefined
+    };
+  });
+}
+
+async function previewBillingImport() {
+  importLoading.value = true;
+  importPreview.value = null;
+  try {
+    const records = parseBillingCsv(importText.value);
+    const { data, error } = await importUserBillingRecords({ records, dryRun: true });
+    if (error || !data) window.$message?.error('导入预览失败，请检查 CSV 内容');
+    else importPreview.value = data;
+  } catch (error) {
+    window.$message?.error(error instanceof Error ? error.message : 'CSV 格式错误');
+  } finally {
+    importLoading.value = false;
+  }
+}
+
+async function submitBillingImport() {
+  if (!importPreview.value || importPreview.value.errors.length > 0) return;
+  importLoading.value = true;
+  try {
+    const records = parseBillingCsv(importText.value);
+    const { data, error } = await importUserBillingRecords({ records, dryRun: false });
+    if (error || !data) {
+      window.$message?.error('历史账单导入失败');
+      return;
+    }
+    importModalVisible.value = false;
+    importPreview.value = null;
+    importText.value = '';
+    window.$message?.success(`已导入 ${data.imported} 笔历史订单${data.unverified ? `，其中 ${data.unverified} 笔待核实` : ''}`);
+    void loadUsers();
+    if (selectedUserID.value) void openDetail(selectedUserID.value);
+  } catch (error) {
+    window.$message?.error(error instanceof Error ? error.message : 'CSV 格式错误');
+  } finally {
+    importLoading.value = false;
+  }
 }
 
 function syncPathForm(value: Api.Central.UserDetail) {
@@ -380,6 +596,10 @@ function cycleLabel(cycle: Api.Central.BillingCycle) {
   return cycle === 'annual' ? '年付' : '月付';
 }
 
+function orderTypeLabel(orderType: Api.Central.UserBillingRecord['orderType']) {
+  return orderType === 'renewal' ? '续费' : orderType === 'recovery' ? '逾期恢复' : '首购';
+}
+
 function formatMoney(amount: number, currency = 'CNY') {
   return `${currency} ${Number(amount || 0).toFixed(2)}`;
 }
@@ -419,7 +639,8 @@ const columns: DataTableColumns<Api.Central.UserSummary> = [
     render: row =>
       h('div', [
         h('div', { class: 'font-medium' }, row.name || '未命名用户'),
-        h('div', { class: 'text-12px text-gray-500' }, row.inboundTag)
+        h('div', { class: 'text-12px text-gray-500' }, row.inboundTag),
+        h('div', { class: 'text-11px text-gray-400' }, `ID: ${row.id}`)
       ])
   },
   {
@@ -544,6 +765,10 @@ onMounted(() => {
       @refresh="loadUsers"
     >
       <template #actions>
+        <NButton size="small" secondary @click="importModalVisible = true">
+          <template #icon><icon-mdi-upload /></template>
+          导入历史账单
+        </NButton>
         <NButton v-if="errorMessage" size="small" type="warning" secondary @click="loadUsers">重试</NButton>
       </template>
       <template #toolbar>
@@ -591,6 +816,97 @@ onMounted(() => {
         :scroll-x="1120"
       />
     </ModulePage>
+
+    <NModal v-model:show="importModalVisible" preset="card" title="导入历史账单" class="w-900px max-w-92vw">
+      <NAlert type="info" :show-icon="true" class="mb-12px">
+        每行一笔订单。表头支持：userId、nodeId、remoteInboundId、billingCycle、amount、serviceFrom、serviceTo、paidAt、orderType、verified、notes。
+        userId 与 nodeId + remoteInboundId 二选一；日期支持 YYYY-MM-DD。verified 填 false 的记录会进入待核实，不计入财务。
+      </NAlert>
+      <NInput
+        v-model:value="importText"
+        type="textarea"
+        :autosize="{ minRows: 8, maxRows: 18 }"
+        placeholder="userId,billingCycle,amount,serviceFrom,serviceTo,paidAt,orderType,verified,notes\n用户ID,monthly,100,2026-03-01,2026-04-01,2026-03-01,initial,true,首购"
+      />
+      <div v-if="importPreview" class="mt-12px">
+        <NAlert :type="importPreview.errors.length ? 'error' : 'success'" :show-icon="true">
+          {{ importPreview.errors.length ? `预览发现 ${importPreview.errors.length} 个错误，请修正后重新预览` : `预览通过：${importPreview.records.length} 笔，其中 ${importPreview.unverified} 笔待核实` }}
+        </NAlert>
+        <div v-if="importPreview.errors.length" class="mt-8px max-h-160px overflow-auto text-12px text-red-500">
+          <div v-for="item in importPreview.errors" :key="`${item.row}-${item.message}`">第 {{ item.row }} 行：{{ item.message }}</div>
+        </div>
+      </div>
+      <template #footer>
+        <NSpace justify="end">
+          <NButton @click="importModalVisible = false">关闭</NButton>
+          <NButton :loading="importLoading" @click="previewBillingImport">预览校验</NButton>
+          <NButton type="primary" :loading="importLoading" :disabled="!importPreview || importPreview.errors.length > 0" @click="submitBillingImport">
+            确认导入
+          </NButton>
+        </NSpace>
+      </template>
+    </NModal>
+
+    <NModal v-model:show="orderModalVisible" preset="card" title="新增订单" class="w-680px max-w-92vw">
+      <NForm label-placement="top">
+        <div class="grid gap-x-12px md:grid-cols-2">
+          <NFormItem label="订单类型" required>
+            <NSelect
+              v-model:value="orderForm.orderType"
+              :options="[
+                { label: '首购', value: 'initial' },
+                { label: '续费', value: 'renewal' },
+                { label: '逾期恢复', value: 'recovery' }
+              ]"
+            />
+          </NFormItem>
+          <NFormItem label="收费周期" required>
+            <NSelect
+              v-model:value="orderForm.billingCycle"
+              :options="[
+                { label: '月付', value: 'monthly' },
+                { label: '年付', value: 'annual' }
+              ]"
+            />
+          </NFormItem>
+          <NFormItem label="订单金额（CNY）" required>
+            <NInputNumber v-model:value="orderForm.amount" :min="0" :max="100000000" :precision="2" class="w-full" />
+          </NFormItem>
+          <NFormItem label="实际收款日期" required>
+            <NDatePicker v-model:formatted-value="orderForm.paidAt" type="date" value-format="yyyy-MM-dd" class="w-full" />
+          </NFormItem>
+          <NFormItem label="服务开始日期" required>
+            <NDatePicker v-model:formatted-value="orderForm.serviceFrom" type="date" value-format="yyyy-MM-dd" class="w-full" />
+          </NFormItem>
+          <NFormItem label="服务结束日期" required>
+            <NDatePicker v-model:formatted-value="orderForm.serviceTo" type="date" value-format="yyyy-MM-dd" class="w-full" />
+          </NFormItem>
+        </div>
+        <NFormItem label="订单备注"><NInput v-model:value="orderForm.notes" maxlength="2000" /></NFormItem>
+      </NForm>
+      <template #footer>
+        <NSpace justify="end">
+          <NButton @click="orderModalVisible = false">取消</NButton>
+          <NButton type="primary" :loading="orderSaving" @click="createAdditionalOrder">保存订单</NButton>
+        </NSpace>
+      </template>
+    </NModal>
+
+    <NModal v-model:show="verifyModalVisible" preset="card" title="核验历史订单" class="w-520px max-w-92vw">
+      <NAlert type="warning" :show-icon="true" class="mb-12px">核验后该订单会计入实收、服务期收入和续费统计。</NAlert>
+      <NForm label-placement="top">
+        <NFormItem label="实际收款日期" required>
+          <NDatePicker v-model:formatted-value="verifyPaidAt" type="date" value-format="yyyy-MM-dd" class="w-full" />
+        </NFormItem>
+        <NFormItem label="核验备注"><NInput v-model:value="verifyNotes" type="textarea" /></NFormItem>
+      </NForm>
+      <template #footer>
+        <NSpace justify="end">
+          <NButton @click="verifyModalVisible = false">取消</NButton>
+          <NButton type="primary" :loading="verifySaving" @click="submitVerifyRecord">确认核验</NButton>
+        </NSpace>
+      </template>
+    </NModal>
 
     <NDrawer v-model:show="drawerVisible" :width="680" placement="right">
       <NDrawerContent title="用户详情" closable>
@@ -665,13 +981,7 @@ onMounted(() => {
               </NForm>
             </NCard>
 
-            <NCard
-              v-if="detail.billingRecords.length === 0"
-              title="首笔订单"
-              size="small"
-              class="mt-16px"
-              :segmented="{ content: true }"
-            >
+            <NCard v-if="detail.billingRecords.length === 0" title="首笔订单" size="small" class="mt-16px" :segmented="{ content: true }">
               <NAlert type="info" :show-icon="true" class="mb-12px">
                 首笔订单对应 Agent 同步过来的线路机 Inbound
                 业务用户。服务开始日期请按真实业务手动填写，服务结束日期直接采用 Agent 同步的 Client 到期日。
@@ -751,18 +1061,31 @@ onMounted(() => {
             </NCard>
 
             <NCard v-if="detail.billingRecords.length > 0" title="收费记录" size="small" class="mt-16px">
+              <template #header-extra>
+                <NButton size="small" type="primary" secondary @click="openOrderModal">新增订单</NButton>
+              </template>
               <div
                 v-for="record in detail.billingRecords"
                 :key="record.id"
                 class="flex flex-wrap items-center justify-between gap-8px border-b border-gray-200 py-7px last:border-b-0 dark:border-gray-700"
               >
-                <span class="text-12px">
-                  {{ cycleLabel(record.billingCycle) }} · {{ formatMoney(record.amount, record.currency) }}
-                </span>
-                <span class="text-12px text-gray-500">
-                  服务 {{ formatDate(record.serviceFrom) }} → {{ formatDate(record.serviceTo) }} · 收款
-                  {{ formatDate(record.paidAt) }}
-                </span>
+                <div>
+                  <div class="text-12px">
+                    {{ orderTypeLabel(record.orderType) }} · {{ cycleLabel(record.billingCycle) }} ·
+                    {{ formatMoney(record.amount, record.currency) }}
+                    <NTag v-if="record.verificationStatus === 'unverified'" size="small" type="warning" class="ml-6px">待核实</NTag>
+                    <NTag v-else-if="record.origin === 'historical_import'" size="small" type="info" class="ml-6px">历史导入</NTag>
+                    <NTag v-if="record.status === 'cancelled'" size="small" type="error" class="ml-6px">已取消</NTag>
+                  </div>
+                  <div class="mt-3px text-12px text-gray-500">
+                    服务 {{ formatDate(record.serviceFrom) }} → {{ formatDate(record.serviceTo) }} · 收款
+                    {{ formatDate(record.paidAt) }}
+                  </div>
+                </div>
+                <NSpace v-if="record.source === 'manual' && record.status !== 'cancelled'" size="small">
+                  <NButton v-if="record.verificationStatus === 'unverified'" size="tiny" type="primary" @click="openVerifyModal(record)">核验</NButton>
+                  <NButton size="tiny" secondary type="error" @click="cancelRecord(record)">取消</NButton>
+                </NSpace>
               </div>
             </NCard>
 

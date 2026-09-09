@@ -124,6 +124,27 @@ declare namespace Api {
       orderNo: string | null;
       notes: string | null;
       createdAt: string;
+      origin: 'live' | 'historical_import';
+      verificationStatus: 'verified' | 'unverified';
+    }
+
+    interface BillingImportResult {
+      dryRun: boolean;
+      imported: number;
+      unverified: number;
+      records: Array<{
+        row: number;
+        userId: string;
+        billingCycle: BillingCycle;
+        amount: number;
+        serviceFrom: string;
+        serviceTo: string;
+        paidAt: string | null;
+        orderType: 'initial' | 'renewal' | 'recovery';
+        status: 'confirmed' | 'pending';
+        verificationStatus: 'verified' | 'unverified';
+      }>;
+      errors: Array<{ row: number; message: string }>;
     }
 
     interface UserTrafficPoint {

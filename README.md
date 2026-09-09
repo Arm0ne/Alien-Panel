@@ -46,7 +46,7 @@ checksums/     发布文件校验清单
 
 - 产品版本：`v1.0.0`。
 - Agent 显示版本：`v1.0.3`，由 `agent/VERSION` 控制；Agent 构建提交号只作为诊断信息。
-- 数据库迁移：`001_initial.sql` 到 `020_user_path_exit_ips.sql`，服务启动时自动幂等执行。
+- 数据库迁移：`001_initial.sql` 到 `021_billing_history_import.sql`，服务启动时自动幂等执行。
 - 用户出口路径支持多个固定出口 IP；旧的 `exitIpId` API 字段仍兼容，第一项作为兼容值。
 - 业务用户按线路机用户 Inbound 建模，Client/Email 是设备；不同 Inbound 或节点的相同 Email 不合并。
 

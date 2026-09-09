@@ -4,7 +4,7 @@
 
 中央使用 SQLite WAL，默认数据库路径为 `/var/lib/xpanel-central/panel.db`（Docker 中位于 `central-data` volume）。外键和 busy timeout 已在 `backend/internal/db/db.go` 打开。服务启动时读取嵌入的迁移文件并按文件名顺序执行，每个文件只记录一次。
 
-当前迁移到 `020_user_path_exit_ips.sql`，空库和已有库都必须通过迁移测试。生产包不携带任何真实 `panel.db`、WAL/SHM 文件或备份。
+当前迁移到 `021_billing_history_import.sql`，空库和已有库都必须通过迁移测试。生产包不携带任何真实 `panel.db`、WAL/SHM 文件或备份。
 
 ## 2. 核心表关系
 
@@ -28,6 +28,7 @@ nodes ── sync_runs ── traffic_snapshots
 - `user_path_exit_ips` 的 `(user_path_id, exit_ip_id)` 唯一，`position` 保留选择顺序，路径删除时关联记录级联删除。
 - `user_paths.exit_ip_id` 是第一出口 IP兼容列，迁移 020 会从它回填一条关联。
 - 收费记录和审计日志是业务历史，不随节点删除而物理删除。
+- `user_billing_records.origin=historical_import` 表示一次性历史账单导入；`verification_status=unverified` 的待核实记录保持在历史中，但不计入现金或服务期收入，核验后才进入财务统计。
 
 ## 3. 备份
 

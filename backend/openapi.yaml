@@ -263,6 +263,65 @@ paths:
         '200': { description: Updated user detail }
         '400': { description: Invalid service interval or amount }
         '404': { description: User not found }
+  /users/{id}/billing-records/{recordId}/verify:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema: { type: string }
+      - name: recordId
+        in: path
+        required: true
+        schema: { type: string }
+    post:
+      summary: Verify an imported historical billing record
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/BillingRecordActionRequest' }
+      responses:
+        '200': { description: Updated user detail }
+        '409': { description: Record is not waiting for verification }
+  /users/{id}/billing-records/{recordId}/cancel:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema: { type: string }
+      - name: recordId
+        in: path
+        required: true
+        schema: { type: string }
+    post:
+      summary: Cancel a manually entered billing record while retaining audit history
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/BillingRecordActionRequest' }
+      responses:
+        '200': { description: Updated user detail }
+        '409': { description: Only manually entered records can be cancelled here }
+  /billing/import:
+    post:
+      summary: Preview or import historical billing records in bulk
+      description: >-
+        Rows are matched by userId or nodeId plus remoteInboundId. Set dryRun to
+        true to validate without writing. Unverified rows are stored as pending
+        and excluded from cash and accrued-income totals until verified.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/BillingImportRequest' }
+      responses:
+        '200':
+          description: Import preview or result
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/EnvelopeBillingImport' }
+        '400': { description: Import validation failed }
   /users/{id}/traffic:
     parameters:
       - name: id
@@ -958,6 +1017,56 @@ components:
         paidAt: { type: string, format: date-time }
         orderType: { type: string, enum: [initial, renewal, recovery], default: initial }
         notes: { type: string, maxLength: 2000 }
+    BillingRecordActionRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        paidAt: { type: string, format: date-time }
+        notes: { type: string, maxLength: 2000 }
+    BillingImportRequest:
+      type: object
+      required: [records]
+      additionalProperties: false
+      properties:
+        dryRun: { type: boolean, default: false }
+        records:
+          type: array
+          minItems: 1
+          maxItems: 2000
+          items:
+            $ref: '#/components/schemas/BillingImportItem'
+    BillingImportItem:
+      type: object
+      additionalProperties: false
+      required: [billingCycle, amount, serviceFrom, serviceTo]
+      properties:
+        userId: { type: string }
+        nodeId: { type: string }
+        remoteInboundId: { type: string }
+        billingCycle: { type: string, enum: [monthly, annual] }
+        amount: { type: number, minimum: 0, maximum: 100000000 }
+        serviceFrom: { type: string, description: YYYY-MM-DD or RFC3339 timestamp }
+        serviceTo: { type: string, description: YYYY-MM-DD or RFC3339 timestamp }
+        paidAt: { type: string, description: YYYY-MM-DD or RFC3339 timestamp }
+        orderType: { type: string, enum: [initial, renewal, recovery], default: renewal }
+        verified: { type: boolean, default: true }
+        notes: { type: string, maxLength: 2000 }
+    EnvelopeBillingImport:
+      type: object
+      required: [code, msg, data]
+      properties:
+        code: { type: string, example: '0000' }
+        msg: { type: string, example: ok }
+        data: { $ref: '#/components/schemas/BillingImportResult' }
+    BillingImportResult:
+      type: object
+      required: [dryRun, imported, unverified, records, errors]
+      properties:
+        dryRun: { type: boolean }
+        imported: { type: integer, minimum: 0 }
+        unverified: { type: integer, minimum: 0 }
+        records: { type: array, items: { type: object } }
+        errors: { type: array, items: { type: object } }
     AssignUserRouteRequest:
       type: object
       required: [routeId]
@@ -1554,6 +1663,32 @@ components:
               down: { type: integer, format: int64 }
               allTime: { type: integer, format: int64 }
               resetDetected: { type: boolean }
+        renewalCandidates:
+          type: array
+          description: Agent-detected expiry extensions waiting for operator confirmation or historical decisions.
+          items: { type: object }
+        billingRecords:
+          type: array
+          description: Immutable billing history, including imported historical rows and their verification status.
+          items:
+            type: object
+            required: [id, billingCycle, amount, currency, serviceFrom, serviceTo, status, source, orderType, origin, verificationStatus, createdAt]
+            properties:
+              id: { type: string }
+              billingCycle: { type: string, enum: [monthly, annual] }
+              amount: { type: number }
+              currency: { type: string, enum: [CNY] }
+              serviceFrom: { type: string, format: date-time }
+              serviceTo: { type: string, format: date-time }
+              paidAt: { type: [string, 'null'], format: date-time }
+              status: { type: string, enum: [pending, confirmed, rejected, cancelled] }
+              source: { type: string, enum: [manual, agent_detected] }
+              orderType: { type: string, enum: [initial, renewal, recovery] }
+              orderNo: { type: [string, 'null'] }
+              notes: { type: [string, 'null'] }
+              origin: { type: string, enum: [live, historical_import] }
+              verificationStatus: { type: string, enum: [verified, unverified] }
+              createdAt: { type: string, format: date-time }
     UserPath:
       type: object
       required: [id, relayNodeId, exitIpId, exitIpSourceType, mode, valid, exitIpIds, exitIps]

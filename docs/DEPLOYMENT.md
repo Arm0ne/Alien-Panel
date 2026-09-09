@@ -96,7 +96,7 @@ curl -fsSL https://raw.githubusercontent.com/Arm0ne/Alien-Panel/main/install.sh 
   | sudo bash -s -- --repo https://github.com/Arm0ne/Alien-Panel.git --ref main --domain panel.example.com
 ```
 
-脚本会替换中央二进制、前端静态文件和部署模板，保留 `.env` 与数据库 volume。服务启动时自动执行尚未应用的 SQLite 迁移，包括多出口 IP 的 `020_user_path_exit_ips.sql`。升级前建议先执行备份。
+脚本会替换中央二进制、前端静态文件和部署模板，保留 `.env` 与数据库 volume。服务启动时自动执行尚未应用的 SQLite 迁移，包括历史账单导入的 `021_billing_history_import.sql`。升级前建议先执行备份。
 
 ## 6. 手动源码构建
 

@@ -57,6 +57,45 @@ export function createUserBillingRecord(
   });
 }
 
+export function importUserBillingRecords(data: {
+  records: Array<{
+    userId?: string;
+    nodeId?: string;
+    remoteInboundId?: string;
+    billingCycle: Api.Central.BillingCycle;
+    amount: number;
+    serviceFrom: string;
+    serviceTo: string;
+    paidAt?: string;
+    orderType?: 'initial' | 'renewal' | 'recovery';
+    verified?: boolean;
+    notes?: string;
+  }>;
+  dryRun?: boolean;
+}) {
+  return request<Api.Central.BillingImportResult>({ url: '/billing/import', method: 'post', data });
+}
+
+export function verifyUserBillingRecord(
+  userId: string,
+  recordId: string,
+  data: { paidAt?: string; notes?: string } = {}
+) {
+  return request<Api.Central.UserDetail>({
+    url: `/users/${encodeURIComponent(userId)}/billing-records/${encodeURIComponent(recordId)}/verify`,
+    method: 'post',
+    data
+  });
+}
+
+export function cancelUserBillingRecord(userId: string, recordId: string, data: { notes?: string } = {}) {
+  return request<Api.Central.UserDetail>({
+    url: `/users/${encodeURIComponent(userId)}/billing-records/${encodeURIComponent(recordId)}/cancel`,
+    method: 'post',
+    data
+  });
+}
+
 /** Read cumulative traffic growth trend data for a relay business Inbound. */
 export function fetchUserTraffic(id: string, range: Api.Central.TrafficRange = '1h') {
   return request<Api.Central.UserTrafficTrend>({
