@@ -84,6 +84,7 @@ const countryDistribution = computed(() => {
   const otherCount = countries.slice(5).reduce((sum, item) => sum + item.count, 0);
   return [...top, { name: '其他', count: otherCount }];
 });
+const countryMaximum = computed(() => Math.max(1, ...countryDistribution.value.map(item => item.count)));
 
 watch(
   () => exitIpForm.sourceType,
@@ -397,10 +398,18 @@ onMounted(() => {
           </div>
           <div v-if="stats && countryDistribution.length" class="exit-ip-countries px-16px pt-12px">
             <NCard :bordered="false" size="small" title="国家 / 地区分布">
-              <div class="grid gap-x-24px gap-y-8px sm:grid-cols-2 lg:grid-cols-3">
-                <div v-for="item in countryDistribution" :key="item.name" class="flex items-center justify-between gap-12px">
-                  <span class="truncate text-13px text-gray-600 dark:text-gray-300">{{ item.name }}</span>
-                  <span class="shrink-0 text-13px font-600">{{ item.count }} 个</span>
+              <div class="exit-ip-country-list">
+                <div v-for="item in countryDistribution" :key="item.name" class="exit-ip-country-row">
+                  <div class="flex items-center justify-between gap-12px text-13px">
+                    <span class="truncate text-gray-600 dark:text-gray-300">{{ item.name }}</span>
+                    <span class="shrink-0 font-600">{{ item.count }} 个</span>
+                  </div>
+                  <div class="exit-ip-country-track">
+                    <div
+                      class="exit-ip-country-fill"
+                      :style="{ width: `${(item.count / countryMaximum) * 100}%` }"
+                    />
+                  </div>
                 </div>
               </div>
             </NCard>
@@ -546,6 +555,35 @@ onMounted(() => {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
   gap: 12px;
+}
+
+.exit-ip-country-list {
+  display: grid;
+  gap: 10px;
+}
+
+.exit-ip-country-row {
+  min-width: 0;
+}
+
+.exit-ip-country-track {
+  height: 6px;
+  margin-top: 6px;
+  overflow: hidden;
+  border-radius: 9999px;
+  background: rgb(229 231 235 / 70%);
+}
+
+.exit-ip-country-fill {
+  height: 100%;
+  min-width: 6px;
+  border-radius: inherit;
+  background: var(--n-primary-color);
+  transition: width 180ms ease;
+}
+
+:global(.dark) .exit-ip-country-track {
+  background: rgb(55 65 81 / 70%);
 }
 
 @media (min-width: 768px) {
