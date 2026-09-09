@@ -162,10 +162,10 @@ if (( download_ok == 0 )); then
   exit 1
 fi
 tar -xzf "$archive" -C "$stage"
-source_dir="$(find "$stage" -type d -name "$PACKAGE_DIR_NAME" -print -quit)"
+# GitHub archives extract as owner-repo-ref/, not the package name
+source_dir="$(find "$stage" -mindepth 1 -maxdepth 1 -type d -print -quit)"
 if [[ -z "$source_dir" ]]; then
-  echo "The repository does not contain $PACKAGE_DIR_NAME." >&2
-  echo "Build and commit the production package before installing." >&2
+  echo "Could not find extracted repository directory." >&2
   exit 1
 fi
 
