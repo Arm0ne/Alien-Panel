@@ -1077,7 +1077,7 @@ FROM nodes n WHERE n.id = ? AND n.deleted_at IS NULL`, id).Scan(&nodeID, &nodeKe
 COALESCE(i.kind, ''), COALESCE(i.protocol, ''), COALESCE(i.port, 0), COALESCE(i.listen, ''), i.enable,
 COALESCE(i.expiry_time, ''), COALESCE(i.client_count, 0), COALESCE(i.up, 0), COALESCE(i.down, 0), COALESCE(i.all_time, 0),
 COALESCE(i.last_seen_at, ''), COALESCE(i.deleted_at, '')
-FROM inbounds i WHERE i.node_id = ? ORDER BY (i.deleted_at IS NOT NULL) ASC, i.tag ASC, i.remote_inbound_id ASC`, id)
+FROM inbounds i WHERE i.node_id = ? AND i.deleted_at IS NULL ORDER BY i.tag ASC, i.remote_inbound_id ASC`, id)
 	if err != nil {
 		writeFailure(w, http.StatusInternalServerError, internalErrorCode, "could not read node inbounds")
 		return

@@ -438,7 +438,7 @@ paths:
         '404': { description: Node not found }
   /nodes/{id}:
     get:
-      summary: Node detail with inbounds, exit IPs, sync runs and status history
+      summary: Node detail with current inbounds, exit IPs, sync runs and status history
       parameters:
         - name: id
           in: path
@@ -446,7 +446,7 @@ paths:
           schema: { type: string }
       responses:
         '200':
-          description: Node detail
+          description: Node detail. The inbounds array contains only current X-Panel inbounds; archived inbound history remains available through sync and node events.
           content:
             application/json:
               schema:

@@ -90,7 +90,7 @@ go run ./cmd/seed-demo --database .\data\panel.db
 - `PATCH /api/nodes/{id}` 修改节点元数据或启用状态。停用后该节点的 Agent heartbeat、完整同步和立即同步请求都会被拒绝，重新启用后恢复认证；兼容的 Agent register 流程不会覆盖管理员的停用状态；
 - `DELETE /api/nodes/{id}` 为直接删除：节点、Agent Token、Inbound/Client、流量快照、同步记录、成本、出口 IP、用户路径以及旧线路兼容记录会在一个事务中清理；业务用户本身不会删除，删除后可重新使用原 Node Key；
 - `POST /api/nodes` 的 `managementUrl` 用于记录可点击的 X-Panel/运维管理地址（含协议、端口和可选路径），创建时会自动解析 `panelBasePath`；`publicIp` 仅为旧客户端保留的兼容字段。`exitIps` 可传入最多 100 个 IPv4/IPv6 地址，作为该节点的独立出口 IP 资产原子写入；出口 IP 的服务商、成本、有效期和备注可在出口 IP 页面补充；
-- `GET /api/nodes/{id}` 返回节点元数据、Agent 在线状态、X-Panel 同步状态与最近错误、Inbound、该节点拥有的公网出口 IP（线路机和落地机）、最近同步运行和状态事件；
+- `GET /api/nodes/{id}` 返回节点元数据、Agent 在线状态、X-Panel 同步状态与最近错误、当前仍存在于 X-Panel 的 Inbound、该节点拥有的公网出口 IP（线路机和落地机）、最近同步运行和状态事件；已归档的 Inbound 仍保留在中央数据库和历史事件中，但不再出现在节点详情的当前 Inbound 列表；
 - `POST /api/nodes/{id}/sync` 写入一次立即同步请求事件并返回 `queued`。中央服务不反向调用 X-Panel，节点 Agent 会在下一次周期同步中执行。
 - `GET /api/nodes/{id}/costs` 查询节点成本记录；`POST /api/nodes/{id}/costs` 录入节点月成本；`PATCH /api/nodes/{id}/costs/{costId}` 修改成本类别、金额和备注。生效日期属于历史版本，不能在编辑时改动；日期变化应新增一条成本记录。
 - 节点详情中的成本记录按生效日期展示，财务汇总按所选月份与有效区间计算节点成本。
