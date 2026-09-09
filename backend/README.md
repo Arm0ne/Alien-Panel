@@ -99,7 +99,7 @@ go run ./cmd/seed-demo --database .\data\panel.db
 - 管理员 Bearer 写请求若携带 Origin/Referer，必须匹配 `XPANEL_CORS_ORIGINS`；无浏览器来源头的 CLI 客户端仍可使用。当前认证不使用 Cookie，因此这是面向未来 Cookie 迁移的纵深 CSRF 防护。
 - refresh token 为单次使用并在轮换时撤销旧会话；管理员 logout 会撤销当前会话；同一 Agent 重新注册会撤销该节点旧 Token。所有受保护接口均检查会话/节点凭据、有效期和启用状态。
 - 分页接口统一返回 `dataAt`（最新成功同步时间；尚无成功同步时为 `null`），总览和财务汇总也返回同一数据时间，供前端判断数据延迟或过期。
-- 用户列表按 Inbound 聚合为一行；同一 Email 出现在不同 Inbound 或节点时仍属于不同业务用户，Client 数仅统计该 Inbound 的设备凭证。业务用户的到期和状态由启用的 Client 推导：时间一致时直接使用；不一致时采用最早有限到期并写入异常事件；Inbound 停用或没有启用 Client 时显示为停用。
+- 用户列表按 Inbound 聚合为一行，并额外返回全局 `stats`（有效、付费、免费用户数）；统计只覆盖有主线路机 Inbound 且当前状态为 `active` 的业务用户，不受分页、关键词或节点筛选影响。同一 Email 出现在不同 Inbound 或节点时仍属于不同业务用户，Client 数仅统计该 Inbound 的设备凭证。业务用户的到期和状态由启用的 Client 推导：时间一致时直接使用；不一致时采用最早有限到期并写入异常事件；Inbound 停用或没有启用 Client 时显示为停用。
 
 用户详情接口：
 

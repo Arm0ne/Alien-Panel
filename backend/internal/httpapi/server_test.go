@@ -1137,7 +1137,7 @@ func TestUserListAggregatesOneRowPerInbound(t *testing.T) {
 		`INSERT INTO nodes (id, node_key, name, type, health_status, created_at, updated_at) VALUES ('aggregate-relay-1', 'aggregate-relay-1', '线路机 A', 'relay', 'online', '` + now + `', '` + now + `')`,
 		`INSERT INTO nodes (id, node_key, name, type, health_status, created_at, updated_at) VALUES ('aggregate-relay-2', 'aggregate-relay-2', '线路机 B', 'relay', 'online', '` + now + `', '` + now + `')`,
 		`INSERT INTO users (id, display_name, status, created_at, updated_at) VALUES ('aggregate-user-1', '用户 A', 'active', '` + now + `', '` + now + `')`,
-		`INSERT INTO users (id, display_name, status, created_at, updated_at) VALUES ('aggregate-user-2', '用户 B', 'active', '` + now + `', '` + now + `')`,
+		`INSERT INTO users (id, display_name, status, billing_type, created_at, updated_at) VALUES ('aggregate-user-2', '用户 B', 'active', 'free', '` + now + `', '` + now + `')`,
 		`INSERT INTO inbounds (id, node_id, remote_inbound_id, user_id, kind, tag, client_count, up, down, first_seen_at, last_seen_at) VALUES ('aggregate-inbound-1', 'aggregate-relay-1', '101', 'aggregate-user-1', 'user', 'user-a', 2, 100, 200, '` + now + `', '` + now + `')`,
 		`INSERT INTO inbounds (id, node_id, remote_inbound_id, user_id, kind, tag, client_count, up, down, first_seen_at, last_seen_at) VALUES ('aggregate-inbound-2', 'aggregate-relay-2', '101', 'aggregate-user-2', 'user', 'user-b', 1, 300, 400, '` + now + `', '` + now + `')`,
 		`INSERT INTO user_inbounds (id, user_id, inbound_id, is_primary, active_from) VALUES ('aggregate-mapping-1', 'aggregate-user-1', 'aggregate-inbound-1', 1, '` + now + `')`,
@@ -1164,6 +1164,10 @@ func TestUserListAggregatesOneRowPerInbound(t *testing.T) {
 	if data["total"] != float64(2) {
 		t.Fatalf("user list total = %v, want 2", data["total"])
 	}
+	stats := data["stats"].(map[string]any)
+	if stats["active"] != float64(2) || stats["paid"] != float64(1) || stats["free"] != float64(1) {
+		t.Fatalf("user list stats = %#v, want active=2 paid=1 free=1", stats)
+	}
 	items := data["items"].([]any)
 	if len(items) != 2 {
 		t.Fatalf("user list items = %d, want one row per Inbound", len(items))
@@ -1189,6 +1193,10 @@ func TestUserListAggregatesOneRowPerInbound(t *testing.T) {
 	filteredData := nodeFiltered["data"].(map[string]any)
 	if filteredData["total"] != float64(1) || len(filteredData["items"].([]any)) != 1 {
 		t.Fatalf("node-filtered user list = %#v", filteredData)
+	}
+	filteredStats := filteredData["stats"].(map[string]any)
+	if filteredStats["active"] != float64(2) || filteredStats["paid"] != float64(1) || filteredStats["free"] != float64(1) {
+		t.Fatalf("node-filtered user stats changed with filter = %#v", filteredStats)
 	}
 }
 

@@ -349,6 +349,12 @@ WHERE ` + strings.Join(where, " AND ")
 		writeFailure(w, http.StatusInternalServerError, internalErrorCode, "could not count users")
 		return
 	}
+	stats, err := s.userListStats()
+	if err != nil {
+		s.logger.Error("read user list statistics", "error", err)
+		writeFailure(w, http.StatusInternalServerError, internalErrorCode, "could not read user statistics")
+		return
+	}
 	rows, err := s.db.Query(`SELECT u.id, u.display_name, u.status, COALESCE(u.billing_type, 'paid'), COALESCE(u.expiry_time, ''),
 COALESCE(i.node_id, ''), COALESCE(n.name, ''), COALESCE(i.tag, ''),
 COALESCE((SELECT r.name FROM user_routes ur JOIN routes r ON r.id = ur.route_id
@@ -384,7 +390,39 @@ ORDER BY CASE WHEN u.expiry_time IS NULL THEN 1 ELSE 0 END, u.expiry_time ASC LI
 			"pathConfigured": pathID != "",
 		})
 	}
-	writeSuccess(w, s.pageResponse(items, total, query))
+	response := s.pageResponse(items, total, query)
+	response["stats"] = stats
+	writeSuccess(w, response)
+}
+
+// userListStats returns the current operational user breakdown for the user
+// management page. It uses the same relay-primary-Inbound scope as the
+// dashboard's effective-user count, and counts only users whose operational
+// status is active so the paid and free values remain subsets of active users.
+func (s *Server) userListStats() (map[string]int, error) {
+	var active, paid, free int
+	err := s.db.QueryRow(`SELECT
+	COALESCE(SUM(CASE WHEN u.status = 'active' THEN 1 ELSE 0 END), 0),
+	COALESCE(SUM(CASE WHEN u.status = 'active' AND COALESCE(u.billing_type, 'paid') = 'paid' THEN 1 ELSE 0 END), 0),
+	COALESCE(SUM(CASE WHEN u.status = 'active' AND COALESCE(u.billing_type, 'paid') = 'free' THEN 1 ELSE 0 END), 0)
+FROM users u
+WHERE u.deleted_at IS NULL
+  AND EXISTS (
+	SELECT 1 FROM user_inbounds ui
+	JOIN inbounds i ON i.id = ui.inbound_id
+	JOIN nodes n ON n.id = i.node_id
+	WHERE ui.user_id = u.id
+	  AND ui.is_primary = 1
+	  AND ui.active_to IS NULL
+	  AND i.kind = 'user'
+	  AND i.deleted_at IS NULL
+	  AND n.type = 'relay'
+	  AND n.deleted_at IS NULL
+	)`).Scan(&active, &paid, &free)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]int{"active": active, "paid": paid, "free": free}, nil
 }
 
 type updateUserRequest struct {

@@ -6,7 +6,7 @@ export function fetchDashboard(params: Api.Central.DashboardQuery = {}) {
 }
 
 export function fetchUsers(params: Api.Central.PageParams = {}) {
-  return request<Api.Central.PageResult<Api.Central.UserSummary>>({ url: '/users', params });
+  return request<Api.Central.UserListResult>({ url: '/users', params });
 }
 
 /** Read a single Inbound-based business user with its X-Panel snapshots. */

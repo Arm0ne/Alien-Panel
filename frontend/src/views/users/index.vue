@@ -26,6 +26,7 @@ const loading = ref(false);
 const errorMessage = ref('');
 const rows = ref<Api.Central.UserSummary[]>([]);
 const total = ref(0);
+const stats = ref<Api.Central.UserListStats | null>(null);
 const dataAt = ref('');
 const drawerVisible = ref(false);
 const detailLoading = ref(false);
@@ -501,10 +502,12 @@ async function loadUsers() {
     errorMessage.value = '中央后端暂不可用，无法读取用户数据';
     rows.value = [];
     total.value = 0;
+    stats.value = null;
     dataAt.value = '';
   } else {
     rows.value = data.items;
     total.value = data.total;
+    stats.value = data.stats;
     dataAt.value = data.dataAt || '';
   }
   loading.value = false;
@@ -544,22 +547,38 @@ onMounted(() => {
         <NButton v-if="errorMessage" size="small" type="warning" secondary @click="loadUsers">重试</NButton>
       </template>
       <template #toolbar>
-        <div class="border-b border-gray-200 p-16px dark:border-gray-700">
-          <NSpace wrap>
-            <NInput
-              v-model:value="filters.keyword"
-              clearable
-              class="w-240px"
-              placeholder="搜索用户、Inbound 或线路机"
-              @keyup.enter="submitFilters"
-            />
-            <NSelect v-model:value="filters.status" :options="statusOptions" class="w-140px" />
-            <NButton type="primary" @click="submitFilters">
-              <template #icon><icon-mdi-magnify /></template>
-              查询
-            </NButton>
-            <NButton @click="resetFilters">重置</NButton>
-          </NSpace>
+        <div>
+          <div v-if="stats" class="users-kpis p-16px pb-0">
+            <NCard :bordered="false" size="small">
+              <NStatistic label="有效用户" :value="stats.active" />
+              <div class="mt-4px text-12px text-gray-400">与总览页口径一致，按 Client 到期状态同步</div>
+            </NCard>
+            <NCard :bordered="false" size="small">
+              <NStatistic label="付费用户" :value="stats.paid" />
+              <div class="mt-4px text-12px text-gray-400">有效用户中的收费用户</div>
+            </NCard>
+            <NCard :bordered="false" size="small">
+              <NStatistic label="免费用户" :value="stats.free" />
+              <div class="mt-4px text-12px text-gray-400">有效用户中的免费用户</div>
+            </NCard>
+          </div>
+          <div class="border-b border-gray-200 p-16px dark:border-gray-700">
+            <NSpace wrap>
+              <NInput
+                v-model:value="filters.keyword"
+                clearable
+                class="w-240px"
+                placeholder="搜索用户、Inbound 或线路机"
+                @keyup.enter="submitFilters"
+              />
+              <NSelect v-model:value="filters.status" :options="statusOptions" class="w-140px" />
+              <NButton type="primary" @click="submitFilters">
+                <template #icon><icon-mdi-magnify /></template>
+                查询
+              </NButton>
+              <NButton @click="resetFilters">重置</NButton>
+            </NSpace>
+          </div>
         </div>
       </template>
       <NDataTable
@@ -860,8 +879,8 @@ onMounted(() => {
                     :loading="pathSaving"
                     :disabled="
                       pathAssetsLoading ||
-                      (pathMode === 'landing' && (!pathLandingNodeID || !pathLandingInboundID)) ||
-                      !pathExitIPIDs.length
+                        (pathMode === 'landing' && (!pathLandingNodeID || !pathLandingInboundID)) ||
+                        !pathExitIPIDs.length
                     "
                     @click="savePathAssignment"
                   >
@@ -930,3 +949,17 @@ onMounted(() => {
     </NDrawer>
   </div>
 </template>
+
+<style scoped>
+.users-kpis {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 12px;
+}
+
+@media (min-width: 768px) {
+  .users-kpis {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+</style>

@@ -49,6 +49,16 @@ declare namespace Api {
       dataAt?: string | null;
     }
 
+    interface UserListStats {
+      active: number;
+      paid: number;
+      free: number;
+    }
+
+    interface UserListResult extends PageResult<UserSummary> {
+      stats: UserListStats;
+    }
+
     interface UserInboundDetail {
       id: string | null;
       remoteId: string | null;

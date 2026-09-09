@@ -140,7 +140,12 @@ paths:
   /users:
     get:
       summary: Inbound-based user list
-      description: Every paginated response includes dataAt, the newest successful Agent snapshot time, or null when no snapshot exists.
+      description: >-
+        Every paginated response includes dataAt, the newest successful Agent
+        snapshot time, or null when no snapshot exists. The response also
+        includes stats.active, stats.paid, and stats.free for the global current
+        user breakdown. These counts cover active business users with a primary
+        relay Inbound and are independent of pagination and list filters.
       parameters:
         - $ref: '#/components/parameters/Page'
         - $ref: '#/components/parameters/PageSize'
