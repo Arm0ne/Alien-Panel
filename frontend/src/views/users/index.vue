@@ -639,8 +639,7 @@ const columns: DataTableColumns<Api.Central.UserSummary> = [
     render: row =>
       h('div', [
         h('div', { class: 'font-medium' }, row.name || '未命名用户'),
-        h('div', { class: 'text-12px text-gray-500' }, row.inboundTag),
-        h('div', { class: 'text-11px text-gray-400' }, `ID: ${row.id}`)
+        h('div', { class: 'text-12px text-gray-500' }, row.inboundTag)
       ])
   },
   {
