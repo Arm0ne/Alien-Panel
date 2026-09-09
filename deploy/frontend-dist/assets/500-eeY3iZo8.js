@@ -1,0 +1,1 @@
+import{Zi as e,da as t,na as n}from"./router-Coexh53n.js";import{t as r}from"./exception-base-BUVvswBH.js";var i=n({name:`500`,__name:`index`,setup(n){return(n,i)=>{let a=r;return t(),e(a,{type:`500`})}}});export{i as default};

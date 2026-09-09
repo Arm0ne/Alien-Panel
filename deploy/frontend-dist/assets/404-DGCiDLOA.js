@@ -1,1 +1,0 @@
-import{Zi as e,da as t,na as n}from"./router-BiT_07AU.js";import{t as r}from"./exception-base-Y8JJUGKa.js";var i=n({name:`404`,__name:`index`,setup(n){return(n,i)=>{let a=r;return t(),e(a,{type:`404`})}}});export{i as default};

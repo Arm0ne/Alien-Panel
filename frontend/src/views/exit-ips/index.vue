@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, h, onMounted, reactive, ref, watch } from 'vue';
+import { useElementSize } from '@vueuse/core';
 import { NButton, NSpace, NTag } from 'naive-ui';
 import type { DataTableColumns } from 'naive-ui';
 import { createExitIp, deleteExitIp, fetchExitIpDetail, fetchExitIps, fetchNodes, updateExitIp } from '@/service/api';
@@ -77,14 +78,18 @@ const ownerNodeOptions = computed(() =>
 const selectedOwnerNode = computed(() => nodes.value.find(node => node.id === exitIpForm.ownerNodeId) || null);
 const selectedOwnerRegion = computed(() => selectedOwnerNode.value?.region?.trim() || '');
 const modalTitle = computed(() => (editingExitIpId.value ? '编辑出口 IP' : '新建出口 IP'));
-const countryDistribution = computed(() => {
-  const countries = stats.value?.countries || [];
-  if (countries.length <= 5) return countries;
-  const top = countries.slice(0, 5);
-  const otherCount = countries.slice(5).reduce((sum, item) => sum + item.count, 0);
-  return [...top, { name: '其他', count: otherCount }];
+const countryDistribution = computed(() => stats.value?.countries || []);
+const countriesExpanded = ref(false);
+const countryStrip = ref<HTMLElement | null>(null);
+const { width: countryStripWidth } = useElementSize(countryStrip);
+// Match the 140px cards, 10px gaps and 100px expand control below.
+const countryRowCapacity = computed(() => Math.max(1, Math.floor((countryStripWidth.value + 10) / 150)));
+const countriesOverflow = computed(() => countryDistribution.value.length > countryRowCapacity.value);
+const visibleCountries = computed(() => {
+  if (countriesExpanded.value || !countriesOverflow.value) return countryDistribution.value;
+  const capacity = Math.max(1, Math.floor((countryStripWidth.value - 100) / 150));
+  return countryDistribution.value.slice(0, capacity);
 });
-const countryMaximum = computed(() => Math.max(1, ...countryDistribution.value.map(item => item.count)));
 
 watch(
   () => exitIpForm.sourceType,
@@ -396,24 +401,43 @@ onMounted(() => {
               <div class="mt-4px text-12px text-warning">可继续配置使用</div>
             </NCard>
           </div>
-          <div v-if="stats && countryDistribution.length" class="exit-ip-countries px-16px pt-12px">
-            <NCard :bordered="false" size="small" title="国家 / 地区分布">
-              <div class="exit-ip-country-list">
-                <div v-for="item in countryDistribution" :key="item.name" class="exit-ip-country-row">
-                  <div class="flex items-center justify-between gap-12px text-13px">
-                    <span class="truncate text-gray-600 dark:text-gray-300">{{ item.name }}</span>
-                    <span class="shrink-0 font-600">{{ item.count }} 个</span>
-                  </div>
-                  <div class="exit-ip-country-track">
-                    <div
-                      class="exit-ip-country-fill"
-                      :style="{ width: `${(item.count / countryMaximum) * 100}%` }"
-                    />
-                  </div>
+          <section v-if="countryDistribution.length" aria-label="国家 / 地区分布" class="px-16px pt-12px">
+            <div
+              id="exit-ip-country-cards"
+              ref="countryStrip"
+              class="exit-ip-country-strip"
+              :class="{ 'is-collapsed': countriesOverflow && !countriesExpanded }"
+            >
+              <NCard
+                v-for="item in visibleCountries"
+                :key="item.name"
+                class="exit-ip-country-card"
+                :bordered="false"
+                :content-style="{ padding: '10px 12px' }"
+              >
+                <div class="exit-ip-country-name text-gray-500 dark:text-gray-400" :title="item.name">
+                  {{ item.name }}
                 </div>
-              </div>
-            </NCard>
-          </div>
+                <div class="exit-ip-country-count">
+                  {{ item.count }}<span class="ml-4px text-12px text-gray-500 dark:text-gray-400">个</span>
+                </div>
+              </NCard>
+              <NButton
+                v-if="countriesOverflow || countriesExpanded"
+                text
+                class="exit-ip-country-toggle"
+                :aria-expanded="countriesExpanded"
+                aria-controls="exit-ip-country-cards"
+                @click="countriesExpanded = !countriesExpanded"
+              >
+                <template #icon>
+                  <icon-mdi-chevron-up v-if="countriesExpanded" />
+                  <icon-mdi-chevron-down v-else />
+                </template>
+                {{ countriesExpanded ? '收起' : '展开全部' }}
+              </NButton>
+            </div>
+          </section>
           <div class="border-b border-gray-200 p-16px dark:border-gray-700">
             <NSpace wrap>
               <NInput
@@ -557,33 +581,42 @@ onMounted(() => {
   gap: 12px;
 }
 
-.exit-ip-country-list {
-  display: grid;
+.exit-ip-country-strip {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
   gap: 10px;
 }
 
-.exit-ip-country-row {
+.exit-ip-country-card {
+  flex: 0 0 auto;
+  width: 140px;
+  max-width: 100%;
+  height: 72px;
   min-width: 0;
 }
 
-.exit-ip-country-track {
-  height: 6px;
-  margin-top: 6px;
+.is-collapsed .exit-ip-country-card {
+  max-width: calc(100% - 110px);
+}
+
+.exit-ip-country-name {
   overflow: hidden;
-  border-radius: 9999px;
-  background: rgb(229 231 235 / 70%);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+  line-height: 20px;
 }
 
-.exit-ip-country-fill {
-  height: 100%;
-  min-width: 6px;
-  border-radius: inherit;
-  background: var(--n-primary-color);
-  transition: width 180ms ease;
+.exit-ip-country-count {
+  font-size: 22px;
+  line-height: 30px;
+  font-variant-numeric: tabular-nums;
 }
 
-:global(.dark) .exit-ip-country-track {
-  background: rgb(55 65 81 / 70%);
+.exit-ip-country-toggle {
+  flex: 0 0 100px;
+  min-height: 44px;
 }
 
 @media (min-width: 768px) {
