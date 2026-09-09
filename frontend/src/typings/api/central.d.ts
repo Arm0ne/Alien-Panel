@@ -623,6 +623,23 @@ declare namespace Api {
       checkedAt?: string | null;
     }
 
+    interface ExitIpCountryStat {
+      name: string;
+      count: number;
+    }
+
+    interface ExitIpListStats {
+      total: number;
+      active: number;
+      assigned: number;
+      unassigned: number;
+      countries: ExitIpCountryStat[];
+    }
+
+    interface ExitIpListResult extends PageResult<ExitIpSummary> {
+      stats: ExitIpListStats;
+    }
+
     interface ExitIpDetail {
       id: string;
       address: string;

@@ -11,6 +11,7 @@ const loading = ref(false);
 const errorMessage = ref('');
 const rows = ref<Api.Central.ExitIpSummary[]>([]);
 const total = ref(0);
+const stats = ref<Api.Central.ExitIpListStats | null>(null);
 const dataAt = ref('');
 const filters = reactive({ page: 1, page_size: 50, keyword: '', status: 'all' });
 const nodes = ref<Api.Central.NodeSummary[]>([]);
@@ -76,6 +77,13 @@ const ownerNodeOptions = computed(() =>
 const selectedOwnerNode = computed(() => nodes.value.find(node => node.id === exitIpForm.ownerNodeId) || null);
 const selectedOwnerRegion = computed(() => selectedOwnerNode.value?.region?.trim() || '');
 const modalTitle = computed(() => (editingExitIpId.value ? '编辑出口 IP' : '新建出口 IP'));
+const countryDistribution = computed(() => {
+  const countries = stats.value?.countries || [];
+  if (countries.length <= 5) return countries;
+  const top = countries.slice(0, 5);
+  const otherCount = countries.slice(5).reduce((sum, item) => sum + item.count, 0);
+  return [...top, { name: '其他', count: otherCount }];
+});
 
 watch(
   () => exitIpForm.sourceType,
@@ -165,7 +173,7 @@ async function saveExitIp() {
     return;
   }
   if (exitIpForm.sourceType === 's5' && !exitIpForm.region.trim()) {
-    formError.value = '请填写 S5 所属区域';
+    formError.value = '请填写 S5 所属国家 / 地区';
     return;
   }
   if (exitIpForm.monthlyCost === null || !Number.isFinite(exitIpForm.monthlyCost) || exitIpForm.monthlyCost < 0) {
@@ -241,7 +249,7 @@ const columns: DataTableColumns<Api.Central.ExitIpSummary> = [
         ? '独立 S5'
         : `${row.ownerNodeName || '--'}（${row.ownerNodeType === 'relay' ? '线路机' : '落地机'}）`
   },
-  { title: '区域', key: 'region', minWidth: 120, render: row => row.region || '--' },
+  { title: '国家 / 地区', key: 'region', minWidth: 120, render: row => row.region || '未设置' },
   { title: '协议族', key: 'family', width: 90, render: row => familyLabel(row.family || 4) },
   { title: '服务商', key: 'provider', minWidth: 140, render: row => row.provider || '--' },
   {
@@ -322,10 +330,12 @@ async function loadExitIps() {
     errorMessage.value = '中央后端暂不可用，无法读取出口 IP 数据';
     rows.value = [];
     total.value = 0;
+    stats.value = null;
     dataAt.value = '';
   } else {
     rows.value = data.items;
     total.value = data.total;
+    stats.value = data.stats;
     dataAt.value = data.dataAt || '';
   }
   loading.value = false;
@@ -366,22 +376,52 @@ onMounted(() => {
         </NButton>
       </template>
       <template #toolbar>
-        <div class="border-b border-gray-200 p-16px dark:border-gray-700">
-          <NSpace wrap>
-            <NInput
-              v-model:value="filters.keyword"
-              clearable
-              class="w-240px"
-              placeholder="搜索 IP、区域、节点、S5 或服务商"
-              @keyup.enter="submitFilters"
-            />
-            <NSelect v-model:value="filters.status" :options="statusOptions" class="w-140px" />
-            <NButton type="primary" @click="submitFilters">
-              <template #icon><icon-mdi-magnify /></template>
-              查询
-            </NButton>
-            <NButton @click="resetFilters">重置</NButton>
-          </NSpace>
+        <div>
+          <div v-if="stats" class="exit-ip-kpis p-16px pb-0">
+            <NCard :bordered="false" size="small">
+              <NStatistic label="出口 IP 总数" :value="stats.total" />
+              <div class="mt-4px text-12px text-gray-400">已登记的全部出口资产</div>
+            </NCard>
+            <NCard :bordered="false" size="small">
+              <NStatistic label="已启用 IP" :value="stats.active" />
+              <div class="mt-4px text-12px text-success">当前可用于线路配置</div>
+            </NCard>
+            <NCard :bordered="false" size="small">
+              <NStatistic label="已分配 IP" :value="stats.assigned" />
+              <div class="mt-4px text-12px text-info">已有有效用户路径使用</div>
+            </NCard>
+            <NCard :bordered="false" size="small">
+              <NStatistic label="未分配 IP" :value="stats.unassigned" />
+              <div class="mt-4px text-12px text-warning">可继续配置使用</div>
+            </NCard>
+          </div>
+          <div v-if="stats && countryDistribution.length" class="exit-ip-countries px-16px pt-12px">
+            <NCard :bordered="false" size="small" title="国家 / 地区分布">
+              <div class="grid gap-x-24px gap-y-8px sm:grid-cols-2 lg:grid-cols-3">
+                <div v-for="item in countryDistribution" :key="item.name" class="flex items-center justify-between gap-12px">
+                  <span class="truncate text-13px text-gray-600 dark:text-gray-300">{{ item.name }}</span>
+                  <span class="shrink-0 text-13px font-600">{{ item.count }} 个</span>
+                </div>
+              </div>
+            </NCard>
+          </div>
+          <div class="border-b border-gray-200 p-16px dark:border-gray-700">
+            <NSpace wrap>
+              <NInput
+                v-model:value="filters.keyword"
+                clearable
+                class="w-240px"
+                placeholder="搜索 IP、国家/地区、节点或服务商"
+                @keyup.enter="submitFilters"
+              />
+              <NSelect v-model:value="filters.status" :options="statusOptions" class="w-140px" />
+              <NButton type="primary" @click="submitFilters">
+                <template #icon><icon-mdi-magnify /></template>
+                查询
+              </NButton>
+              <NButton @click="resetFilters">重置</NButton>
+            </NSpace>
+          </div>
         </div>
       </template>
       <NDataTable
@@ -433,14 +473,14 @@ onMounted(() => {
                 placeholder="选择线路机或落地机"
               />
             </NFormItem>
-            <NFormItem v-if="exitIpForm.sourceType === 'node'" label="区域">
-              <NInput :value="selectedOwnerRegion || '未设置区域'" readonly />
+            <NFormItem v-if="exitIpForm.sourceType === 'node'" label="国家 / 地区">
+              <NInput :value="selectedOwnerRegion || '未设置国家 / 地区'" readonly />
             </NFormItem>
-            <NFormItem v-else label="区域" required>
-              <NInput v-model:value="exitIpForm.region" maxlength="120" placeholder="例如：新加坡" />
+            <NFormItem v-else label="国家 / 地区" required>
+              <NInput v-model:value="exitIpForm.region" maxlength="120" placeholder="例如：美国、英国、香港" />
             </NFormItem>
             <NFormItem v-if="exitIpForm.sourceType === 's5'" label="S5 说明">
-              <NText depth="3">独立购买的 S5 只登记出口地址、区域和成本；账号凭据不在中央面板保存。</NText>
+              <NText depth="3">独立购买的 S5 只登记出口地址、国家/地区和成本；账号凭据不在中央面板保存。</NText>
             </NFormItem>
             <NFormItem label="状态">
               <NSwitch v-model:value="exitIpForm.enabled">
@@ -500,3 +540,17 @@ onMounted(() => {
     </NModal>
   </div>
 </template>
+
+<style scoped>
+.exit-ip-kpis {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 12px;
+}
+
+@media (min-width: 768px) {
+  .exit-ip-kpis {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+}
+</style>

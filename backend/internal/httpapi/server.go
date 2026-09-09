@@ -2612,6 +2612,12 @@ WHERE ` + strings.Join(where, " AND ")
 		writeFailure(w, http.StatusInternalServerError, internalErrorCode, "could not count exit IPs")
 		return
 	}
+	stats, err := s.exitIPListStats()
+	if err != nil {
+		s.logger.Error("read exit IP list statistics", "error", err)
+		writeFailure(w, http.StatusInternalServerError, internalErrorCode, "could not read exit IP statistics")
+		return
+	}
 	rows, err := s.db.Query(`SELECT e.id, e.ip, COALESCE(e.source_type, 'node'), COALESCE(e.owner_node_id, e.landing_node_id, ''), COALESCE(owner.name, ''), COALESCE(owner.type, ''),
 	COALESCE(e.landing_node_id, ''), COALESCE(landing.name, ''), e.family, COALESCE(CASE WHEN COALESCE(e.source_type, 'node') = 's5' THEN e.region ELSE owner.region END, ''), COALESCE(e.provider, ''), e.enabled, e.monthly_cost, e.currency,
 (SELECT COUNT(DISTINCT p.user_id) FROM user_paths p
@@ -2645,7 +2651,64 @@ AND (u.expiry_time IS NULL OR datetime(u.expiry_time) >= datetime('now'))), e.up
 			"allocatedUserCount": allocated, "checkedAt": nullableString(checkedAt),
 		})
 	}
-	writeSuccess(w, s.pageResponse(items, total, query))
+	response := s.pageResponse(items, total, query)
+	response["stats"] = stats
+	writeSuccess(w, response)
+}
+
+// exitIPListStats aggregates manually entered country/region values. It is
+// independent of the table filters so the cards describe the whole inventory.
+func (s *Server) exitIPListStats() (map[string]any, error) {
+	var total, active, assigned int
+	for _, item := range []struct {
+		target *int
+		query  string
+	}{
+		{&total, `SELECT COUNT(*) FROM exit_ips`},
+		{&active, `SELECT COUNT(*) FROM exit_ips WHERE enabled = 1`},
+		{&assigned, `SELECT COUNT(DISTINCT e.id) FROM exit_ips e
+WHERE e.enabled = 1 AND EXISTS (
+  SELECT 1 FROM user_paths p
+  JOIN users u ON u.id = p.user_id
+  WHERE (p.exit_ip_id = e.id OR EXISTS (SELECT 1 FROM user_path_exit_ips upi WHERE upi.user_path_id = p.id AND upi.exit_ip_id = e.id))
+    AND p.active_to IS NULL AND u.deleted_at IS NULL AND u.status <> 'disabled'
+    AND (u.expiry_time IS NULL OR datetime(u.expiry_time) >= datetime('now'))
+)`},
+	} {
+		if err := s.db.QueryRow(item.query).Scan(item.target); err != nil {
+			return nil, err
+		}
+	}
+	countryRows, err := s.db.Query(`SELECT COALESCE(NULLIF(TRIM(CASE WHEN COALESCE(e.source_type, 'node') = 's5' THEN e.region ELSE owner.region END), ''), '未设置') AS country,
+COUNT(*) AS count
+FROM exit_ips e
+LEFT JOIN nodes owner ON owner.id = COALESCE(e.owner_node_id, e.landing_node_id)
+GROUP BY country
+ORDER BY count DESC, country ASC`)
+	if err != nil {
+		return nil, err
+	}
+	defer countryRows.Close()
+	countries := make([]map[string]any, 0)
+	for countryRows.Next() {
+		var country string
+		var count int
+		if err := countryRows.Scan(&country, &count); err != nil {
+			return nil, err
+		}
+		countries = append(countries, map[string]any{"name": country, "count": count})
+	}
+	if err := countryRows.Err(); err != nil {
+		return nil, err
+	}
+	unassigned := active - assigned
+	if unassigned < 0 {
+		unassigned = 0
+	}
+	return map[string]any{
+		"total": total, "active": active, "assigned": assigned, "unassigned": unassigned,
+		"countries": countries,
+	}, nil
 }
 
 type financeResponse struct {

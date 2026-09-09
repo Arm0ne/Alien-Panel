@@ -275,7 +275,7 @@ export function unbindRouteExitIp(routeId: string, exitIpId: string) {
 }
 
 export function fetchExitIps(params: Api.Central.PageParams = {}) {
-  return request<Api.Central.PageResult<Api.Central.ExitIpSummary>>({ url: '/exit-ips', params });
+  return request<Api.Central.ExitIpListResult>({ url: '/exit-ips', params });
 }
 
 export function fetchExitIpDetail(id: string) {

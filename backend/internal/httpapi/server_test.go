@@ -1457,6 +1457,14 @@ func TestExitIPCRUDAndBindingProtection(t *testing.T) {
 	}
 	exitList := doJSON(t, ts.Client(), http.MethodGet, ts.URL+"/api/exit-ips?page=1&page_size=20", token, nil)
 	listData := exitList["data"].(map[string]any)
+	stats := listData["stats"].(map[string]any)
+	if stats["total"] != float64(1) || stats["active"] != float64(1) || stats["assigned"] != float64(0) || stats["unassigned"] != float64(1) {
+		t.Fatalf("exit IP stats = %#v, want total=1 active=1 assigned=0 unassigned=1", stats)
+	}
+	countries := stats["countries"].([]any)
+	if len(countries) != 1 || countries[0].(map[string]any)["name"] != "东京" {
+		t.Fatalf("exit IP country/region stats = %#v, want 东京", countries)
+	}
 	listItems := listData["items"].([]any)
 	var listedExitIP map[string]any
 	for _, raw := range listItems {
