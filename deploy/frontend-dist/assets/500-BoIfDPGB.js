@@ -1,0 +1,1 @@
+import{$i as e,Ji as t,ca as n}from"./router-C2u90Eon.js";import{t as r}from"./exception-base-3eHlf-J1.js";var i=e({name:`500`,__name:`index`,setup(e){return(e,i)=>{let a=r;return n(),t(a,{type:`500`})}}});export{i as default};
