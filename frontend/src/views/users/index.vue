@@ -942,8 +942,14 @@ onMounted(() => {
         </div>
       </template>
       <div v-if="groups.length" class="space-y-12px p-16px pt-0">
-        <NCard v-for="group in groups" :key="group.nodeId" size="small" :segmented="{ content: true }">
-          <template #header>
+        <div
+          v-for="group in groups"
+          :key="group.nodeId"
+          class="user-group-card overflow-hidden rounded-6px border border-gray-200 bg-white dark:border-gray-700 dark:bg-dark"
+        >
+          <div
+            class="flex items-start justify-between gap-16px border-b border-gray-200 px-16px py-14px dark:border-gray-700"
+          >
             <div class="min-w-0 cursor-pointer" @click="toggleGroup(group)">
               <div class="flex flex-wrap items-center gap-8px">
                 <span class="text-16px font-600">{{ group.nodeName }}</span>
@@ -954,41 +960,41 @@ onMounted(() => {
                 {{ group.lastSyncAt ? `最近同步：${formatDate(group.lastSyncAt)}` : '尚未完成成功同步' }}
               </div>
             </div>
-          </template>
-          <template #header-extra>
             <NButton text type="primary" @click="toggleGroup(group)">
               {{ isGroupExpanded(group.nodeId) ? '收起用户' : '查看用户' }}
             </NButton>
-          </template>
-
-          <div class="flex flex-wrap items-center gap-x-16px gap-y-8px text-13px">
-            <span>用户 <strong>{{ group.stats.total }}</strong></span>
-            <span class="text-green-600">有效 <strong>{{ group.stats.active }}</strong></span>
-            <span class="text-blue-600">付费 <strong>{{ group.stats.paid }}</strong></span>
-            <span class="text-orange-500">免费 <strong>{{ group.stats.free }}</strong></span>
-            <span class="text-yellow-600">即将到期 <strong>{{ group.stats.expiring }}</strong></span>
-            <span class="text-gray-500">流量 <TrafficValue :value="group.stats.trafficBytes" /></span>
           </div>
 
-          <div v-if="isGroupExpanded(group.nodeId)" class="mt-12px">
-            <NSpin :show="groupUsers[group.nodeId]?.loading || false">
-              <NAlert v-if="groupUsers[group.nodeId]?.error" type="warning" :show-icon="false" class="mb-12px">
-                {{ groupUsers[group.nodeId]?.error }}
-                <NButton size="small" class="ml-8px" @click="loadGroupUsers(group.nodeId)">重试</NButton>
-              </NAlert>
-              <NDataTable
-                v-else-if="groupUsers[group.nodeId]"
-                :columns="columns"
-                :data="groupUsers[group.nodeId].rows"
-                :pagination="groupPagination(group.nodeId)"
-                :bordered="false"
-                :single-line="false"
-                size="small"
-                :scroll-x="1020"
-              />
-            </NSpin>
+          <div class="px-16px py-14px">
+            <div class="flex flex-wrap items-center gap-x-16px gap-y-8px text-13px">
+              <span>用户 <strong>{{ group.stats.total }}</strong></span>
+              <span class="text-green-600">有效 <strong>{{ group.stats.active }}</strong></span>
+              <span class="text-blue-600">付费 <strong>{{ group.stats.paid }}</strong></span>
+              <span class="text-orange-500">免费 <strong>{{ group.stats.free }}</strong></span>
+              <span class="text-yellow-600">即将到期 <strong>{{ group.stats.expiring }}</strong></span>
+              <span class="text-gray-500">流量 <TrafficValue :value="group.stats.trafficBytes" /></span>
+            </div>
+
+            <div v-if="isGroupExpanded(group.nodeId)" class="mt-12px">
+              <NSpin :show="groupUsers[group.nodeId]?.loading || false">
+                <NAlert v-if="groupUsers[group.nodeId]?.error" type="warning" :show-icon="false" class="mb-12px">
+                  {{ groupUsers[group.nodeId]?.error }}
+                  <NButton size="small" class="ml-8px" @click="loadGroupUsers(group.nodeId)">重试</NButton>
+                </NAlert>
+                <NDataTable
+                  v-else-if="groupUsers[group.nodeId]"
+                  :columns="columns"
+                  :data="groupUsers[group.nodeId].rows"
+                  :pagination="groupPagination(group.nodeId)"
+                  :bordered="false"
+                  :single-line="false"
+                  size="small"
+                  :scroll-x="1020"
+                />
+              </NSpin>
+            </div>
           </div>
-        </NCard>
+        </div>
         <div v-if="groupTotal > filters.page_size" class="flex justify-end pt-4px">
           <NPagination
             v-model:page="filters.page"
