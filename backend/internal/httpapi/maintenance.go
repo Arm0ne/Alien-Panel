@@ -35,6 +35,8 @@ func (s *Server) RunMaintenance(ctx context.Context, interval time.Duration) {
 }
 
 func (s *Server) refreshOperationalStatuses(now time.Time) {
+	s.dbMu.RLock()
+	defer s.dbMu.RUnlock()
 	nowText := now.UTC().Format(time.RFC3339Nano)
 	expiringText := now.UTC().Add(userExpiringWindow).Format(time.RFC3339Nano)
 	if _, err := s.db.Exec(`UPDATE users SET status = CASE

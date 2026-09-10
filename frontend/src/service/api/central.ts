@@ -1,8 +1,60 @@
 import { request } from '../request';
+import { getAuthorization } from '../request/shared';
+import { getServiceBaseURL } from '@/utils/service';
+
+const { baseURL: centralBaseURL } = getServiceBaseURL(import.meta.env, import.meta.env.DEV && import.meta.env.VITE_HTTP_PROXY === 'Y');
 
 /** Fetch the business traffic and operations summary for the selected period. */
 export function fetchDashboard(params: Api.Central.DashboardQuery = {}) {
   return request<Api.Central.DashboardSummary>({ url: '/dashboard', params });
+}
+
+/** Generate a consistent SQLite snapshot and download it as an attachment. */
+export async function downloadSystemBackup() {
+  const response = await fetch(`${centralBaseURL}/system/backups/download`, {
+    headers: { Authorization: getAuthorization() || '' }
+  });
+  if (!response.ok) {
+    let message = '生成备份失败';
+    try {
+      const body = await response.json();
+      if (body?.msg) message = body.msg;
+    } catch {
+      // Keep the user-facing fallback when the server did not return JSON.
+    }
+    throw new Error(message);
+  }
+  const blob = await response.blob();
+  const disposition = response.headers.get('Content-Disposition') || '';
+  const encoded = disposition.match(/filename="?([^";]+)"?/i)?.[1];
+  const filename = encoded ? decodeURIComponent(encoded) : `alien-panel-${new Date().toISOString().slice(0, 10)}.sqlite3`;
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement('a');
+  anchor.href = url;
+  anchor.download = filename;
+  anchor.click();
+  URL.revokeObjectURL(url);
+}
+
+/** Upload and restore a verified SQLite snapshot. */
+export async function restoreSystemBackup(file: File) {
+  const form = new FormData();
+  form.append('file', file, file.name);
+  const response = await fetch(`${centralBaseURL}/system/restore`, {
+    method: 'POST',
+    headers: { Authorization: getAuthorization() || '' },
+    body: form
+  });
+  let body: any = null;
+  try {
+    body = await response.json();
+  } catch {
+    // The server should return the normal JSON envelope for this endpoint.
+  }
+  if (!response.ok || body?.code !== '0000') {
+    throw new Error(body?.msg || '恢复数据失败');
+  }
+  return body.data as { restored: boolean; previousBackup: string; requiresLogin: boolean };
 }
 
 export function fetchUsers(params: Api.Central.PageParams = {}) {

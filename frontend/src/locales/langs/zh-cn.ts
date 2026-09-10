@@ -239,7 +239,9 @@ const local: App.I18n.Schema = {
     'exit-ips': '出口 IP',
     finance: '成本与收入',
     events: '事件中心',
-    'nodes-detail': '节点详情'
+    'nodes-detail': '节点详情',
+    system: '系统',
+    system_backup: '数据备份'
   },
   page: {
     login: {

@@ -12,6 +12,36 @@ servers:
 security:
   - bearerAuth: []
 paths:
+  /system/backups/download:
+    get:
+      summary: Generate and download a consistent SQLite backup
+      responses:
+        '200':
+          description: SQLite backup attachment
+          content:
+            application/vnd.sqlite3:
+              schema:
+                type: string
+                format: binary
+        '401': { description: Authentication required }
+  /system/restore:
+    post:
+      summary: Validate and restore a SQLite backup
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file:
+                  type: string
+                  format: binary
+      responses:
+        '200': { description: Restore completed; existing sessions are revoked }
+        '400': { description: Invalid or corrupt SQLite backup }
+        '401': { description: Authentication required }
   /agent/v1/register:
     post:
       security: []

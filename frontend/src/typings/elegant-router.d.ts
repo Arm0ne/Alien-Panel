@@ -28,6 +28,8 @@ declare module "@elegant-router/types" {
     "nodes": "/nodes";
     "nodes-detail": "/nodes/:id";
     "routes": "/routes";
+    "system": "/system";
+    "system_backup": "/system/backup";
     "users": "/users";
   };
 
@@ -71,6 +73,7 @@ declare module "@elegant-router/types" {
     | "nodes"
     | "nodes-detail"
     | "routes"
+    | "system"
     | "users"
   >;
 
@@ -99,6 +102,7 @@ declare module "@elegant-router/types" {
     | "nodes-detail"
     | "nodes"
     | "routes"
+    | "system_backup"
     | "users"
   >;
 

@@ -243,7 +243,9 @@ const local: App.I18n.Schema = {
     'exit-ips': 'Exit IPs',
     finance: 'Finance',
     events: 'Event center',
-    'nodes-detail': 'Node detail'
+    'nodes-detail': 'Node detail',
+    system: 'System',
+    system_backup: 'Data backup'
   },
   page: {
     login: {

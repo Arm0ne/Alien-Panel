@@ -130,6 +130,26 @@ export const generatedRoutes: GeneratedRoute[] = [
     }
   },
   {
+    name: 'system',
+    path: '/system',
+    component: 'layout.base',
+    meta: {
+      title: 'system',
+      i18nKey: 'route.system'
+    },
+    children: [
+      {
+        name: 'system_backup',
+        path: '/system/backup',
+        component: 'view.system_backup',
+        meta: {
+          title: 'system_backup',
+          i18nKey: 'route.system_backup'
+        }
+      }
+    ]
+  },
+  {
     name: 'users',
     path: '/users',
     component: 'layout.base$view.users',

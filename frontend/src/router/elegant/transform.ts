@@ -174,6 +174,8 @@ const routeMap: RouteMap = {
   "nodes": "/nodes",
   "nodes-detail": "/nodes/:id",
   "routes": "/routes",
+  "system": "/system",
+  "system_backup": "/system/backup",
   "users": "/users"
 };
 

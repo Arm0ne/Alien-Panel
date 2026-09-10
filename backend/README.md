@@ -79,6 +79,8 @@ go run ./cmd/seed-demo --database .\data\panel.db
 
 当前已实现健康检查、管理员登录/刷新/退出、当前管理员信息、Dashboard、各业务列表、用户详情和中央业务字段编辑、用户直接路径管理、节点详情和同步请求，以及线路关系 CRUD。Agent 端点包括：
 
+管理员还可以通过 `GET /api/system/backups/download` 下载一致性 SQLite 备份，并通过 `POST /api/system/restore` 上传恢复（字段名为 `file`，最大 512 MB）。恢复前会自动校验并保留安全快照，恢复成功后所有旧管理员会话失效。
+
 - `POST /api/agent/v1/register`（注册节点并签发节点 Token）；
 - `POST /api/agent/v1/heartbeat`（Bearer 节点 Token；可只报告 Agent 与中央服务的连通性）；
 - `POST /api/agent/v1/sync`（Bearer 节点 Token，按 `sync_id` 幂等写入 Inbound、Client 和流量快照）。

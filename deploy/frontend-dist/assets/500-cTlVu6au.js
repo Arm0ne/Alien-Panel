@@ -1,0 +1,1 @@
+import{$i as e,ia as t,pa as n}from"./router-omaRgp3e.js";import{t as r}from"./exception-base-6yFKKlOX.js";var i=t({name:`500`,__name:`index`,setup(t){return(t,i)=>{let a=r;return n(),e(a,{type:`500`})}}});export{i as default};

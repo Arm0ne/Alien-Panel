@@ -17,6 +17,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"golang.org/x/crypto/bcrypt"
@@ -37,6 +38,7 @@ type Server struct {
 	db      *sql.DB
 	logger  *slog.Logger
 	origins map[string]struct{}
+	dbMu    sync.RWMutex
 }
 
 type principal struct {
@@ -130,8 +132,37 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/events/{id}/read", s.requireAuth(http.HandlerFunc(s.markEventRead)))
 	mux.Handle("POST /api/events/{id}/resolve", s.requireAuth(http.HandlerFunc(s.resolveEvent)))
 	mux.Handle("GET /api/events", s.requireAuth(http.HandlerFunc(s.events)))
+	mux.Handle("GET /api/system/backups/download", s.requireAuth(http.HandlerFunc(s.downloadBackup)))
+	mux.Handle("POST /api/system/restore", s.requireAuth(http.HandlerFunc(s.restoreBackup)))
 
-	return s.withSecurityHeaders(s.withRequestID(s.withCORS(mux)))
+	return s.withSecurityHeaders(s.withRequestID(s.withCORS(s.withDatabaseLock(mux))))
+}
+
+// withDatabaseLock serializes the database connection swap performed by the
+// restore endpoint with every other HTTP request. Maintenance obtains the
+// read side of the same lock separately.
+func (s *Server) withDatabaseLock(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/system/restore" {
+			next.ServeHTTP(w, r)
+			return
+		}
+		s.dbMu.RLock()
+		defer s.dbMu.RUnlock()
+		next.ServeHTTP(w, r)
+	})
+}
+
+// Close releases the currently active database connection. The command
+// entrypoint uses this instead of closing only the original connection so a
+// successful in-process restore is also shut down cleanly.
+func (s *Server) Close() error {
+	s.dbMu.Lock()
+	defer s.dbMu.Unlock()
+	if s.db == nil {
+		return nil
+	}
+	return s.db.Close()
 }
 
 func (s *Server) ensureAdmin() error {

@@ -40,6 +40,7 @@ func main() {
 		logger.Error("initialize http server", "error", err)
 		os.Exit(1)
 	}
+	defer server.Close()
 	maintenanceContext, stopMaintenance := context.WithCancel(context.Background())
 	defer stopMaintenance()
 	go server.RunMaintenance(maintenanceContext, cfg.MaintenanceInterval)
