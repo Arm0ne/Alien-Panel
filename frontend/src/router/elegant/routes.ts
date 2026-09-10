@@ -135,7 +135,9 @@ export const generatedRoutes: GeneratedRoute[] = [
     component: 'layout.base',
     meta: {
       title: 'system',
-      i18nKey: 'route.system'
+      i18nKey: 'route.system',
+      icon: 'mdi:cog-outline',
+      order: 8
     },
     children: [
       {
