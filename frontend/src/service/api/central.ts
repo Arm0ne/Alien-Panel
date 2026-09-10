@@ -61,6 +61,11 @@ export function fetchUsers(params: Api.Central.PageParams = {}) {
   return request<Api.Central.UserListResult>({ url: '/users', params });
 }
 
+/** List relay-node groups for the user management page. User rows are loaded lazily per group. */
+export function fetchUserGroups(params: Api.Central.PageParams = {}) {
+  return request<Api.Central.UserGroupListResult>({ url: '/users/groups', params });
+}
+
 /** Read a single Inbound-based business user with its X-Panel snapshots. */
 export function fetchUserDetail(id: string) {
   return request<Api.Central.UserDetail>({ url: `/users/${encodeURIComponent(id)}` });

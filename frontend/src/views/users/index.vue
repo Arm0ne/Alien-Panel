@@ -10,6 +10,7 @@ import {
   confirmUserRenewal,
   clearUserPath,
   fetchUserDetail,
+  fetchUserGroups,
   fetchUserPathAssets,
   fetchUsers,
   importUserBillingRecords,
@@ -27,10 +28,20 @@ defineOptions({ name: 'UserManagement' });
 
 const loading = ref(false);
 const errorMessage = ref('');
-const rows = ref<Api.Central.UserSummary[]>([]);
-const total = ref(0);
+const groups = ref<Api.Central.UserGroupSummary[]>([]);
+const groupTotal = ref(0);
 const stats = ref<Api.Central.UserListStats | null>(null);
 const dataAt = ref('');
+const expandedGroups = ref(new Set<string>());
+interface GroupUsersState {
+  rows: Api.Central.UserSummary[];
+  total: number;
+  page: number;
+  pageSize: number;
+  loading: boolean;
+  error: string;
+}
+const groupUsers = reactive<Record<string, GroupUsersState>>({});
 const drawerVisible = ref(false);
 const detailLoading = ref(false);
 const detailError = ref('');
@@ -89,7 +100,7 @@ const pathNotes = ref('');
 const route = useRoute();
 let pathAssetsRequestID = 0;
 
-const filters = reactive({ page: 1, page_size: 50, keyword: '', status: 'all' });
+const filters = reactive({ page: 1, page_size: 20, keyword: '', status: 'all', billingType: 'all', nodeID: '' });
 
 const statusOptions = [
   { label: '全部状态', value: 'all' },
@@ -98,6 +109,17 @@ const statusOptions = [
   { label: '已到期', value: 'expired' },
   { label: '已停用', value: 'disabled' }
 ];
+
+const billingTypeOptions = [
+  { label: '全部类型', value: 'all' },
+  { label: '付费用户', value: 'paid' },
+  { label: '免费用户', value: 'free' }
+];
+
+const nodeOptions = computed(() => [
+  { label: '全部线路机', value: '' },
+  ...groups.value.map(group => ({ label: group.nodeName, value: group.nodeId }))
+]);
 
 const pathModeOptions = [
   { label: '线路机直出', value: 'relay' },
@@ -224,7 +246,7 @@ async function createInitialOrder() {
   detail.value = data;
   copyDetailToForm(data);
   window.$message?.success('首笔订单已确认并计入实收');
-  void loadUsers();
+  void loadGroups();
 }
 
 function resetOrderForm() {
@@ -275,7 +297,7 @@ async function createAdditionalOrder() {
   copyDetailToForm(data);
   orderModalVisible.value = false;
   window.$message?.success('订单已保存');
-  void loadUsers();
+  void loadGroups();
 }
 
 function openVerifyModal(record: Api.Central.UserBillingRecord) {
@@ -305,7 +327,7 @@ async function submitVerifyRecord() {
   copyDetailToForm(data);
   verifyModalVisible.value = false;
   window.$message?.success('历史订单已核验并计入财务');
-  void loadUsers();
+  void loadGroups();
 }
 
 function cancelRecord(record: Api.Central.UserBillingRecord) {
@@ -319,7 +341,7 @@ function cancelRecord(record: Api.Central.UserBillingRecord) {
     detail.value = data;
     copyDetailToForm(data);
     window.$message?.success('订单已取消，财务统计已排除');
-    void loadUsers();
+    void loadGroups();
   };
   if (!window.$dialog) {
     void cancel();
@@ -411,7 +433,7 @@ async function submitBillingImport() {
     importPreview.value = null;
     importText.value = '';
     window.$message?.success(`已导入 ${data.imported} 笔历史订单${data.unverified ? `，其中 ${data.unverified} 笔待核实` : ''}`);
-    void loadUsers();
+    void loadGroups();
     if (selectedUserID.value) void openDetail(selectedUserID.value);
   } catch (error) {
     window.$message?.error(error instanceof Error ? error.message : 'CSV 格式错误');
@@ -504,7 +526,7 @@ async function savePathAssignment() {
   detail.value = data;
   syncPathForm(data);
   window.$message?.success('用户路径已保存');
-  void loadUsers();
+  void loadGroups();
 }
 
 async function removePathAssignment() {
@@ -520,7 +542,7 @@ async function removePathAssignment() {
   detail.value = data;
   syncPathForm(data);
   window.$message?.success('已解除用户路径');
-  void loadUsers();
+  void loadGroups();
 }
 
 function confirmRemovePathAssignment() {
@@ -589,7 +611,7 @@ async function saveBusinessFields() {
   detail.value = data;
   copyDetailToForm(data);
   window.$message?.success('中央业务信息已保存');
-  loadUsers();
+  void loadGroups();
 }
 
 function cycleLabel(cycle: Api.Central.BillingCycle) {
@@ -617,7 +639,7 @@ async function confirmRenewal(candidate: Api.Central.UserRenewalCandidate) {
   detail.value = data;
   copyDetailToForm(data);
   window.$message?.success('续费已确认并计入财务');
-  void loadUsers();
+  void loadGroups();
 }
 
 async function rejectRenewal(candidate: Api.Central.UserRenewalCandidate) {
@@ -648,7 +670,6 @@ const columns: DataTableColumns<Api.Central.UserSummary> = [
     width: 100,
     render: row => (row.billingType === 'free' ? h('span', { class: 'text-orange-500' }, '免费') : '收费')
   },
-  { title: '线路机', key: 'nodeName', minWidth: 140, render: row => row.nodeName || '未关联' },
   { title: '落地机', key: 'landingNodeName', minWidth: 140, render: row => row.landingNodeName || '线路机直出' },
   {
     title: '出口 IP',
@@ -692,60 +713,171 @@ const columns: DataTableColumns<Api.Central.UserSummary> = [
   }
 ];
 
-const pagination = computed(() => ({
-  page: filters.page,
-  pageSize: filters.page_size,
-  itemCount: total.value,
-  showSizePicker: true,
-  pageSizes: [20, 50, 100],
-  onChange: (page: number) => {
-    filters.page = page;
-    loadUsers();
-  },
-  onUpdatePageSize: (pageSize: number) => {
-    filters.page_size = pageSize;
-    filters.page = 1;
-    loadUsers();
+function ensureGroupUsers(nodeID: string) {
+  if (!groupUsers[nodeID]) {
+    groupUsers[nodeID] = { rows: [], total: 0, page: 1, pageSize: 20, loading: false, error: '' };
   }
-}));
+  return groupUsers[nodeID];
+}
 
-async function loadUsers() {
+function groupPagination(nodeID: string) {
+  const state = ensureGroupUsers(nodeID);
+  return {
+    page: state.page,
+    pageSize: state.pageSize,
+    itemCount: state.total,
+    showSizePicker: true,
+    pageSizes: [20, 50, 100],
+    onChange: (page: number) => {
+      state.page = page;
+      void loadGroupUsers(nodeID);
+    },
+    onUpdatePageSize: (pageSize: number) => {
+      state.pageSize = pageSize;
+      state.page = 1;
+      void loadGroupUsers(nodeID);
+    }
+  };
+}
+
+function isGroupExpanded(nodeID: string) {
+  return expandedGroups.value.has(nodeID);
+}
+
+function toggleGroup(group: Api.Central.UserGroupSummary) {
+  const next = new Set(expandedGroups.value);
+  if (next.has(group.nodeId)) {
+    next.delete(group.nodeId);
+  } else {
+    next.add(group.nodeId);
+    void loadGroupUsers(group.nodeId);
+  }
+  expandedGroups.value = next;
+}
+
+function expandAllGroups() {
+  expandedGroups.value = new Set(groups.value.map(group => group.nodeId));
+  void Promise.all(groups.value.map(group => loadGroupUsers(group.nodeId)));
+}
+
+function collapseAllGroups() {
+  expandedGroups.value = new Set();
+}
+
+function nodeStatusLabel(status: Api.Central.NodeStatus) {
+  if (status === 'online') return '在线';
+  if (status === 'degraded') return '异常';
+  if (status === 'offline') return '离线';
+  if (status === 'disabled') return '停用';
+  return '未知';
+}
+
+function nodeStatusType(status: Api.Central.NodeStatus): 'success' | 'warning' | 'error' | 'default' {
+  if (status === 'online') return 'success';
+  if (status === 'degraded' || status === 'unknown') return 'warning';
+  if (status === 'offline' || status === 'disabled') return 'error';
+  return 'default';
+}
+
+function syncStatusLabel(status: Api.Central.UserGroupSummary['syncStatus']) {
+  if (status === 'success') return '同步成功';
+  if (status === 'failed') return '同步异常';
+  return '待同步';
+}
+
+function syncStatusType(status: Api.Central.UserGroupSummary['syncStatus']): 'success' | 'warning' | 'error' | 'default' {
+  if (status === 'success') return 'success';
+  if (status === 'failed') return 'error';
+  if (status === 'unknown') return 'default';
+  return 'warning';
+}
+
+async function loadGroupUsers(nodeID: string, requestedPage?: number) {
+  const state = ensureGroupUsers(nodeID);
+  if (requestedPage) state.page = requestedPage;
+  state.loading = true;
+  state.error = '';
+  const { data, error } = await fetchUsers({
+    page: state.page,
+    page_size: state.pageSize,
+    keyword: filters.keyword || undefined,
+    status: filters.status === 'all' ? undefined : filters.status,
+    billing_type: filters.billingType === 'all' ? undefined : (filters.billingType as Api.Central.BillingType),
+    node_id: nodeID === '__unassigned__' ? '__unassigned__' : nodeID
+  });
+  if (error || !data) {
+    state.rows = [];
+    state.total = 0;
+    state.error = '无法读取该线路机下的用户';
+  } else {
+    state.rows = data.items;
+    state.total = data.total;
+  }
+  state.loading = false;
+}
+
+async function loadGroups() {
   loading.value = true;
   errorMessage.value = '';
-  const { data, error } = await fetchUsers({
+  const previouslyExpanded = [...expandedGroups.value];
+  const { data, error } = await fetchUserGroups({
     page: filters.page,
     page_size: filters.page_size,
     keyword: filters.keyword || undefined,
-    status: filters.status === 'all' ? undefined : filters.status
+    status: filters.status === 'all' ? undefined : filters.status,
+    billing_type: filters.billingType === 'all' ? undefined : (filters.billingType as Api.Central.BillingType),
+    node_id: filters.nodeID || undefined
   });
   if (error || !data) {
     errorMessage.value = '中央后端暂不可用，无法读取用户数据';
-    rows.value = [];
-    total.value = 0;
+    groups.value = [];
+    groupTotal.value = 0;
     stats.value = null;
     dataAt.value = '';
   } else {
-    rows.value = data.items;
-    total.value = data.total;
+    groups.value = data.items;
+    groupTotal.value = data.total;
     stats.value = data.stats;
     dataAt.value = data.dataAt || '';
+    const available = new Set(groups.value.map(group => group.nodeId));
+    expandedGroups.value = new Set([...expandedGroups.value].filter(nodeID => available.has(nodeID)));
+    for (const nodeID of Object.keys(groupUsers)) {
+      if (!available.has(nodeID)) Reflect.deleteProperty(groupUsers, nodeID);
+    }
+    if (groups.value.length === 1) {
+      expandedGroups.value = new Set([groups.value[0].nodeId]);
+      void loadGroupUsers(groups.value[0].nodeId);
+    } else {
+      for (const nodeID of previouslyExpanded) {
+        if (available.has(nodeID)) void loadGroupUsers(nodeID);
+      }
+    }
   }
   loading.value = false;
 }
 
 function submitFilters() {
   filters.page = 1;
-  loadUsers();
+  expandedGroups.value = new Set();
+  for (const state of Object.values(groupUsers)) {
+    state.page = 1;
+    state.rows = [];
+    state.total = 0;
+    state.error = '';
+  }
+  loadGroups();
 }
 
 function resetFilters() {
   filters.keyword = '';
   filters.status = 'all';
+  filters.billingType = 'all';
+  filters.nodeID = '';
   submitFilters();
 }
 
 onMounted(() => {
-  void loadUsers();
+  void loadGroups();
   const userId = typeof route.query.userId === 'string' ? route.query.userId : '';
   if (userId) void openDetail(userId);
 });
@@ -755,20 +887,20 @@ onMounted(() => {
   <div class="users-page">
     <ModulePage
       title="用户管理"
-      description="一个 Inbound 对应一个业务用户，Client / Email 仅作为设备凭证。"
+      description="按线路机查看业务用户；一个 Inbound 对应一个业务用户，Client / Email 仅作为设备凭证。"
       :loading="loading"
       :error="errorMessage"
-      :empty="rows.length === 0"
+      :empty="groups.length === 0"
       empty-description="暂无用户同步数据"
       :data-at="dataAt"
-      @refresh="loadUsers"
+      @refresh="loadGroups"
     >
       <template #actions>
         <NButton size="small" secondary @click="importModalVisible = true">
           <template #icon><icon-mdi-upload /></template>
           导入历史账单
         </NButton>
-        <NButton v-if="errorMessage" size="small" type="warning" secondary @click="loadUsers">重试</NButton>
+        <NButton v-if="errorMessage" size="small" type="warning" secondary @click="loadGroups">重试</NButton>
       </template>
       <template #toolbar>
         <div>
@@ -796,24 +928,75 @@ onMounted(() => {
                 @keyup.enter="submitFilters"
               />
               <NSelect v-model:value="filters.status" :options="statusOptions" class="w-140px" />
+              <NSelect v-model:value="filters.billingType" :options="billingTypeOptions" class="w-140px" />
+              <NSelect v-model:value="filters.nodeID" :options="nodeOptions" class="w-180px" filterable />
               <NButton type="primary" @click="submitFilters">
                 <template #icon><icon-mdi-magnify /></template>
                 查询
               </NButton>
               <NButton @click="resetFilters">重置</NButton>
+              <NButton secondary :disabled="groups.length === 0" @click="expandAllGroups">全部展开</NButton>
+              <NButton secondary :disabled="groups.length === 0" @click="collapseAllGroups">全部收起</NButton>
             </NSpace>
           </div>
         </div>
       </template>
-      <NDataTable
-        :columns="columns"
-        :data="rows"
-        :pagination="pagination"
-        :bordered="false"
-        :single-line="false"
-        size="small"
-        :scroll-x="1120"
-      />
+      <div v-if="groups.length" class="space-y-12px p-16px pt-0">
+        <NCard v-for="group in groups" :key="group.nodeId" size="small" :segmented="{ content: true }">
+          <template #header>
+            <div class="min-w-0 cursor-pointer" @click="toggleGroup(group)">
+              <div class="flex flex-wrap items-center gap-8px">
+                <span class="text-16px font-600">{{ group.nodeName }}</span>
+                <NTag size="small" :type="nodeStatusType(group.status)">{{ nodeStatusLabel(group.status) }}</NTag>
+                <NTag size="small" :type="syncStatusType(group.syncStatus)">{{ syncStatusLabel(group.syncStatus) }}</NTag>
+              </div>
+              <div class="mt-4px text-12px text-gray-500">
+                {{ group.lastSyncAt ? `最近同步：${formatDate(group.lastSyncAt)}` : '尚未完成成功同步' }}
+              </div>
+            </div>
+          </template>
+          <template #header-extra>
+            <NButton text type="primary" @click="toggleGroup(group)">
+              {{ isGroupExpanded(group.nodeId) ? '收起用户' : '查看用户' }}
+            </NButton>
+          </template>
+
+          <div class="flex flex-wrap items-center gap-x-16px gap-y-8px text-13px">
+            <span>用户 <strong>{{ group.stats.total }}</strong></span>
+            <span class="text-green-600">有效 <strong>{{ group.stats.active }}</strong></span>
+            <span class="text-blue-600">付费 <strong>{{ group.stats.paid }}</strong></span>
+            <span class="text-orange-500">免费 <strong>{{ group.stats.free }}</strong></span>
+            <span class="text-yellow-600">即将到期 <strong>{{ group.stats.expiring }}</strong></span>
+            <span class="text-gray-500">流量 <TrafficValue :value="group.stats.trafficBytes" /></span>
+          </div>
+
+          <div v-if="isGroupExpanded(group.nodeId)" class="mt-12px">
+            <NSpin :show="groupUsers[group.nodeId]?.loading || false">
+              <NAlert v-if="groupUsers[group.nodeId]?.error" type="warning" :show-icon="false" class="mb-12px">
+                {{ groupUsers[group.nodeId]?.error }}
+                <NButton size="small" class="ml-8px" @click="loadGroupUsers(group.nodeId)">重试</NButton>
+              </NAlert>
+              <NDataTable
+                v-else-if="groupUsers[group.nodeId]"
+                :columns="columns"
+                :data="groupUsers[group.nodeId].rows"
+                :pagination="groupPagination(group.nodeId)"
+                :bordered="false"
+                :single-line="false"
+                size="small"
+                :scroll-x="1020"
+              />
+            </NSpin>
+          </div>
+        </NCard>
+        <div v-if="groupTotal > filters.page_size" class="flex justify-end pt-4px">
+          <NPagination
+            v-model:page="filters.page"
+            :page-count="Math.ceil(groupTotal / filters.page_size)"
+            @update:page="loadGroups"
+          />
+        </div>
+      </div>
     </ModulePage>
 
     <NModal v-model:show="importModalVisible" preset="card" title="导入历史账单" class="w-900px max-w-92vw">

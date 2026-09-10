@@ -18,6 +18,7 @@ declare namespace Api {
       category?: EventCategory;
       node_id?: string;
       node_type?: NodeType;
+      billing_type?: BillingType;
     }
 
     interface PageResult<T> {
@@ -56,6 +57,32 @@ declare namespace Api {
     }
 
     interface UserListResult extends PageResult<UserSummary> {
+      stats: UserListStats;
+    }
+
+    interface UserGroupStats {
+      total: number;
+      active: number;
+      expiring: number;
+      expired: number;
+      disabled: number;
+      paid: number;
+      free: number;
+      trafficBytes: number;
+    }
+
+    interface UserGroupSummary {
+      nodeId: string;
+      nodeName: string;
+      nodeType: NodeType;
+      status: NodeStatus;
+      syncStatus: 'unknown' | 'success' | 'failed';
+      enabled: boolean;
+      lastSyncAt: string | null;
+      stats: UserGroupStats;
+    }
+
+    interface UserGroupListResult extends PageResult<UserGroupSummary> {
       stats: UserListStats;
     }
 

@@ -12,6 +12,19 @@ servers:
 security:
   - bearerAuth: []
 paths:
+  /users/groups:
+    get:
+      summary: List user management groups by relay node
+      parameters:
+        - { name: page, in: query, schema: { type: integer, minimum: 1 } }
+        - { name: page_size, in: query, schema: { type: integer, minimum: 1, maximum: 200 } }
+        - { name: keyword, in: query, schema: { type: string } }
+        - { name: status, in: query, schema: { type: string } }
+        - { name: billing_type, in: query, schema: { type: string, enum: [paid, free] } }
+        - { name: node_id, in: query, schema: { type: string } }
+      responses:
+        '200': { description: Grouped user management result }
+        '401': { description: Authentication required }
   /system/backups/download:
     get:
       summary: Generate and download a consistent SQLite backup

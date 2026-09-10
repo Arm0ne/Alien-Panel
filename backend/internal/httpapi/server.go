@@ -87,6 +87,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("PATCH /api/auth/me", s.requireAuth(http.HandlerFunc(s.updateAccount)))
 	mux.Handle("GET /api/dashboard", s.requireAuth(http.HandlerFunc(s.dashboard)))
 	mux.Handle("GET /api/users", s.requireAuth(http.HandlerFunc(s.users)))
+	mux.Handle("GET /api/users/groups", s.requireAuth(http.HandlerFunc(s.userGroups)))
 	mux.Handle("GET /api/users/{id}", s.requireAuth(http.HandlerFunc(s.userDetail)))
 	mux.Handle("GET /api/users/{id}/renewals", s.requireAuth(http.HandlerFunc(s.listUserRenewals)))
 	mux.Handle("POST /api/users/{id}/renewals/{candidateId}/confirm", s.requireAuth(http.HandlerFunc(s.confirmUserRenewal)))
@@ -369,8 +370,16 @@ func (s *Server) users(w http.ResponseWriter, r *http.Request) {
 		args = append(args, query.status)
 	}
 	if query.nodeID != "" {
-		where = append(where, "i.node_id = ?")
-		args = append(args, query.nodeID)
+		if query.nodeID == unassignedUserGroupID {
+			where = append(where, "i.node_id IS NULL")
+		} else {
+			where = append(where, "i.node_id = ?")
+			args = append(args, query.nodeID)
+		}
+	}
+	if query.billingType != "" && query.billingType != "all" {
+		where = append(where, "COALESCE(u.billing_type, 'paid') = ?")
+		args = append(args, query.billingType)
 	}
 	base := `FROM users u
 LEFT JOIN user_inbounds ui ON ui.user_id = u.id AND ui.is_primary = 1 AND ui.active_to IS NULL
@@ -426,6 +435,106 @@ ORDER BY CASE WHEN u.expiry_time IS NULL THEN 1 ELSE 0 END, u.expiry_time ASC LI
 	}
 	response := s.pageResponse(items, total, query)
 	response["stats"] = stats
+	writeSuccess(w, response)
+}
+
+const unassignedUserGroupID = "__unassigned__"
+
+// userGroups returns the first level of the user management page. It groups
+// the same user scope as users() by the primary relay Inbound's node while
+// keeping users without a valid relay association in an explicit catch-all
+// group so no synchronized record disappears from the page.
+func (s *Server) userGroups(w http.ResponseWriter, r *http.Request) {
+	s.refreshOperationalStatuses(time.Now().UTC())
+	query := parseListQuery(r)
+	where := []string{"u.deleted_at IS NULL"}
+	args := make([]any, 0, 8)
+	if query.keyword != "" {
+		where = append(where, `(u.display_name LIKE ? OR i.tag LIKE ? OR n.name LIKE ? OR EXISTS (SELECT 1 FROM user_routes uk JOIN routes rk ON rk.id = uk.route_id WHERE uk.user_id = u.id AND uk.active_to IS NULL AND rk.name LIKE ?))`)
+		like := "%" + query.keyword + "%"
+		args = append(args, like, like, like, like)
+	}
+	if query.status != "" && query.status != "all" {
+		where = append(where, "u.status = ?")
+		args = append(args, query.status)
+	}
+	if query.billingType != "" && query.billingType != "all" {
+		where = append(where, "COALESCE(u.billing_type, 'paid') = ?")
+		args = append(args, query.billingType)
+	}
+	if query.nodeID != "" {
+		if query.nodeID == unassignedUserGroupID {
+			where = append(where, "i.node_id IS NULL")
+		} else {
+			where = append(where, "i.node_id = ?")
+			args = append(args, query.nodeID)
+		}
+	}
+	base := `FROM users u
+LEFT JOIN user_inbounds ui ON ui.user_id = u.id AND ui.is_primary = 1 AND ui.active_to IS NULL
+LEFT JOIN inbounds i ON i.id = ui.inbound_id AND i.kind = 'user' AND i.deleted_at IS NULL
+ AND i.node_id IN (SELECT id FROM nodes WHERE type = 'relay' AND deleted_at IS NULL)
+LEFT JOIN nodes n ON n.id = i.node_id
+WHERE ` + strings.Join(where, " AND ")
+	var total int
+	if err := s.db.QueryRow(`SELECT COUNT(DISTINCT COALESCE(n.id, ?)) `+base, append([]any{unassignedUserGroupID}, args...)...).Scan(&total); err != nil {
+		writeFailure(w, http.StatusInternalServerError, internalErrorCode, "could not count user groups")
+		return
+	}
+	globalStats, err := s.userListStats()
+	if err != nil {
+		s.logger.Error("read user group statistics", "error", err)
+		writeFailure(w, http.StatusInternalServerError, internalErrorCode, "could not read user statistics")
+		return
+	}
+	rows, err := s.db.Query(`SELECT COALESCE(n.id, ?), COALESCE(n.name, '未关联线路机'), COALESCE(n.type, 'unknown'),
+COALESCE(n.health_status, 'unknown'), COALESCE(n.sync_status, 'unknown'), COALESCE(n.enabled, 1),
+COALESCE((SELECT COALESCE(sr.finished_at, sr.started_at) FROM sync_runs sr WHERE sr.node_id = n.id AND sr.status = 'success'
+ ORDER BY COALESCE(sr.finished_at, sr.started_at) DESC LIMIT 1), ''),
+COUNT(DISTINCT u.id),
+COALESCE(SUM(CASE WHEN u.status = 'active' THEN 1 ELSE 0 END), 0),
+COALESCE(SUM(CASE WHEN u.status = 'expiring' THEN 1 ELSE 0 END), 0),
+COALESCE(SUM(CASE WHEN u.status = 'expired' THEN 1 ELSE 0 END), 0),
+COALESCE(SUM(CASE WHEN u.status = 'disabled' THEN 1 ELSE 0 END), 0),
+COALESCE(SUM(CASE WHEN u.status = 'active' AND COALESCE(u.billing_type, 'paid') = 'paid' THEN 1 ELSE 0 END), 0),
+COALESCE(SUM(CASE WHEN u.status = 'active' AND COALESCE(u.billing_type, 'paid') = 'free' THEN 1 ELSE 0 END), 0),
+COALESCE(SUM(COALESCE(i.up, 0) + COALESCE(i.down, 0)), 0)
+`+base+` GROUP BY n.id, n.name, n.type, n.health_status, n.sync_status, n.enabled
+ORDER BY CASE WHEN n.id IS NULL THEN 1 ELSE 0 END, COALESCE(n.name, '') ASC LIMIT ? OFFSET ?`, append(append([]any{unassignedUserGroupID}, args...), query.pageSize, query.offset)...)
+	if err != nil {
+		writeFailure(w, http.StatusInternalServerError, internalErrorCode, "could not read user groups")
+		return
+	}
+	defer rows.Close()
+	items := make([]map[string]any, 0)
+	for rows.Next() {
+		var id, name, nodeType, healthStatus, syncStatus, lastSync string
+		var enabled int
+		var totalUsers, active, expiring, expired, disabled, paid, free int
+		var traffic int64
+		if err := rows.Scan(&id, &name, &nodeType, &healthStatus, &syncStatus, &enabled, &lastSync, &totalUsers, &active, &expiring, &expired, &disabled, &paid, &free, &traffic); err != nil {
+			writeFailure(w, http.StatusInternalServerError, internalErrorCode, "could not decode user groups")
+			return
+		}
+		if id == "" {
+			id = unassignedUserGroupID
+		}
+		displayStatus := healthStatus
+		if enabled != 1 && id != unassignedUserGroupID {
+			displayStatus = "disabled"
+		}
+		items = append(items, map[string]any{
+			"nodeId": id, "nodeName": name, "nodeType": nodeType, "status": displayStatus, "syncStatus": syncStatus,
+			"enabled": enabled == 1, "lastSyncAt": nullableString(lastSync),
+			"stats": map[string]any{"total": totalUsers, "active": active, "expiring": expiring, "expired": expired, "disabled": disabled, "paid": paid, "free": free, "trafficBytes": traffic},
+		})
+	}
+	if err := rows.Err(); err != nil {
+		writeFailure(w, http.StatusInternalServerError, internalErrorCode, "could not finish user groups")
+		return
+	}
+	response := s.pageResponse(items, total, query)
+	response["stats"] = globalStats
 	writeSuccess(w, response)
 }
 
@@ -3145,15 +3254,16 @@ func (s *Server) withSecurityHeaders(next http.Handler) http.Handler {
 }
 
 type listQuery struct {
-	page     int
-	pageSize int
-	offset   int
-	keyword  string
-	status   string
-	nodeID   string
-	nodeType string
-	severity string
-	category string
+	page        int
+	pageSize    int
+	offset      int
+	keyword     string
+	status      string
+	nodeID      string
+	billingType string
+	nodeType    string
+	severity    string
+	category    string
 }
 
 func parseListQuery(r *http.Request) listQuery {
@@ -3165,7 +3275,8 @@ func parseListQuery(r *http.Request) listQuery {
 	return listQuery{
 		page: page, pageSize: pageSize, offset: (page - 1) * pageSize,
 		keyword: strings.TrimSpace(r.URL.Query().Get("keyword")), status: strings.TrimSpace(r.URL.Query().Get("status")),
-		nodeID: strings.TrimSpace(r.URL.Query().Get("node_id")), nodeType: strings.TrimSpace(r.URL.Query().Get("node_type")),
+		billingType: strings.TrimSpace(r.URL.Query().Get("billing_type")),
+		nodeID:      strings.TrimSpace(r.URL.Query().Get("node_id")), nodeType: strings.TrimSpace(r.URL.Query().Get("node_type")),
 		severity: strings.TrimSpace(r.URL.Query().Get("severity")), category: strings.TrimSpace(r.URL.Query().Get("category")),
 	}
 }

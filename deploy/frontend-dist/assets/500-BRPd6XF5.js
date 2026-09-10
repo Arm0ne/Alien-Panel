@@ -1,0 +1,1 @@
+import{aa as e,ea as t,ma as n}from"./router-fkVtrh_h.js";import{t as r}from"./exception-base-BEauk8Hy.js";var i=e({name:`500`,__name:`index`,setup(e){return(e,i)=>{let a=r;return n(),t(a,{type:`500`})}}});export{i as default};
