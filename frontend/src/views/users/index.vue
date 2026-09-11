@@ -1490,15 +1490,12 @@ onMounted(() => {
 
 <style scoped>
 .user-groups-grid {
-  display: flex;
-  flex-wrap: nowrap;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 14px;
-  overflow-x: auto;
-  padding-bottom: 4px;
 }
 
 .user-group-card {
-  flex: 1 0 280px;
   overflow: hidden;
   min-width: 0;
   border: 1px solid color-mix(in srgb, var(--n-border-color, rgb(0 0 0 / 12%)) 45%, transparent);
@@ -1514,7 +1511,7 @@ onMounted(() => {
 }
 
 .user-group-card--expanded {
-  flex-basis: min(100%, 1280px);
+  grid-column: 1;
 }
 
 .user-group-card__header {
