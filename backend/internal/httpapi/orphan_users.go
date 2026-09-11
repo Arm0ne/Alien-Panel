@@ -48,8 +48,65 @@ WHERE r.relay_node_id = ? OR r.landing_node_id = ?
 	return userIDs, nil
 }
 
-// autoDeleteOrphanedUsersTx logically deletes only the users made orphaned by
-// the current node deletion. Billing records keep their user foreign key and
+// orphanedUserIDsTx returns central users that no longer have any live relay
+// Inbound or usable network path. It is intentionally evaluated inside the
+// current Agent sync transaction so users are cleaned up immediately after an
+// Inbound reaches the archive threshold, including records archived by an
+// earlier server version.
+func orphanedUserIDsTx(tx *sql.Tx) ([]string, error) {
+	rows, err := tx.Query(`SELECT u.id
+FROM users u
+WHERE u.deleted_at IS NULL
+  AND NOT EXISTS (
+    SELECT 1
+    FROM user_inbounds ui
+    JOIN inbounds i ON i.id = ui.inbound_id
+    JOIN nodes relay ON relay.id = i.node_id
+    WHERE ui.user_id = u.id AND ui.active_to IS NULL
+      AND i.kind = 'user' AND i.deleted_at IS NULL
+      AND relay.type = 'relay' AND relay.deleted_at IS NULL
+  )
+  AND NOT EXISTS (
+    SELECT 1
+    FROM user_paths p
+    LEFT JOIN nodes relay ON relay.id = p.relay_node_id
+    LEFT JOIN nodes landing ON landing.id = p.landing_node_id
+    WHERE p.user_id = u.id AND p.active_to IS NULL
+      AND ((relay.type = 'relay' AND relay.deleted_at IS NULL)
+        OR (landing.type = 'landing' AND landing.deleted_at IS NULL))
+  )
+  AND NOT EXISTS (
+    SELECT 1
+    FROM user_routes ur
+    JOIN routes route ON route.id = ur.route_id
+    LEFT JOIN nodes relay ON relay.id = route.relay_node_id
+    LEFT JOIN nodes landing ON landing.id = route.landing_node_id
+    WHERE ur.user_id = u.id AND ur.active_to IS NULL
+      AND ((relay.type = 'relay' AND relay.deleted_at IS NULL)
+        OR (landing.type = 'landing' AND landing.deleted_at IS NULL))
+  )
+ORDER BY u.id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	userIDs := make([]string, 0)
+	for rows.Next() {
+		var userID string
+		if err := rows.Scan(&userID); err != nil {
+			return nil, err
+		}
+		userIDs = append(userIDs, userID)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return userIDs, nil
+}
+
+// autoDeleteOrphanedUsersTx logically deletes users that no longer have a
+// current relay association. Billing records keep their user foreign key and
 // therefore remain immutable financial history.
 func (s *Server) autoDeleteOrphanedUsersTx(tx *sql.Tx, r *http.Request, userIDs []string, triggerNodeID, triggerNodeName string, now time.Time) error {
 	seen := make(map[string]struct{}, len(userIDs))

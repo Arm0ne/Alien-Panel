@@ -81,7 +81,7 @@ go run ./cmd/seed-demo --database .\data\panel.db
 
 管理员还可以通过 `GET /api/system/backups/download` 下载一致性 SQLite 备份，并通过 `POST /api/system/restore` 上传恢复（字段名为 `file`，最大 512 MB）。恢复前会自动校验并保留安全快照，恢复成功后所有旧管理员会话失效。
 
-用户管理页面使用 `GET /api/users/groups` 返回线路机分组和分组统计；展开分组后继续使用 `GET /api/users?node_id=<node-id>` 分页读取该线路机下的用户。无有效主线路机关联的记录归入“未关联线路机”分组。
+用户管理页面使用 `GET /api/users/groups` 返回线路机分组和分组统计；展开分组后继续使用 `GET /api/users?node_id=<node-id>` 分页读取该线路机下的用户。X-Panel 中删除的 Inbound 连续三次成功同步缺失并归档后，若用户已无其他有效线路机或路径关联，中央会将其逻辑删除并从用户管理中移除，同时保留账单历史。
 
 - `POST /api/agent/v1/register`（注册节点并签发节点 Token）；
 - `POST /api/agent/v1/heartbeat`（Bearer 节点 Token；可只报告 Agent 与中央服务的连通性）；

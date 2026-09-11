@@ -358,7 +358,7 @@ func (s *Server) updateAccount(w http.ResponseWriter, r *http.Request) {
 func (s *Server) users(w http.ResponseWriter, r *http.Request) {
 	s.refreshOperationalStatuses(time.Now().UTC())
 	query := parseListQuery(r)
-	where := []string{"u.deleted_at IS NULL"}
+	where := []string{"u.deleted_at IS NULL", "i.id IS NOT NULL"}
 	args := make([]any, 0, 6)
 	if query.keyword != "" {
 		where = append(where, `(u.display_name LIKE ? OR i.tag LIKE ? OR n.name LIKE ? OR EXISTS (SELECT 1 FROM user_routes uk JOIN routes rk ON rk.id = uk.route_id WHERE uk.user_id = u.id AND uk.active_to IS NULL AND rk.name LIKE ?))`)
@@ -443,13 +443,12 @@ ORDER BY CASE WHEN u.expiry_time IS NULL THEN 1 ELSE 0 END, u.expiry_time ASC LI
 const unassignedUserGroupID = "__unassigned__"
 
 // userGroups returns the first level of the user management page. It groups
-// the same user scope as users() by the primary relay Inbound's node while
-// keeping users without a valid relay association in an explicit catch-all
-// group so no synchronized record disappears from the page.
+// users with a current primary relay Inbound by that Inbound's node. Orphaned
+// users are cleaned up during Agent sync and are excluded from this view.
 func (s *Server) userGroups(w http.ResponseWriter, r *http.Request) {
 	s.refreshOperationalStatuses(time.Now().UTC())
 	query := parseListQuery(r)
-	where := []string{"u.deleted_at IS NULL"}
+	where := []string{"u.deleted_at IS NULL", "i.id IS NOT NULL"}
 	args := make([]any, 0, 8)
 	if query.keyword != "" {
 		where = append(where, `(u.display_name LIKE ? OR i.tag LIKE ? OR n.name LIKE ? OR EXISTS (SELECT 1 FROM user_routes uk JOIN routes rk ON rk.id = uk.route_id WHERE uk.user_id = u.id AND uk.active_to IS NULL AND rk.name LIKE ?))`)

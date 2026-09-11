@@ -486,12 +486,8 @@ func TestLandingInboundMappingIsHiddenButUserIsKept(t *testing.T) {
 		t.Fatalf("user list response = %#v", list)
 	}
 	items := list["data"].(map[string]any)["items"].([]any)
-	if len(items) != 1 {
-		t.Fatalf("expected preserved user in list, got %#v", items)
-	}
-	item := items[0].(map[string]any)
-	if item["id"] != "legacy-landing-user" || item["nodeId"] != "" || item["inboundTag"] != "" {
-		t.Fatalf("landing inbound leaked into user summary: %#v", item)
+	if len(items) != 0 {
+		t.Fatalf("unassigned user remained in list, got %#v", items)
 	}
 
 	detail := doJSON(t, ts.Client(), http.MethodGet, ts.URL+"/api/users/legacy-landing-user", token, nil)
@@ -878,6 +874,18 @@ func TestInboundIsArchivedAfterThreeConsecutiveMissingSyncs(t *testing.T) {
 	}
 	if archivedEvents != 1 {
 		t.Fatalf("archive event count = %d, want 1", archivedEvents)
+	}
+	var archivedUserID string
+	if err := database.QueryRow(`SELECT user_id FROM inbounds WHERE node_id = 'archive-node' AND remote_inbound_id = '88'`).Scan(&archivedUserID); err != nil {
+		t.Fatalf("read archived inbound user: %v", err)
+	}
+	var deletedAt sql.NullString
+	var userStatus string
+	if err := database.QueryRow(`SELECT deleted_at, status FROM users WHERE id = ?`, archivedUserID).Scan(&deletedAt, &userStatus); err != nil {
+		t.Fatalf("read user after inbound archive: %v", err)
+	}
+	if !deletedAt.Valid || deletedAt.String == "" || userStatus != "disabled" {
+		t.Fatalf("user was not cleaned up after inbound archive: deleted_at=%#v status=%q", deletedAt, userStatus)
 	}
 }
 

@@ -378,9 +378,26 @@ ON CONFLICT(node_id, inbound_id, remote_client_id) DO UPDATE SET email = exclude
 			return
 		}
 	}
-	if err := s.markMissingAndArchiveInbounds(tx, principal.NodeID, observedAt); err != nil {
+	err = s.markMissingAndArchiveInbounds(tx, principal.NodeID, observedAt)
+	if err != nil {
 		s.failSync(w, tx, syncRunID, fmt.Errorf("mark or archive missing inbounds: %w", err))
 		return
+	}
+	orphanedUserIDs, err := orphanedUserIDsTx(tx)
+	if err != nil {
+		s.failSync(w, tx, syncRunID, fmt.Errorf("find orphaned users after sync: %w", err))
+		return
+	}
+	if len(orphanedUserIDs) > 0 {
+		var nodeName string
+		_ = tx.QueryRow(`SELECT name FROM nodes WHERE id = ?`, principal.NodeID).Scan(&nodeName)
+		if strings.TrimSpace(nodeName) == "" {
+			nodeName = principal.NodeKey
+		}
+		if err := s.autoDeleteOrphanedUsersTx(tx, r, orphanedUserIDs, principal.NodeID, nodeName, time.Now().UTC()); err != nil {
+			s.failSync(w, tx, syncRunID, fmt.Errorf("clean up orphaned users after sync: %w", err))
+			return
+		}
 	}
 	var previousHealth, previousSyncState string
 	_ = tx.QueryRow(`SELECT health_status, sync_status FROM nodes WHERE id = ?`, principal.NodeID).Scan(&previousHealth, &previousSyncState)

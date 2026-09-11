@@ -12,7 +12,7 @@ import (
 	"xpanel-central/backend/internal/db"
 )
 
-func TestUserGroupsKeepNodeAndUnassignedUsersSeparate(t *testing.T) {
+func TestUserGroupsExcludeUnassignedUsers(t *testing.T) {
 	database, err := db.Open(":memory:")
 	if err != nil {
 		t.Fatal(err)
@@ -60,8 +60,8 @@ VALUES ('binding-1', 'user-1', 'inbound-1', 1, ?), ('binding-2', 'user-2', 'inbo
 	}
 	data := groups["data"].(map[string]any)
 	items := data["items"].([]any)
-	if len(items) != 2 {
-		t.Fatalf("group count = %d, want node plus unassigned", len(items))
+	if len(items) != 1 {
+		t.Fatalf("group count = %d, want relay node only", len(items))
 	}
 	first := items[0].(map[string]any)
 	if first["nodeId"] != "relay-1" || first["nodeName"] != "香港线路 01" {
