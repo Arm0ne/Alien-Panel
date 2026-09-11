@@ -945,10 +945,10 @@ onMounted(() => {
         <div
           v-for="group in groups"
           :key="group.nodeId"
-          class="user-group-card overflow-hidden rounded-6px border border-gray-200 bg-white dark:border-gray-700 dark:bg-dark"
+          class="user-group-card"
         >
           <div
-            class="flex items-start justify-between gap-16px border-b border-gray-200 px-16px py-14px dark:border-gray-700"
+            class="user-group-card__header flex items-start justify-between gap-16px px-16px py-14px"
           >
             <div class="min-w-0 cursor-pointer" @click="toggleGroup(group)">
               <div class="flex flex-wrap items-center gap-8px">
@@ -1462,6 +1462,17 @@ onMounted(() => {
 </template>
 
 <style scoped>
+.user-group-card {
+  overflow: hidden;
+  border-radius: 6px;
+  background: var(--n-color-embedded, var(--n-color, transparent));
+  box-shadow: 0 1px 3px rgb(0 0 0 / 4%);
+}
+
+.user-group-card__header {
+  border-bottom: 1px solid var(--n-border-color, rgb(0 0 0 / 10%));
+}
+
 .users-kpis {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
