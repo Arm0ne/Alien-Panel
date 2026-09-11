@@ -952,15 +952,13 @@ onMounted(() => {
           </div>
         </div>
       </template>
-      <div v-if="groups.length" class="space-y-12px p-16px pt-0">
+      <div v-if="groups.length" class="user-groups-grid p-16px pt-0">
         <div
           v-for="group in groups"
           :key="group.nodeId"
-          class="user-group-card"
+          class="user-group-card" :class="[{ 'user-group-card--expanded': isGroupExpanded(group.nodeId) }]"
         >
-          <div
-            class="user-group-card__header flex items-start justify-between gap-16px px-16px py-14px"
-          >
+          <div class="user-group-card__header">
             <div class="min-w-0 cursor-pointer" @click="toggleGroup(group)">
               <div class="flex flex-wrap items-center gap-8px">
                 <span class="text-16px font-600">{{ group.nodeName }}</span>
@@ -971,19 +969,37 @@ onMounted(() => {
                 {{ group.lastSyncAt ? `最近同步：${formatDate(group.lastSyncAt)}` : '尚未完成成功同步' }}
               </div>
             </div>
-            <NButton text type="primary" @click="toggleGroup(group)">
+            <NButton class="user-group-card__action" text type="primary" @click="toggleGroup(group)">
               {{ isGroupExpanded(group.nodeId) ? '收起用户' : '查看用户' }}
             </NButton>
           </div>
 
-          <div class="px-16px py-14px">
-            <div class="flex flex-wrap items-center gap-x-16px gap-y-8px text-13px">
-              <span>用户 <strong>{{ group.stats.total }}</strong></span>
-              <span class="text-green-600">有效 <strong>{{ group.stats.active }}</strong></span>
-              <span class="text-blue-600">付费 <strong>{{ group.stats.paid }}</strong></span>
-              <span class="text-orange-500">免费 <strong>{{ group.stats.free }}</strong></span>
-              <span class="text-yellow-600">即将到期 <strong>{{ group.stats.expiring }}</strong></span>
-              <span class="text-gray-500">流量 <TrafficValue :value="group.stats.trafficBytes" /></span>
+          <div class="user-group-card__body">
+            <div class="user-group-card__metrics">
+              <div class="user-group-card__metric">
+                <span>用户</span>
+                <strong>{{ group.stats.total }}</strong>
+              </div>
+              <div class="user-group-card__metric">
+                <span>有效</span>
+                <strong class="text-green-600">{{ group.stats.active }}</strong>
+              </div>
+              <div class="user-group-card__metric">
+                <span>付费</span>
+                <strong class="text-blue-600">{{ group.stats.paid }}</strong>
+              </div>
+              <div class="user-group-card__metric">
+                <span>免费</span>
+                <strong class="text-orange-500">{{ group.stats.free }}</strong>
+              </div>
+              <div class="user-group-card__metric">
+                <span>即将到期</span>
+                <strong class="text-yellow-600">{{ group.stats.expiring }}</strong>
+              </div>
+              <div class="user-group-card__metric user-group-card__metric--traffic">
+                <span>流量</span>
+                <strong class="text-gray-500"><TrafficValue :value="group.stats.trafficBytes" /></strong>
+              </div>
             </div>
 
             <div v-if="isGroupExpanded(group.nodeId)" class="mt-12px">
@@ -1006,7 +1022,7 @@ onMounted(() => {
             </div>
           </div>
         </div>
-        <div v-if="groupTotal > filters.page_size" class="flex justify-end pt-4px">
+        <div v-if="groupTotal > filters.page_size" class="user-groups-grid__pagination flex justify-end">
           <NPagination
             v-model:page="filters.page"
             :page-count="Math.ceil(groupTotal / filters.page_size)"
@@ -1473,15 +1489,93 @@ onMounted(() => {
 </template>
 
 <style scoped>
+.user-groups-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 14px;
+}
+
+.user-groups-grid__pagination {
+  grid-column: 1 / -1;
+  padding-top: 2px;
+}
+
 .user-group-card {
   overflow: hidden;
-  border-radius: 6px;
-  background: var(--n-color, transparent);
-  box-shadow: 0 1px 3px rgb(0 0 0 / 4%);
+  min-width: 0;
+  border: 1px solid color-mix(in srgb, var(--n-border-color, rgb(0 0 0 / 12%)) 45%, transparent);
+  border-radius: 8px;
+  background: var(--n-color-embedded, var(--n-color, transparent));
+  box-shadow: 0 2px 8px rgb(0 0 0 / 5%);
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.user-group-card:hover {
+  border-color: color-mix(in srgb, var(--n-border-color, rgb(0 0 0 / 12%)) 70%, transparent);
+  box-shadow: 0 4px 14px rgb(0 0 0 / 9%);
+}
+
+.user-group-card--expanded {
+  grid-column: 1 / -1;
 }
 
 .user-group-card__header {
-  border-bottom: 1px solid var(--n-border-color, rgb(0 0 0 / 10%));
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 16px;
+  border-bottom: 1px solid color-mix(in srgb, var(--n-border-color, rgb(0 0 0 / 12%)) 55%, transparent);
+  background: color-mix(in srgb, var(--n-color-embedded, var(--n-color, transparent)) 88%, var(--n-text-color, transparent));
+}
+
+.user-group-card__action {
+  flex: none;
+  margin-top: 1px;
+}
+
+.user-group-card__body {
+  padding: 14px 16px 16px;
+}
+
+.user-group-card__metrics {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.user-group-card__metric {
+  display: flex;
+  min-width: 0;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--n-color, transparent) 72%, transparent);
+  color: var(--n-text-color-3, #999);
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.user-group-card__metric strong {
+  overflow: hidden;
+  color: var(--n-text-color, inherit);
+  font-size: 15px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.user-group-card__metric--traffic strong {
+  font-size: 13px;
+  font-weight: 500;
+}
+
+@media (min-width: 1100px) {
+  .user-groups-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }
 
 .users-kpis {
