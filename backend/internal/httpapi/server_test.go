@@ -658,6 +658,11 @@ func TestUserPathAssignmentLifecycle(t *testing.T) {
 	if landingPath["mode"] != "landing" || landingPath["landingNodeId"] != "path-landing" || len(landingData["pathHistory"].([]any)) != 3 {
 		t.Fatalf("unexpected landing path/history = %#v", landingData)
 	}
+	landingList := doJSON(t, ts.Client(), http.MethodGet, ts.URL+"/api/users?page_size=20", token, nil)
+	landingItems := landingList["data"].(map[string]any)["items"].([]any)
+	if len(landingItems) != 1 || landingItems[0].(map[string]any)["pathMode"] != "landing" || landingItems[0].(map[string]any)["landingInboundTag"] != "path-landing-entry" {
+		t.Fatalf("user list did not include landing inbound: %#v", landingList)
+	}
 
 	mismatchStatus, mismatch := doJSONWithStatus(t, ts.Client(), http.MethodPut, ts.URL+"/api/users/path-user/path", token, map[string]any{"landingNodeId": "path-landing", "landingInboundId": "path-landing-inbound", "exitIpId": "path-other-ip"})
 	if mismatchStatus != http.StatusBadRequest || mismatch["code"] != validationCode {

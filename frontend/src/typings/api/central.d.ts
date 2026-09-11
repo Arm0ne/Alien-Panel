@@ -37,6 +37,7 @@ declare namespace Api {
       inboundTag: string;
       routeName?: string | null;
       landingNodeName?: string | null;
+      landingInboundTag?: string | null;
       exitIpAddress?: string | null;
       exitIpOwnerNodeName?: string | null;
       pathMode?: 'relay' | 'landing' | 'external' | null;

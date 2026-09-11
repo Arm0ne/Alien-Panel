@@ -683,7 +683,18 @@ const columns: DataTableColumns<Api.Central.UserSummary> = [
           : null
       ])
   },
-  { title: '路径状态', key: 'pathMode', width: 110, render: row => pathModeLabel(row.pathMode) },
+  {
+    title: '路径状态',
+    key: 'pathMode',
+    minWidth: 140,
+    render: row =>
+      h('div', [
+        h('div', pathModeLabel(row.pathMode)),
+        row.pathMode === 'landing'
+          ? h('div', { class: 'text-12px text-gray-500' }, `Inbound：${row.landingInboundTag || '未配置'}`)
+          : null
+      ])
+  },
   {
     title: '状态',
     key: 'status',

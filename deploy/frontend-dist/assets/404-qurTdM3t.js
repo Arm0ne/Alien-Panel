@@ -1,1 +1,0 @@
-import{aa as e,ea as t,ma as n}from"./router-Dc-pBUzr.js";import{t as r}from"./exception-base-Dr3CBpoW.js";var i=e({name:`404`,__name:`index`,setup(e){return(e,i)=>{let a=r;return n(),t(a,{type:`404`})}}});export{i as default};

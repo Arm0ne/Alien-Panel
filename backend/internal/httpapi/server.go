@@ -405,6 +405,7 @@ COALESCE((SELECT r.name FROM user_routes ur JOIN routes r ON r.id = ur.route_id
 COALESCE(i.client_count, 0), COALESCE(i.up, 0) + COALESCE(i.down, 0),
 COALESCE((SELECT MAX(NULLIF(c.last_online, '')) FROM clients c WHERE c.inbound_id = i.id), ''),
 COALESCE((SELECT n2.name FROM user_paths p LEFT JOIN nodes n2 ON n2.id = p.landing_node_id WHERE p.user_id = u.id AND p.active_to IS NULL LIMIT 1), ''),
+COALESCE((SELECT COALESCE(NULLIF(li.tag, ''), NULLIF(li.remote_inbound_id, ''), '') FROM user_paths p LEFT JOIN inbounds li ON li.id = p.landing_inbound_id WHERE p.user_id = u.id AND p.active_to IS NULL LIMIT 1), ''),
 COALESCE((SELECT GROUP_CONCAT(ip, ', ') FROM (SELECT e2.ip FROM user_path_exit_ips upi JOIN user_paths p ON p.id = upi.user_path_id JOIN exit_ips e2 ON e2.id = upi.exit_ip_id WHERE p.user_id = u.id AND p.active_to IS NULL ORDER BY upi.position, upi.exit_ip_id)),
 COALESCE((SELECT e2.ip FROM user_paths p JOIN exit_ips e2 ON e2.id = p.exit_ip_id WHERE p.user_id = u.id AND p.active_to IS NULL LIMIT 1), '')),
 COALESCE((SELECT owner2.name FROM user_paths p JOIN exit_ips e2 ON e2.id = p.exit_ip_id LEFT JOIN nodes owner2 ON owner2.id = e2.owner_node_id WHERE p.user_id = u.id AND p.active_to IS NULL LIMIT 1), ''),
@@ -418,10 +419,10 @@ ORDER BY CASE WHEN u.expiry_time IS NULL THEN 1 ELSE 0 END, u.expiry_time ASC LI
 	defer rows.Close()
 	items := make([]map[string]any, 0)
 	for rows.Next() {
-		var id, name, status, billingType, expiry, nodeID, nodeName, inboundTag, routeName, lastActivity, landingName, exitIP, exitOwner, pathMode, pathID string
+		var id, name, status, billingType, expiry, nodeID, nodeName, inboundTag, routeName, lastActivity, landingName, landingInboundTag, exitIP, exitOwner, pathMode, pathID string
 		var clientCount int
 		var traffic int64
-		if err := rows.Scan(&id, &name, &status, &billingType, &expiry, &nodeID, &nodeName, &inboundTag, &routeName, &clientCount, &traffic, &lastActivity, &landingName, &exitIP, &exitOwner, &pathMode, &pathID); err != nil {
+		if err := rows.Scan(&id, &name, &status, &billingType, &expiry, &nodeID, &nodeName, &inboundTag, &routeName, &clientCount, &traffic, &lastActivity, &landingName, &landingInboundTag, &exitIP, &exitOwner, &pathMode, &pathID); err != nil {
 			writeFailure(w, http.StatusInternalServerError, internalErrorCode, "could not decode users")
 			return
 		}
@@ -429,7 +430,7 @@ ORDER BY CASE WHEN u.expiry_time IS NULL THEN 1 ELSE 0 END, u.expiry_time ASC LI
 			"id": id, "name": name, "nodeId": nodeID, "nodeName": nodeName, "inboundTag": inboundTag, "routeName": nullableString(routeName),
 			"status": status, "billingType": billingType, "expiresAt": nullableString(expiry), "clientCount": clientCount,
 			"trafficBytes": traffic, "lastActivityAt": nullableString(lastActivity),
-			"landingNodeName": nullableString(landingName), "exitIpAddress": nullableString(exitIP),
+			"landingNodeName": nullableString(landingName), "landingInboundTag": nullableString(landingInboundTag), "exitIpAddress": nullableString(exitIP),
 			"exitIpOwnerNodeName": nullableString(exitOwner), "pathMode": nullableString(pathMode),
 			"pathConfigured": pathID != "",
 		})
