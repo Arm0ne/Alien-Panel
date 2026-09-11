@@ -1465,7 +1465,7 @@ onMounted(() => {
 .user-group-card {
   overflow: hidden;
   border-radius: 6px;
-  background: var(--n-color-embedded, var(--n-color, transparent));
+  background: var(--n-color, transparent);
   box-shadow: 0 1px 3px rgb(0 0 0 / 4%);
 }
 
