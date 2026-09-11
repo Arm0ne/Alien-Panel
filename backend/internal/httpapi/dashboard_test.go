@@ -15,6 +15,7 @@ func TestDashboardTrafficUsesBusinessInboundScope(t *testing.T) {
 	baseline := from.Add(-time.Hour)
 	first := from.Add(time.Hour)
 	second := from.Add(2 * time.Hour)
+	onlineAt := second.Add(30 * time.Minute)
 	nowText := now.Format(time.RFC3339Nano)
 
 	statements := []struct {
@@ -38,6 +39,7 @@ func TestDashboardTrafficUsesBusinessInboundScope(t *testing.T) {
 		// must not make the Inbound traffic count twice.
 		{`INSERT INTO clients (id, node_id, inbound_id, remote_client_id, email, enable) VALUES ('dashboard-client-a-phone', 'dashboard-relay-a', 'dashboard-inbound-a', 'phone', 'same@example.com', 1)`, nil},
 		{`INSERT INTO clients (id, node_id, inbound_id, remote_client_id, email, enable) VALUES ('dashboard-client-a-laptop', 'dashboard-relay-a', 'dashboard-inbound-a', 'laptop', 'same@example.com', 1)`, nil},
+		{`UPDATE clients SET last_online = ?, last_seen_at = ? WHERE inbound_id = 'dashboard-inbound-a'`, []any{onlineAt.Format(time.RFC3339Nano), nowText}},
 		{`INSERT INTO traffic_snapshots (id, node_id, inbound_id, collected_at, up, down, all_time, source) VALUES ('dashboard-a-base', 'dashboard-relay-a', 'dashboard-inbound-a', ?, 10, 20, 30, 'xpanel')`, []any{baseline.Format(time.RFC3339Nano)}},
 		{`INSERT INTO traffic_snapshots (id, node_id, inbound_id, collected_at, up, down, all_time, source) VALUES ('dashboard-a-first', 'dashboard-relay-a', 'dashboard-inbound-a', ?, 30, 50, 80, 'xpanel')`, []any{first.Format(time.RFC3339Nano)}},
 		{`INSERT INTO traffic_snapshots (id, node_id, inbound_id, collected_at, up, down, all_time, source) VALUES ('dashboard-a-second', 'dashboard-relay-a', 'dashboard-inbound-a', ?, 50, 70, 120, 'xpanel')`, []any{second.Format(time.RFC3339Nano)}},
@@ -87,5 +89,8 @@ func TestDashboardTrafficUsesBusinessInboundScope(t *testing.T) {
 	users := data["userTrafficRanking"].([]any)
 	if len(users) != 3 || users[0].(map[string]any)["inboundId"] != "dashboard-inbound-a" || users[0].(map[string]any)["clientCount"] != float64(2) || users[0].(map[string]any)["totalBytes"] != float64(90) {
 		t.Fatalf("user traffic ranking = %#v", users)
+	}
+	if users[0].(map[string]any)["lastActivityAt"] != onlineAt.Format(time.RFC3339Nano) {
+		t.Fatalf("dashboard last activity = %v, want latest Client online time %s", users[0].(map[string]any)["lastActivityAt"], onlineAt.Format(time.RFC3339Nano))
 	}
 }

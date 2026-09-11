@@ -402,7 +402,8 @@ WHERE ` + strings.Join(where, " AND ")
 COALESCE(i.node_id, ''), COALESCE(n.name, ''), COALESCE(i.tag, ''),
 COALESCE((SELECT r.name FROM user_routes ur JOIN routes r ON r.id = ur.route_id
  WHERE ur.user_id = u.id AND ur.is_primary = 1 AND ur.active_to IS NULL ORDER BY ur.active_from DESC LIMIT 1), ''),
-COALESCE(i.client_count, 0), COALESCE(i.up, 0) + COALESCE(i.down, 0), COALESCE(i.last_seen_at, ''),
+COALESCE(i.client_count, 0), COALESCE(i.up, 0) + COALESCE(i.down, 0),
+COALESCE((SELECT MAX(NULLIF(c.last_online, '')) FROM clients c WHERE c.inbound_id = i.id), ''),
 COALESCE((SELECT n2.name FROM user_paths p LEFT JOIN nodes n2 ON n2.id = p.landing_node_id WHERE p.user_id = u.id AND p.active_to IS NULL LIMIT 1), ''),
 COALESCE((SELECT GROUP_CONCAT(ip, ', ') FROM (SELECT e2.ip FROM user_path_exit_ips upi JOIN user_paths p ON p.id = upi.user_path_id JOIN exit_ips e2 ON e2.id = upi.exit_ip_id WHERE p.user_id = u.id AND p.active_to IS NULL ORDER BY upi.position, upi.exit_ip_id)),
 COALESCE((SELECT e2.ip FROM user_paths p JOIN exit_ips e2 ON e2.id = p.exit_ip_id WHERE p.user_id = u.id AND p.active_to IS NULL LIMIT 1), '')),

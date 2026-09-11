@@ -698,7 +698,7 @@ const columns: DataTableColumns<Api.Central.UserSummary> = [
     minWidth: 120,
     render: row => h(TrafficValue, { value: row.trafficBytes })
   },
-  { title: '最近活动', key: 'lastActivityAt', minWidth: 170, render: row => formatDate(row.lastActivityAt) },
+  { title: '最近在线', key: 'lastActivityAt', minWidth: 170, render: row => formatDate(row.lastActivityAt) },
   {
     title: '操作',
     key: 'actions',

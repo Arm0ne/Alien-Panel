@@ -488,7 +488,7 @@ onMounted(loadDashboard);
                   <th>本期上传</th>
                   <th>本期总量</th>
                   <th>状态</th>
-                  <th>最近活动</th>
+                  <th>最近在线</th>
                 </tr>
               </thead>
               <tbody>

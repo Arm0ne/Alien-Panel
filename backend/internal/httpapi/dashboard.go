@@ -360,7 +360,7 @@ func (s *Server) dashboardInbounds() (map[string]dashboardInbound, error) {
 	rows, err := s.db.Query(`SELECT i.id, i.node_id, COALESCE(n.name, ''), COALESCE(n.health_status, 'unknown'),
 COALESCE(i.user_id, ''), COALESCE(u.display_name, ''), COALESCE(i.tag, ''), COALESCE(u.status, 'unknown'),
 COALESCE(u.expiry_time, ''), COALESCE((SELECT COUNT(*) FROM clients c WHERE c.inbound_id = i.id), 0),
-COALESCE((SELECT MAX(c.last_seen_at) FROM clients c WHERE c.inbound_id = i.id), COALESCE(i.last_seen_at, ''))
+COALESCE((SELECT MAX(NULLIF(c.last_online, '')) FROM clients c WHERE c.inbound_id = i.id), '')
 FROM inbounds i JOIN nodes n ON n.id = i.node_id
 JOIN users u ON u.id = i.user_id AND u.deleted_at IS NULL
 WHERE i.kind = 'user' AND i.deleted_at IS NULL AND n.type = 'relay' AND n.deleted_at IS NULL
@@ -473,9 +473,7 @@ ORDER BY t.inbound_id, t.collected_at`, from.Format(time.RFC3339Nano), to.Format
 		inboundTraffic.uploadBytes += uploadDelta
 		inboundTraffic.downloadBytes += downDelta
 		inboundTraffic.totalBytes += uploadDelta + downDelta
-		activity := snapshot.at.Format(time.RFC3339Nano)
-		inboundTraffic.lastActivity = &activity
-		nodeTraffic := result.byNode[inbound.nodeID]
+        nodeTraffic := result.byNode[inbound.nodeID]
 		nodeTraffic.uploadBytes += uploadDelta
 		nodeTraffic.downloadBytes += downDelta
 		nodeTraffic.totalBytes += uploadDelta + downDelta
