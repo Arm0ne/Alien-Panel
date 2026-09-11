@@ -1022,13 +1022,13 @@ onMounted(() => {
             </div>
           </div>
         </div>
-        <div v-if="groupTotal > filters.page_size" class="user-groups-grid__pagination flex justify-end">
-          <NPagination
-            v-model:page="filters.page"
-            :page-count="Math.ceil(groupTotal / filters.page_size)"
-            @update:page="loadGroups"
-          />
-        </div>
+      </div>
+      <div v-if="groups.length && groupTotal > filters.page_size" class="flex justify-end px-16px pt-2px">
+        <NPagination
+          v-model:page="filters.page"
+          :page-count="Math.ceil(groupTotal / filters.page_size)"
+          @update:page="loadGroups"
+        />
       </div>
     </ModulePage>
 
@@ -1490,17 +1490,15 @@ onMounted(() => {
 
 <style scoped>
 .user-groups-grid {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr);
+  display: flex;
+  flex-wrap: nowrap;
   gap: 14px;
-}
-
-.user-groups-grid__pagination {
-  grid-column: 1 / -1;
-  padding-top: 2px;
+  overflow-x: auto;
+  padding-bottom: 4px;
 }
 
 .user-group-card {
+  flex: 1 0 280px;
   overflow: hidden;
   min-width: 0;
   border: 1px solid color-mix(in srgb, var(--n-border-color, rgb(0 0 0 / 12%)) 45%, transparent);
@@ -1516,7 +1514,7 @@ onMounted(() => {
 }
 
 .user-group-card--expanded {
-  grid-column: 1 / -1;
+  flex-basis: min(100%, 1280px);
 }
 
 .user-group-card__header {
@@ -1570,12 +1568,6 @@ onMounted(() => {
 .user-group-card__metric--traffic strong {
   font-size: 13px;
   font-weight: 500;
-}
-
-@media (min-width: 1100px) {
-  .user-groups-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
 }
 
 .users-kpis {

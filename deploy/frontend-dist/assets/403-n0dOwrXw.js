@@ -1,0 +1,1 @@
+import{aa as e,ea as t,ma as n}from"./router-D7l5tT0c.js";import{t as r}from"./exception-base-aDF8deMI.js";var i=e({name:`403`,__name:`index`,setup(e){return(e,i)=>{let a=r;return n(),t(a,{type:`403`})}}});export{i as default};
