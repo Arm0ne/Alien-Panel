@@ -1534,12 +1534,15 @@ onMounted(() => {
 }
 
 .users-kpis {
+  display: flex;
+  align-items: stretch;
   gap: 12px;
 }
 
 .users-kpi {
+  flex: 1 1 0;
   min-width: 0;
-  padding: 14px 16px;
+  padding: 11px 16px;
   border: 1px solid var(--users-border);
   border-radius: 8px;
   background: var(--users-surface);
@@ -1558,6 +1561,27 @@ onMounted(() => {
   font-size: 24px;
   font-weight: 650;
   line-height: 1;
+}
+
+@media (max-width: 767px) {
+  .users-kpis {
+    flex-wrap: wrap;
+  }
+
+  .users-kpi {
+    flex-basis: calc(50% - 6px);
+  }
+}
+
+@media (max-width: 480px) {
+  .users-kpis {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .users-kpi {
+    flex-basis: auto;
+  }
 }
 
 .user-group-card {
