@@ -959,7 +959,8 @@ onMounted(() => {
           class="user-group-card" :class="[{ 'user-group-card--expanded': isGroupExpanded(group.nodeId) }]"
         >
           <div class="user-group-card__header">
-            <div class="min-w-0 cursor-pointer" @click="toggleGroup(group)">
+            <div class="user-group-card__heading min-w-0 cursor-pointer" @click="toggleGroup(group)">
+              <span class="user-group-card__chevron" :class="{ 'is-expanded': isGroupExpanded(group.nodeId) }" aria-hidden="true">›</span>
               <div class="flex flex-wrap items-center gap-8px">
                 <span class="text-16px font-600">{{ group.nodeName }}</span>
                 <NTag size="small" :type="nodeStatusType(group.status)">{{ nodeStatusLabel(group.status) }}</NTag>
@@ -1492,22 +1493,22 @@ onMounted(() => {
 .user-groups-grid {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
-  gap: 14px;
+  gap: 10px;
 }
 
 .user-group-card {
   overflow: hidden;
   min-width: 0;
-  border: 1px solid color-mix(in srgb, var(--n-border-color, rgb(0 0 0 / 12%)) 45%, transparent);
+  border: 1px solid color-mix(in srgb, var(--n-border-color, rgb(0 0 0 / 12%)) 34%, transparent);
   border-radius: 8px;
-  background: var(--n-color-embedded, var(--n-color, transparent));
-  box-shadow: 0 2px 8px rgb(0 0 0 / 5%);
-  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+  background: color-mix(in srgb, var(--n-color-embedded, var(--n-color, transparent)) 82%, transparent);
+  box-shadow: 0 1px 3px rgb(0 0 0 / 5%);
+  transition: border-color 0.2s ease, background 0.2s ease;
 }
 
 .user-group-card:hover {
-  border-color: color-mix(in srgb, var(--n-border-color, rgb(0 0 0 / 12%)) 70%, transparent);
-  box-shadow: 0 4px 14px rgb(0 0 0 / 9%);
+  border-color: color-mix(in srgb, var(--n-primary-color, #18a058) 42%, var(--n-border-color, transparent));
+  background: color-mix(in srgb, var(--n-color-embedded, var(--n-color, transparent)) 94%, var(--n-primary-color, transparent));
 }
 
 .user-group-card--expanded {
@@ -1516,12 +1517,36 @@ onMounted(() => {
 
 .user-group-card__header {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   justify-content: space-between;
   gap: 16px;
-  padding: 16px;
-  border-bottom: 1px solid color-mix(in srgb, var(--n-border-color, rgb(0 0 0 / 12%)) 55%, transparent);
-  background: color-mix(in srgb, var(--n-color-embedded, var(--n-color, transparent)) 88%, var(--n-text-color, transparent));
+  padding: 13px 16px 11px;
+  border-bottom: 1px solid color-mix(in srgb, var(--n-border-color, rgb(0 0 0 / 12%)) 42%, transparent);
+  background: color-mix(in srgb, var(--n-color-embedded, var(--n-color, transparent)) 92%, var(--n-text-color, transparent));
+}
+
+.user-group-card__heading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.user-group-card__chevron {
+  display: inline-flex;
+  width: 16px;
+  height: 20px;
+  align-items: center;
+  justify-content: center;
+  color: var(--n-text-color-3, #999);
+  font-size: 20px;
+  line-height: 1;
+  transform: translateX(-1px);
+  transition: transform 0.2s ease, color 0.2s ease;
+}
+
+.user-group-card__chevron.is-expanded {
+  color: var(--n-primary-color, #18a058);
+  transform: rotate(90deg) translateX(-1px);
 }
 
 .user-group-card__action {
@@ -1530,27 +1555,37 @@ onMounted(() => {
 }
 
 .user-group-card__body {
-  padding: 14px 16px 16px;
+  padding: 0 16px 14px;
 }
 
 .user-group-card__metrics {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 8px;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  border-bottom: 1px solid color-mix(in srgb, var(--n-border-color, rgb(0 0 0 / 12%)) 34%, transparent);
 }
 
 .user-group-card__metric {
   display: flex;
   min-width: 0;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 8px;
-  padding: 8px 10px;
-  border-radius: 6px;
-  background: color-mix(in srgb, var(--n-color, transparent) 72%, transparent);
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 2px;
+  min-height: 58px;
+  padding: 9px 12px;
+  border-right: 1px solid color-mix(in srgb, var(--n-border-color, rgb(0 0 0 / 12%)) 28%, transparent);
   color: var(--n-text-color-3, #999);
   font-size: 12px;
   line-height: 18px;
+}
+
+.user-group-card__metric:first-child {
+  padding-left: 0;
+}
+
+.user-group-card__metric:last-child {
+  padding-right: 0;
+  border-right: 0;
 }
 
 .user-group-card__metric strong {
@@ -1576,6 +1611,69 @@ onMounted(() => {
 @media (min-width: 768px) {
   .users-kpis {
     grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 900px) {
+  .user-group-card__metrics {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .user-group-card__metric:nth-child(3n) {
+    border-right: 0;
+  }
+
+  .user-group-card__metric:nth-child(n + 4) {
+    border-top: 1px solid color-mix(in srgb, var(--n-border-color, rgb(0 0 0 / 12%)) 28%, transparent);
+  }
+
+  .user-group-card__metric:nth-child(4) {
+    padding-left: 0;
+  }
+
+  .user-group-card__metric:nth-child(6) {
+    padding-right: 0;
+  }
+}
+
+@media (max-width: 560px) {
+  .user-group-card__header {
+    align-items: flex-start;
+    padding: 12px;
+  }
+
+  .user-group-card__header :deep(.n-button) {
+    padding-top: 2px;
+  }
+
+  .user-group-card__body {
+    padding: 0 12px 12px;
+  }
+
+  .user-group-card__metrics {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .user-group-card__metric:nth-child(3n) {
+    border-right: 1px solid color-mix(in srgb, var(--n-border-color, rgb(0 0 0 / 12%)) 28%, transparent);
+  }
+
+  .user-group-card__metric:nth-child(2n) {
+    border-right: 0;
+  }
+
+  .user-group-card__metric:nth-child(n + 3) {
+    border-top: 1px solid color-mix(in srgb, var(--n-border-color, rgb(0 0 0 / 12%)) 28%, transparent);
+  }
+
+  .user-group-card__metric:nth-child(3),
+  .user-group-card__metric:nth-child(5) {
+    padding-left: 0;
+  }
+
+  .user-group-card__metric:nth-child(4),
+  .user-group-card__metric:nth-child(6) {
+    padding-right: 0;
   }
 }
 </style>

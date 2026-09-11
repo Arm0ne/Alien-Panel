@@ -1,0 +1,139 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>用户管理 · 设计方向</title>
+  <style>
+    /*
+      System: Enterprise dark operations UI
+      Type: system sans, 12/13px metadata, 14px body, 16/20px headings
+      Color: #101214 canvas, #171a1f surfaces, #20242a elevated surface, #e7edf3 text
+      Accent: teal for system state, green for healthy state, amber for attention
+      Grid: 12px rhythm, 8px radius, 1px low-contrast borders
+    */
+    :root {
+      --canvas: #0f1114;
+      --surface: #171a1f;
+      --surface-2: #1d2127;
+      --surface-3: #232830;
+      --line: #2a3038;
+      --line-soft: #22272e;
+      --text: #e7edf3;
+      --muted: #8a96a5;
+      --faint: #626d7a;
+      --teal: #56c7bd;
+      --green: #67c98a;
+      --amber: #e4b968;
+      --blue: #8eb8e8;
+      --danger: #e27d86;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--canvas);
+      color: var(--text);
+      font-family: Inter, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+      font-size: 14px;
+      line-height: 1.45;
+    }
+    .page { max-width: 1480px; margin: 0 auto; padding: 32px 28px 56px; }
+    .intro { display: flex; justify-content: space-between; align-items: end; margin-bottom: 24px; gap: 24px; }
+    .eyebrow { color: var(--teal); font-size: 11px; letter-spacing: .14em; text-transform: uppercase; margin-bottom: 8px; }
+    h1 { margin: 0; font-size: 25px; font-weight: 650; letter-spacing: 0; }
+    .intro p { margin: 8px 0 0; color: var(--muted); max-width: 680px; }
+    .legend { display: flex; gap: 14px; align-items: center; color: var(--muted); font-size: 12px; white-space: nowrap; }
+    .dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; margin-right: 5px; }
+    .dot.teal { background: var(--teal); } .dot.green { background: var(--green); } .dot.amber { background: var(--amber); }
+    .canvas { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; align-items: start; }
+    .direction { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; overflow: hidden; min-width: 0; }
+    .direction.recommended { border-color: #347d78; box-shadow: 0 0 0 1px rgba(86,199,189,.13); }
+    .direction-head { padding: 16px 18px 14px; border-bottom: 1px solid var(--line); }
+    .direction-head h2 { margin: 0; font-size: 15px; font-weight: 650; display: flex; align-items: center; gap: 8px; }
+    .direction-head p { color: var(--muted); font-size: 12px; margin: 6px 0 0; min-height: 34px; }
+    .badge { color: #9de7df; border: 1px solid #347d78; background: rgba(86,199,189,.08); border-radius: 999px; font-size: 10px; padding: 2px 7px; font-weight: 600; }
+    .preview { padding: 14px; background: #121519; min-height: 545px; }
+    .toolbar { display: flex; gap: 7px; margin-bottom: 12px; }
+    .input, .select { height: 30px; border-radius: 5px; border: 1px solid var(--line); background: var(--surface-2); color: var(--muted); padding: 0 9px; font-size: 11px; display: flex; align-items: center; }
+    .input { flex: 1; } .select { width: 90px; }
+    .kpis { display: grid; grid-template-columns: repeat(3, 1fr); gap: 7px; margin-bottom: 12px; }
+    .kpi { background: var(--surface); border: 1px solid var(--line-soft); border-radius: 6px; padding: 9px 10px; }
+    .kpi span { display: block; color: var(--muted); font-size: 10px; } .kpi strong { display: block; margin-top: 3px; font-size: 18px; font-weight: 650; }
+    .kpi strong.green { color: var(--green); } .kpi strong.blue { color: var(--blue); } .kpi strong.amber { color: var(--amber); }
+    .group-list { display: grid; gap: 8px; }
+    .group { border: 1px solid var(--line); border-radius: 7px; overflow: hidden; background: var(--surface); }
+    .group-top { display: flex; align-items: center; gap: 8px; padding: 11px 12px 9px; }
+    .chevron { color: var(--faint); font-size: 12px; width: 12px; } .group-name { font-weight: 650; font-size: 13px; flex: 1; min-width: 0; }
+    .status { border-radius: 4px; padding: 2px 6px; font-size: 10px; border: 1px solid; }
+    .status.online { color: var(--green); border-color: #326747; background: rgba(103,201,138,.08); }
+    .status.sync { color: var(--teal); border-color: #347d78; background: rgba(86,199,189,.07); }
+    .view { color: var(--teal); font-size: 11px; white-space: nowrap; }
+    .group-meta { padding: 0 12px 10px 32px; color: var(--faint); font-size: 10px; }
+    .metrics { display: grid; grid-template-columns: repeat(4, 1fr); border-top: 1px solid var(--line-soft); padding: 9px 12px 10px 32px; gap: 8px; }
+    .metric label { color: var(--faint); font-size: 10px; display: block; } .metric b { font-size: 13px; font-weight: 600; }
+    .metric b.green { color: var(--green); } .metric b.blue { color: var(--blue); } .metric b.amber { color: var(--amber); }
+    .expanded { border-color: #347d78; }
+    .table { border-top: 1px solid var(--line); padding: 8px 10px 10px; background: #14171b; }
+    .table-head, .table-row { display: grid; grid-template-columns: 1.3fr .7fr .95fr .85fr; gap: 7px; align-items: center; }
+    .table-head { color: var(--faint); font-size: 9px; padding: 0 3px 6px; } .table-row { padding: 7px 3px; border-top: 1px solid var(--line-soft); font-size: 10px; }
+    .table-row small { color: var(--faint); display: block; font-size: 9px; margin-top: 2px; }
+    .split { display: grid; grid-template-columns: 112px 1fr; gap: 8px; min-height: 510px; }
+    .side { background: var(--surface); border: 1px solid var(--line); border-radius: 6px; padding: 8px; }
+    .side-title { color: var(--faint); font-size: 10px; padding: 3px 5px 8px; } .side-item { padding: 9px 7px; border-radius: 5px; color: var(--muted); font-size: 11px; margin-bottom: 3px; }
+    .side-item.active { background: #253b3b; color: var(--text); border-left: 2px solid var(--teal); }
+    .detail { background: var(--surface); border: 1px solid var(--line); border-radius: 6px; padding: 12px; }
+    .detail-title { display:flex; align-items:center; gap:7px; font-size: 14px; font-weight: 650; padding-bottom: 10px; border-bottom: 1px solid var(--line); }
+    .detail-sub { color: var(--faint); font-size: 10px; margin: 7px 0 12px; }
+    .mini-bars { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; margin-bottom: 13px; } .mini-bar { background: var(--surface-2); border-radius: 4px; padding: 7px; } .mini-bar b { display:block; font-size: 14px; } .mini-bar span { color: var(--faint); font-size: 9px; }
+    .full-table { border: 1px solid var(--line); border-radius: 5px; overflow: hidden; } .full-row { display:grid; grid-template-columns:1.15fr .7fr .85fr .75fr; gap:8px; padding:9px 8px; font-size: 10px; border-top:1px solid var(--line-soft); } .full-row:first-child { border-top:0; color:var(--faint); font-size:9px; background:var(--surface-2); }
+    .ops-kpis { display:grid; grid-template-columns: 1.3fr 1fr 1fr 1fr; gap:7px; margin-bottom:12px; } .ops-kpi { background:var(--surface); border:1px solid var(--line); border-radius:6px; padding:11px; } .ops-kpi .label { color:var(--muted); font-size:10px; } .ops-kpi .value { font-size:22px; font-weight:650; margin-top:2px; } .ops-kpi .hint { color:var(--faint); font-size:9px; margin-top:2px; }
+    .ops-list { display:grid; gap:6px; } .ops-row { display:grid; grid-template-columns: 1.5fr .65fr .65fr .8fr .5fr; gap:8px; align-items:center; padding:10px 11px; background:var(--surface); border:1px solid var(--line); border-radius:6px; } .ops-row .name { font-size:12px; font-weight:600; } .ops-row .sub { color:var(--faint); font-size:9px; margin-top:2px; } .ops-value { font-size:13px; font-weight:600; } .ops-label { display:block; color:var(--faint); font-size:9px; }
+    .note { margin-top: 12px; color: var(--muted); font-size: 11px; line-height: 1.55; padding: 10px 12px; border-left: 2px solid var(--teal); background: rgba(86,199,189,.05); }
+    @media (max-width: 1100px) { .canvas { grid-template-columns: 1fr; } .preview { min-height: 0; } .direction-head p { min-height: 0; } }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <div class="intro">
+      <div>
+        <div class="eyebrow">Alien Panel · User Management</div>
+        <h1>用户管理界面 · 设计方向</h1>
+        <p>目标：先看全局经营数据，再按线路机定位，最后进入用户明细。所有方案都保留现有字段、同步状态与路径信息。</p>
+      </div>
+      <div class="legend"><span><i class="dot green"></i>在线</span><span><i class="dot teal"></i>同步成功</span><span><i class="dot amber"></i>即将到期</span></div>
+    </div>
+    <div class="canvas">
+      <section class="direction recommended">
+        <header class="direction-head"><h2>方案 A · 紧凑分组列表 <span class="badge">推荐</span></h2><p>适合日常运营：线路机是主索引，统计横向排列，展开后才加载用户表。</p></header>
+        <div class="preview">
+          <div class="toolbar"><div class="input">搜索用户、Inbound 或线路机</div><div class="select">全部状态</div><div class="select">全部线路机</div></div>
+          <div class="kpis"><div class="kpi"><span>有效用户</span><strong class="green">128</strong></div><div class="kpi"><span>付费用户</span><strong class="blue">116</strong></div><div class="kpi"><span>免费用户</span><strong class="amber">12</strong></div></div>
+          <div class="group-list">
+            <article class="group expanded"><div class="group-top"><span class="chevron">⌄</span><span class="group-name">DMIT-AN5-1500</span><span class="status online">在线</span><span class="status sync">同步成功</span><span class="view">收起</span></div><div class="group-meta">最近同步：2026/09/11 19:31:14</div><div class="metrics"><div class="metric"><label>用户</label><b>11</b></div><div class="metric"><label>有效</label><b class="green">11</b></div><div class="metric"><label>付费</label><b class="blue">11</b></div><div class="metric"><label>即将到期</label><b class="amber">0</b></div></div><div class="table"><div class="table-head"><span>用户 / Inbound</span><span>计费</span><span>落地机</span><span>到期时间</span></div><div class="table-row"><span>Alice<small>ss-entry</small></span><span>付费</span><span>东京落地机</span><span>2026/10/01</span></div><div class="table-row"><span>Bob<small>vmess-main</small></span><span>付费</span><span>线路机直出</span><span>2026/09/25</span></div></div></article>
+            <article class="group"><div class="group-top"><span class="chevron">›</span><span class="group-name">DMIT-AS3-1000</span><span class="status online">在线</span><span class="status sync">同步成功</span><span class="view">查看用户</span></div><div class="group-meta">最近同步：2026/09/11 19:31:10</div><div class="metrics"><div class="metric"><label>用户</label><b>11</b></div><div class="metric"><label>有效</label><b class="green">9</b></div><div class="metric"><label>付费</label><b class="blue">9</b></div><div class="metric"><label>即将到期</label><b class="amber">2</b></div></div></article>
+            <article class="group"><div class="group-top"><span class="chevron">›</span><span class="group-name">DMIT-AS3-1500</span><span class="status online">在线</span><span class="status sync">同步成功</span><span class="view">查看用户</span></div><div class="group-meta">最近同步：2026/09/11 19:30:46</div><div class="metrics"><div class="metric"><label>用户</label><b>3</b></div><div class="metric"><label>有效</label><b class="green">3</b></div><div class="metric"><label>付费</label><b class="blue">3</b></div><div class="metric"><label>即将到期</label><b class="amber">0</b></div></div></article>
+          </div>
+        </div>
+      </section>
+
+      <section class="direction">
+        <header class="direction-head"><h2>方案 B · 左右分栏工作台</h2><p>适合高频编辑：左侧切换线路机，右侧固定显示该线路机的用户表。</p></header>
+        <div class="preview">
+          <div class="toolbar"><div class="input">搜索用户或 Inbound</div><div class="select">全部状态</div></div>
+          <div class="split"><aside class="side"><div class="side-title">线路机 · 3</div><div class="side-item active">DMIT-AN5-1500 <small style="display:block;color:var(--green);font-size:9px;margin-top:3px">11 个用户</small></div><div class="side-item">DMIT-AS3-1000 <small style="display:block;color:var(--faint);font-size:9px;margin-top:3px">11 个用户</small></div><div class="side-item">DMIT-AS3-1500 <small style="display:block;color:var(--faint);font-size:9px;margin-top:3px">3 个用户</small></div></aside><div class="detail"><div class="detail-title">DMIT-AN5-1500 <span class="status online">在线</span><span class="status sync">同步成功</span></div><div class="detail-sub">最近同步：2026/09/11 19:31:14</div><div class="mini-bars"><div class="mini-bar"><b>11</b><span>用户</span></div><div class="mini-bar"><b style="color:var(--green)">11</b><span>有效</span></div><div class="mini-bar"><b style="color:var(--blue)">11</b><span>付费</span></div><div class="mini-bar"><b style="color:var(--amber)">0</b><span>到期</span></div></div><div class="full-table"><div class="full-row"><span>用户 / Inbound</span><span>计费</span><span>路径</span><span>到期</span></div><div class="full-row"><span>Alice<small>ss-entry</small></span><span>付费</span><span>经落地机</span><span>10/01</span></div><div class="full-row"><span>Bob<small>vmess-main</small></span><span>付费</span><span>线路机直出</span><span>09/25</span></div><div class="full-row"><span>Chris<small>trojan-01</small></span><span>免费</span><span>经落地机</span><span>长期</span></div></div></div></div>
+        </div>
+      </section>
+
+      <section class="direction">
+        <header class="direction-head"><h2>方案 C · 运营指标视图</h2><p>适合管理层巡检：把“线路机数量、健康状态、用户规模”放在同一行快速扫读。</p></header>
+        <div class="preview">
+          <div class="ops-kpis"><div class="ops-kpi"><span class="label">线路机</span><div class="value">3</div><div class="hint">全部在线 · 3</div></div><div class="ops-kpi"><span class="label">有效用户</span><div class="value" style="color:var(--green)">128</div><div class="hint">占总用户 94%</div></div><div class="ops-kpi"><span class="label">付费占比</span><div class="value" style="color:var(--blue)">91%</div><div class="hint">116 位付费用户</div></div><div class="ops-kpi"><span class="label">即将到期</span><div class="value" style="color:var(--amber)">2</div><div class="hint">需要跟进</div></div></div>
+          <div class="toolbar"><div class="input">搜索线路机或用户</div><div class="select">健康状态</div><div class="select">排序：用户数</div></div>
+          <div class="ops-list"><div class="ops-row"><div><div class="name">DMIT-AN5-1500</div><div class="sub">最近同步 19:31:14 · 同步成功</div></div><div><span class="ops-label">用户</span><span class="ops-value">11</span></div><div><span class="ops-label">有效</span><span class="ops-value" style="color:var(--green)">11</span></div><div><span class="ops-label">流量</span><span class="ops-value">1.94 TB</span></div><span class="view">详情 ›</span></div><div class="ops-row"><div><div class="name">DMIT-AS3-1000</div><div class="sub">最近同步 19:31:10 · 同步成功</div></div><div><span class="ops-label">用户</span><span class="ops-value">11</span></div><div><span class="ops-label">有效</span><span class="ops-value" style="color:var(--green)">9</span></div><div><span class="ops-label">流量</span><span class="ops-value">428.3 GB</span></div><span class="view">详情 ›</span></div><div class="ops-row"><div><div class="name">DMIT-AS3-1500</div><div class="sub">最近同步 19:30:46 · 同步成功</div></div><div><span class="ops-label">用户</span><span class="ops-value">3</span></div><div><span class="ops-label">有效</span><span class="ops-value" style="color:var(--green)">3</span></div><div><span class="ops-label">流量</span><span class="ops-value">60.4 GB</span></div><span class="view">详情 ›</span></div></div>
+          <div class="note">建议：方案 C 可以作为后续“运营总览”页的线路机模块，但用户管理页仍需要方案 A 或 B 来承载明细操作。</div>
+        </div>
+      </section>
+    </div>
+  </main>
+</body>
+</html>
