@@ -796,13 +796,6 @@ function syncStatusLabel(status: Api.Central.UserGroupSummary['syncStatus']) {
   return '待同步';
 }
 
-function syncStatusType(status: Api.Central.UserGroupSummary['syncStatus']): 'success' | 'warning' | 'error' | 'default' {
-  if (status === 'success') return 'success';
-  if (status === 'failed') return 'error';
-  if (status === 'unknown') return 'default';
-  return 'warning';
-}
-
 async function loadGroupUsers(nodeID: string, requestedPage?: number) {
   const state = ensureGroupUsers(nodeID);
   if (requestedPage) state.page = requestedPage;
@@ -916,18 +909,18 @@ onMounted(() => {
       <template #toolbar>
         <div>
           <div v-if="stats" class="users-kpis p-16px pb-0">
-            <NCard :bordered="false" size="small">
-              <NStatistic label="有效用户" :value="stats.active" />
-              <div class="mt-4px text-12px text-gray-400">与总览页口径一致，按 Client 到期状态同步</div>
-            </NCard>
-            <NCard :bordered="false" size="small">
-              <NStatistic label="付费用户" :value="stats.paid" />
-              <div class="mt-4px text-12px text-gray-400">有效用户中的收费用户</div>
-            </NCard>
-            <NCard :bordered="false" size="small">
-              <NStatistic label="免费用户" :value="stats.free" />
-              <div class="mt-4px text-12px text-gray-400">有效用户中的免费用户</div>
-            </NCard>
+            <div class="users-kpi">
+              <span>有效用户</span>
+              <strong class="users-value--active">{{ stats.active }}</strong>
+            </div>
+            <div class="users-kpi">
+              <span>付费用户</span>
+              <strong class="users-value--paid">{{ stats.paid }}</strong>
+            </div>
+            <div class="users-kpi">
+              <span>免费用户</span>
+              <strong class="users-value--free">{{ stats.free }}</strong>
+            </div>
           </div>
           <div class="border-b border-gray-200 p-16px dark:border-gray-700">
             <NSpace wrap>
@@ -956,24 +949,42 @@ onMounted(() => {
         <div
           v-for="group in groups"
           :key="group.nodeId"
-          class="user-group-card" :class="[{ 'user-group-card--expanded': isGroupExpanded(group.nodeId) }]"
+          class="user-group-card"
+          :class="{ 'user-group-card--expanded': isGroupExpanded(group.nodeId) }"
         >
-          <div class="user-group-card__header">
-            <div class="user-group-card__heading min-w-0 cursor-pointer" @click="toggleGroup(group)">
-              <span class="user-group-card__chevron" :class="{ 'is-expanded': isGroupExpanded(group.nodeId) }" aria-hidden="true">›</span>
-              <div class="flex flex-wrap items-center gap-8px">
-                <span class="text-16px font-600">{{ group.nodeName }}</span>
-                <NTag size="small" :type="nodeStatusType(group.status)">{{ nodeStatusLabel(group.status) }}</NTag>
-                <NTag size="small" :type="syncStatusType(group.syncStatus)">{{ syncStatusLabel(group.syncStatus) }}</NTag>
-              </div>
-              <div class="mt-4px text-12px text-gray-500">
+          <button
+            :id="`user-group-toggle-${group.nodeId}`"
+            type="button"
+            class="user-group-card__header"
+            :aria-expanded="isGroupExpanded(group.nodeId)"
+            :aria-controls="`user-group-users-${group.nodeId}`"
+            @click="toggleGroup(group)"
+          >
+            <icon-mdi-chevron-right class="user-group-card__chevron" aria-hidden="true" />
+            <span class="user-group-card__heading">
+              <span class="user-group-card__title">
+                <span class="user-group-card__name">{{ group.nodeName }}</span>
+                <span class="user-group-card__status" :class="`user-group-card__status--${nodeStatusType(group.status)}`">
+                  {{ nodeStatusLabel(group.status) }}
+                </span>
+                <span
+                  class="user-group-card__status"
+                  :class="{
+                    'user-group-card__status--sync': group.syncStatus === 'success',
+                    'user-group-card__status--error': group.syncStatus === 'failed'
+                  }"
+                >
+                  {{ syncStatusLabel(group.syncStatus) }}
+                </span>
+              </span>
+              <span class="user-group-card__sync-time">
                 {{ group.lastSyncAt ? `最近同步：${formatDate(group.lastSyncAt)}` : '尚未完成成功同步' }}
-              </div>
-            </div>
-            <NButton class="user-group-card__action" text type="primary" @click="toggleGroup(group)">
+              </span>
+            </span>
+            <span class="user-group-card__action">
               {{ isGroupExpanded(group.nodeId) ? '收起用户' : '查看用户' }}
-            </NButton>
-          </div>
+            </span>
+          </button>
 
           <div class="user-group-card__body">
             <div class="user-group-card__metrics">
@@ -983,27 +994,33 @@ onMounted(() => {
               </div>
               <div class="user-group-card__metric">
                 <span>有效</span>
-                <strong class="text-green-600">{{ group.stats.active }}</strong>
+                <strong class="users-value--active">{{ group.stats.active }}</strong>
               </div>
               <div class="user-group-card__metric">
                 <span>付费</span>
-                <strong class="text-blue-600">{{ group.stats.paid }}</strong>
+                <strong class="users-value--paid">{{ group.stats.paid }}</strong>
               </div>
               <div class="user-group-card__metric">
                 <span>免费</span>
-                <strong class="text-orange-500">{{ group.stats.free }}</strong>
+                <strong class="users-value--free">{{ group.stats.free }}</strong>
               </div>
               <div class="user-group-card__metric">
                 <span>即将到期</span>
-                <strong class="text-yellow-600">{{ group.stats.expiring }}</strong>
+                <strong class="users-value--expiring">{{ group.stats.expiring }}</strong>
               </div>
               <div class="user-group-card__metric user-group-card__metric--traffic">
-                <span>流量</span>
-                <strong class="text-gray-500"><TrafficValue :value="group.stats.trafficBytes" /></strong>
+                <span>累计流量</span>
+                <strong><TrafficValue :value="group.stats.trafficBytes" /></strong>
               </div>
             </div>
 
-            <div v-if="isGroupExpanded(group.nodeId)" class="mt-12px">
+            <div
+              v-if="isGroupExpanded(group.nodeId)"
+              :id="`user-group-users-${group.nodeId}`"
+              class="user-group-card__users"
+              role="region"
+              :aria-labelledby="`user-group-toggle-${group.nodeId}`"
+            >
               <NSpin :show="groupUsers[group.nodeId]?.loading || false">
                 <NAlert v-if="groupUsers[group.nodeId]?.error" type="warning" :show-icon="false" class="mb-12px">
                   {{ groupUsers[group.nodeId]?.error }}
@@ -1015,7 +1032,7 @@ onMounted(() => {
                   :data="groupUsers[group.nodeId].rows"
                   :pagination="groupPagination(group.nodeId)"
                   :bordered="false"
-                  :single-line="false"
+                  :single-line="true"
                   size="small"
                   :scroll-x="1020"
                 />
@@ -1493,65 +1510,203 @@ onMounted(() => {
 .user-groups-grid {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
-  gap: 10px;
+  gap: 12px;
+}
+
+.users-page {
+  --users-canvas: #121212;
+  --users-surface: #1c1c1c;
+  --users-elevated: #202124;
+  --users-border: rgb(255 255 255 / 8%);
+  --users-border-soft: rgb(255 255 255 / 5%);
+  --users-text: #e0e0e0;
+  --users-muted: #8b929b;
+  --users-faint: #69717a;
+  --users-primary: #646cff;
+  --users-active: #63c174;
+  --users-paid: #80a9e8;
+  --users-free: #e0ae5c;
+  --users-expiring: #e0ae5c;
+}
+
+.users-page :deep(.n-card) {
+  border-radius: 8px;
+}
+
+.users-kpis {
+  gap: 12px;
+}
+
+.users-kpi {
+  min-width: 0;
+  padding: 14px 16px;
+  border: 1px solid var(--users-border);
+  border-radius: 8px;
+  background: var(--users-surface);
+}
+
+.users-kpi > span {
+  display: block;
+  color: var(--users-muted);
+  font-size: 12px;
+}
+
+.users-kpi > strong {
+  display: block;
+  margin-top: 5px;
+  color: var(--users-text);
+  font-size: 24px;
+  font-weight: 650;
+  line-height: 1;
 }
 
 .user-group-card {
   overflow: hidden;
   min-width: 0;
-  border: 1px solid color-mix(in srgb, var(--n-border-color, rgb(0 0 0 / 12%)) 34%, transparent);
+  border: 1px solid var(--users-border);
   border-radius: 8px;
-  background: color-mix(in srgb, var(--n-color-embedded, var(--n-color, transparent)) 82%, transparent);
-  box-shadow: 0 1px 3px rgb(0 0 0 / 5%);
-  transition: border-color 0.2s ease, background 0.2s ease;
+  background: var(--users-surface);
+  box-shadow: 0 1px 3px rgb(0 0 0 / 14%);
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
 }
 
 .user-group-card:hover {
-  border-color: color-mix(in srgb, var(--n-primary-color, #18a058) 42%, var(--n-border-color, transparent));
-  background: color-mix(in srgb, var(--n-color-embedded, var(--n-color, transparent)) 94%, var(--n-primary-color, transparent));
+  border-color: color-mix(in srgb, var(--users-primary) 52%, var(--users-border));
+  box-shadow: 0 3px 10px rgb(0 0 0 / 20%);
 }
 
 .user-group-card--expanded {
-  grid-column: 1;
+  border-color: color-mix(in srgb, var(--users-primary) 58%, var(--users-border));
 }
 
 .user-group-card__header {
+  width: 100%;
+  border: 0;
+  appearance: none;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 16px;
-  padding: 13px 16px 11px;
-  border-bottom: 1px solid color-mix(in srgb, var(--n-border-color, rgb(0 0 0 / 12%)) 42%, transparent);
-  background: color-mix(in srgb, var(--n-color-embedded, var(--n-color, transparent)) 92%, var(--n-text-color, transparent));
+  gap: 12px;
+  padding: 12px 16px 9px;
+  color: inherit;
+  text-align: left;
+  background: var(--users-elevated);
+  cursor: pointer;
 }
 
 .user-group-card__heading {
+  min-width: 0;
   display: flex;
-  align-items: center;
-  gap: 8px;
+  flex: 1;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 3px;
 }
 
 .user-group-card__chevron {
-  display: inline-flex;
-  width: 16px;
-  height: 20px;
-  align-items: center;
-  justify-content: center;
-  color: var(--n-text-color-3, #999);
-  font-size: 20px;
-  line-height: 1;
-  transform: translateX(-1px);
+  flex: none;
+  width: 18px;
+  height: 18px;
+  color: var(--users-muted);
+  font-size: 18px;
   transition: transform 0.2s ease, color 0.2s ease;
 }
 
+.user-group-card__header:hover .user-group-card__chevron {
+  color: var(--users-primary);
+}
+
 .user-group-card__chevron.is-expanded {
-  color: var(--n-primary-color, #18a058);
-  transform: rotate(90deg) translateX(-1px);
+  color: var(--users-primary);
+  transform: rotate(90deg);
+}
+
+.user-group-card__title {
+  min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 7px;
+}
+
+.user-group-card__name {
+  overflow: hidden;
+  color: var(--users-text);
+  font-size: 16px;
+  font-weight: 650;
+  line-height: 22px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.user-group-card__status {
+  display: inline-flex;
+  align-items: center;
+  min-height: 20px;
+  padding: 1px 7px;
+  border: 1px solid var(--users-border);
+  border-radius: 4px;
+  color: var(--users-muted);
+  font-size: 11px;
+  line-height: 16px;
+}
+
+.user-group-card__status::before {
+  width: 5px;
+  height: 5px;
+  margin-right: 5px;
+  border-radius: 50%;
+  background: currentcolor;
+  content: '';
+}
+
+.user-group-card__status--success,
+.user-group-card__status--online {
+  border-color: rgb(99 193 116 / 32%);
+  color: var(--users-active);
+  background: rgb(99 193 116 / 8%);
+}
+
+.user-group-card__status--sync {
+  border-color: rgb(100 108 255 / 36%);
+  color: #8d94ff;
+  background: rgb(100 108 255 / 9%);
+}
+
+.user-group-card__status--warning {
+  border-color: rgb(224 174 92 / 34%);
+  color: var(--users-expiring);
+  background: rgb(224 174 92 / 8%);
+}
+
+.user-group-card__status--error {
+  border-color: rgb(226 125 134 / 34%);
+  color: #e27d86;
+  background: rgb(226 125 134 / 8%);
+}
+
+.user-group-card__sync-time {
+  color: var(--users-faint);
+  font-size: 11px;
+  line-height: 16px;
 }
 
 .user-group-card__action {
   flex: none;
-  margin-top: 1px;
+  align-self: center;
+  color: #8d94ff;
+  font-size: 12px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.user-group-card__header:focus-visible {
+  outline: 2px solid var(--users-primary);
+  outline-offset: -2px;
+}
+
+.user-group-card__header:active {
+  background: color-mix(in srgb, var(--users-elevated) 90%, var(--users-primary));
 }
 
 .user-group-card__body {
@@ -1561,7 +1716,7 @@ onMounted(() => {
 .user-group-card__metrics {
   display: grid;
   grid-template-columns: repeat(6, minmax(0, 1fr));
-  border-bottom: 1px solid color-mix(in srgb, var(--n-border-color, rgb(0 0 0 / 12%)) 34%, transparent);
+  border-bottom: 1px solid var(--users-border-soft);
 }
 
 .user-group-card__metric {
@@ -1571,12 +1726,12 @@ onMounted(() => {
   align-items: flex-start;
   justify-content: center;
   gap: 2px;
-  min-height: 58px;
-  padding: 9px 12px;
-  border-right: 1px solid color-mix(in srgb, var(--n-border-color, rgb(0 0 0 / 12%)) 28%, transparent);
-  color: var(--n-text-color-3, #999);
-  font-size: 12px;
-  line-height: 18px;
+  min-height: 56px;
+  padding: 8px 12px;
+  border-right: 1px solid var(--users-border-soft);
+  color: var(--users-muted);
+  font-size: 11px;
+  line-height: 16px;
 }
 
 .user-group-card__metric:first-child {
@@ -1590,90 +1745,80 @@ onMounted(() => {
 
 .user-group-card__metric strong {
   overflow: hidden;
-  color: var(--n-text-color, inherit);
-  font-size: 15px;
-  font-weight: 600;
+  color: var(--users-text);
+  font-size: 16px;
+  font-weight: 650;
+  line-height: 20px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
+.user-group-card__metric .users-value--active { color: var(--users-active); }
+.user-group-card__metric .users-value--paid { color: var(--users-paid); }
+.user-group-card__metric .users-value--free,
+.user-group-card__metric .users-value--expiring { color: var(--users-free); }
+
 .user-group-card__metric--traffic strong {
-  font-size: 13px;
+  font-size: 14px;
+  font-weight: 550;
+}
+
+.user-group-card__users {
+  margin-top: 12px;
+  overflow: hidden;
+  border: 1px solid var(--users-border);
+  border-radius: 6px;
+  background: var(--users-canvas);
+}
+
+.user-group-card__users :deep(.n-data-table) {
+  background: transparent;
+}
+
+.user-group-card__users :deep(.n-data-table-th) {
+  color: var(--users-muted);
+  font-size: 12px;
   font-weight: 500;
 }
 
-.users-kpis {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr);
-  gap: 12px;
+.user-group-card__users :deep(.n-data-table-td) {
+  color: var(--users-text);
+  font-size: 12px;
 }
 
-@media (min-width: 768px) {
-  .users-kpis {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-  }
+.user-group-card__users :deep(.n-data-table-tbody tr:hover td) {
+  background: rgb(100 108 255 / 7%);
 }
 
+.user-group-card__users :deep(.n-pagination) {
+  padding: 8px 12px;
+}
+
+/* Keep the old helper classes from changing the semantic colors above. */
+.users-value--active { color: var(--users-active) !important; }
+.users-value--paid { color: var(--users-paid) !important; }
+.users-value--free { color: var(--users-free) !important; }
+.users-value--expiring { color: var(--users-expiring) !important; }
+
+/* Replace legacy card spacing below 900px without changing the data order. */
 @media (max-width: 900px) {
-  .user-group-card__metrics {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-  }
-
-  .user-group-card__metric:nth-child(3n) {
-    border-right: 0;
-  }
-
-  .user-group-card__metric:nth-child(n + 4) {
-    border-top: 1px solid color-mix(in srgb, var(--n-border-color, rgb(0 0 0 / 12%)) 28%, transparent);
-  }
-
-  .user-group-card__metric:nth-child(4) {
-    padding-left: 0;
-  }
-
-  .user-group-card__metric:nth-child(6) {
-    padding-right: 0;
-  }
+  .user-group-card__metrics { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .user-group-card__metric:nth-child(3n) { border-right: 0; }
+  .user-group-card__metric:nth-child(n + 4) { border-top: 1px solid var(--users-border-soft); }
+  .user-group-card__metric:nth-child(4) { padding-left: 0; }
+  .user-group-card__metric:nth-child(6) { padding-right: 0; }
 }
 
 @media (max-width: 560px) {
-  .user-group-card__header {
-    align-items: flex-start;
-    padding: 12px;
-  }
-
-  .user-group-card__header :deep(.n-button) {
-    padding-top: 2px;
-  }
-
-  .user-group-card__body {
-    padding: 0 12px 12px;
-  }
-
-  .user-group-card__metrics {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
-  .user-group-card__metric:nth-child(3n) {
-    border-right: 1px solid color-mix(in srgb, var(--n-border-color, rgb(0 0 0 / 12%)) 28%, transparent);
-  }
-
-  .user-group-card__metric:nth-child(2n) {
-    border-right: 0;
-  }
-
-  .user-group-card__metric:nth-child(n + 3) {
-    border-top: 1px solid color-mix(in srgb, var(--n-border-color, rgb(0 0 0 / 12%)) 28%, transparent);
-  }
-
+  .user-group-card__header { align-items: flex-start; padding: 11px 12px 9px; }
+  .user-group-card__body { padding: 0 12px 12px; }
+  .user-group-card__metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .user-group-card__metric:nth-child(3n) { border-right: 1px solid var(--users-border-soft); }
+  .user-group-card__metric:nth-child(2n) { border-right: 0; }
+  .user-group-card__metric:nth-child(n + 3) { border-top: 1px solid var(--users-border-soft); }
   .user-group-card__metric:nth-child(3),
-  .user-group-card__metric:nth-child(5) {
-    padding-left: 0;
-  }
-
+  .user-group-card__metric:nth-child(5) { padding-left: 0; }
   .user-group-card__metric:nth-child(4),
-  .user-group-card__metric:nth-child(6) {
-    padding-right: 0;
-  }
+  .user-group-card__metric:nth-child(6) { padding-right: 0; }
 }
 </style>
