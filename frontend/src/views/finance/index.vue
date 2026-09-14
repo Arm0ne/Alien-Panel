@@ -40,6 +40,11 @@ const renewal = computed(
   () => summary.value?.renewal || { dueUsers: 0, renewedUsers: 0, notRenewedUsers: 0, renewalRate: 0, recoveryUsers: 0 }
 );
 const totalBreakdown = computed(() => paidBreakdown.value.reduce((sum, item) => sum + item.amount, 0));
+const grossMargin = computed(() => {
+  const income = summary.value?.monthIncome;
+  if (income === undefined || income <= 0) return null;
+  return (summary.value?.grossProfit || 0) / income;
+});
 
 const orderColumns: DataTableColumns<(typeof orders.value)[number]> = [
   { title: '订单号', key: 'orderNo', minWidth: 155, render: row => row.orderNo || row.id.slice(0, 12) },
@@ -115,7 +120,7 @@ onMounted(loadFinance);
     </template>
 
     <div v-if="summary" class="finance-content p-16px">
-      <div class="grid grid-cols-1 gap-12px sm:grid-cols-2 xl:grid-cols-6">
+      <div class="grid grid-cols-1 gap-12px sm:grid-cols-2 xl:grid-cols-7">
         <NCard size="small" embedded>
           <NStatistic label="服务期折算收入" :value="formatMoney(summary.monthIncome, summary.currency)" />
           <div class="mt-4px text-12px text-gray-500">年费按月折算，用于经营分析</div>
@@ -131,6 +136,12 @@ onMounted(loadFinance);
         <NCard size="small" embedded>
           <NStatistic label="本期成本" :value="formatMoney(summary.monthCost, summary.currency)" />
           <div class="mt-4px text-12px text-gray-500">节点、IP 与其他真实成本</div>
+        </NCard>
+        <NCard size="small" embedded>
+          <NStatistic label="服务期毛利" :value="formatMoney(summary.grossProfit, summary.currency)" />
+          <div class="mt-4px text-12px text-gray-500">
+            {{ grossMargin === null ? '收入为零，暂无毛利率' : `毛利率 ${(grossMargin * 100).toFixed(1)}%` }}
+          </div>
         </NCard>
         <NCard size="small" embedded>
           <NStatistic label="本期现金结余" :value="formatMoney(summary.cashBalance, summary.currency)" />
