@@ -841,6 +841,16 @@ func TestInboundIsArchivedAfterThreeConsecutiveMissingSyncs(t *testing.T) {
 	if result := doJSON(t, ts.Client(), http.MethodPost, ts.URL+"/api/agent/v1/sync", nodeToken, initial); result["code"] != successCode {
 		t.Fatalf("initial sync response = %#v", result)
 	}
+	var archiveInboundID, archiveUserID string
+	if err := database.QueryRow(`SELECT id, user_id FROM inbounds WHERE node_id = 'archive-node' AND remote_inbound_id = '88'`).Scan(&archiveInboundID, &archiveUserID); err != nil {
+		t.Fatalf("read initial archive identity: %v", err)
+	}
+	if _, err := database.Exec(`INSERT INTO clients (id, node_id, inbound_id, remote_client_id, email, enable) VALUES ('archive-client', 'archive-node', ?, 'archive-client', 'archive@example.com', 1)`, archiveInboundID); err != nil {
+		t.Fatalf("seed archive client: %v", err)
+	}
+	if _, err := database.Exec(`INSERT INTO traffic_snapshots (id, node_id, inbound_id, collected_at, up, down, all_time, source) VALUES ('archive-traffic', 'archive-node', ?, ?, 10, 20, 30, 'xpanel')`, archiveInboundID, now.Add(-time.Minute).Format(time.RFC3339Nano)); err != nil {
+		t.Fatalf("seed archive traffic: %v", err)
+	}
 
 	for count := 1; count <= missingInboundArchiveAfter; count++ {
 		observedAt := now.Add(time.Duration(count) * time.Minute).Format(time.RFC3339Nano)
@@ -886,6 +896,19 @@ func TestInboundIsArchivedAfterThreeConsecutiveMissingSyncs(t *testing.T) {
 	}
 	if !deletedAt.Valid || deletedAt.String == "" || userStatus != "disabled" {
 		t.Fatalf("user was not cleaned up after inbound archive: deleted_at=%#v status=%q", deletedAt, userStatus)
+	}
+	var activeMappings, remainingClients, remainingTraffic int
+	if err := database.QueryRow(`SELECT COUNT(*) FROM user_inbounds WHERE user_id = ? AND active_to IS NULL`, archiveUserID).Scan(&activeMappings); err != nil {
+		t.Fatalf("count archived user mappings: %v", err)
+	}
+	if err := database.QueryRow(`SELECT COUNT(*) FROM clients WHERE inbound_id = ?`, archiveInboundID).Scan(&remainingClients); err != nil {
+		t.Fatalf("count archived clients: %v", err)
+	}
+	if err := database.QueryRow(`SELECT COUNT(*) FROM traffic_snapshots WHERE inbound_id = ?`, archiveInboundID).Scan(&remainingTraffic); err != nil {
+		t.Fatalf("count archived traffic: %v", err)
+	}
+	if activeMappings != 0 || remainingClients != 0 || remainingTraffic != 0 {
+		t.Fatalf("archived operational data remains mappings=%d clients=%d traffic=%d", activeMappings, remainingClients, remainingTraffic)
 	}
 }
 

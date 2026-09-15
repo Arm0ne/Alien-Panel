@@ -42,11 +42,12 @@ xpanel_url: 'https://panel.example.com:18086'
 xpanel_base_path: '/Alien'
 ```
 
-路径不能重复拼接。中央服务不会因为 X-Panel 采集失败而删除 Inbound、Client 或流量历史。
+路径不能重复拼接。中央服务不会因为 X-Panel 采集失败而删除 Inbound、Client 或流量历史；只有成功完整同步连续三次确认 Inbound 已从 X-Panel 消失并归档时，才会按客户生命周期规则清理该 Inbound 的运营数据。
 
 ## 同步、缺失和流量
 
 - 只有成功的完整同步才增加缺失计数；连续三次成功同步仍缺失才归档 Inbound。
+- 新版 Agent 的完整同步会清理远端已经删除的 Client。新旧 Client 集合完全无交集时，先在事件中心等待管理员确认客户更换；确认后旧用户的路径和当前 Inbound 流量快照清理，账务记录保留，新用户从新的累计流量基线开始。
 - Agent 离线期间不增加缺失计数，最后一次成功快照保留。
 - 累计流量下降写入 `traffic_reset`，当前值作为新基线，报表不会出现负流量。
 - `traffic-check` 是只读核对工具，不访问 X-Panel，也不修改数据库。

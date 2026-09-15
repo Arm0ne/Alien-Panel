@@ -26,6 +26,7 @@ Agent 心跳和 X-Panel 采集是两条独立状态链：Agent 能向中央发�
 - `internal/db/db.go`：嵌入并按文件名顺序幂等执行 `internal/db/migrations/*.sql`，启用 WAL、外键和忙等待。
 - `internal/httpapi/server.go`：路由注册、认证中间件、用户/节点/出口/财务/Dashboard 查询。
 - `internal/httpapi/agent.go`：Agent 注册、bootstrap、heartbeat、完整同步、幂等 `sync_id` 和同步健康状态。
+- `internal/httpapi/client_lifecycle.go`：完整同步下的 Client 清理、客户更换候选、确认重置和账务保留。
 - `internal/httpapi/user_path.go`：用户路径保存、历史、有效性和多个固定出口 IP。
 - `internal/httpapi/user_path_assets.go`：按用户主 Inbound 计算可选择的线路机、落地机和 S5 出口资产。
 - `internal/httpapi/node_admin.go`：节点删除、关联数据清理和孤立业务用户处理。
@@ -74,6 +75,7 @@ Vue 3 + TypeScript + Naive UI，基于精简的 Soybean Admin 工程。业务页
 3. 同一 `sync_id` 重试时返回之前的结果，不重复写入。
 4. 只有成功的完整同步才增加 Inbound 缺失计数；连续三次成功同步均缺失才归档。
 5. 相邻累计流量下降会写入 `traffic_reset` 事件并重新建立基线，绝不写入负增量。
+6. 新版 Agent 在每个 Inbound 上标记 `clients_complete`。中央据此删除同步中已不存在的 Client；若新旧 Client 集合完全无交集，则生成客户更换待办。确认后旧用户仅保留账务记录，新用户从新的流量基线开始。
 
 ## 4. 认证与安全
 

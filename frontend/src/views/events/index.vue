@@ -8,6 +8,7 @@ import {
   fetchEvents,
   markAllEventsRead,
   markEventRead,
+  resetUserFromReplacementEvent,
   rejectUserRenewal,
   requestNodeSync,
   resolveEvent
@@ -55,6 +56,10 @@ function payloadValue(row: Api.Central.EventSummary, key: string) {
 
 function isRenewal(row: Api.Central.EventSummary) {
   return row.type === 'renewal_candidate_detected' && row.status !== 'resolved' && row.status !== 'dismissed';
+}
+
+function isClientReplacement(row: Api.Central.EventSummary) {
+  return row.type === 'client_set_replacement_detected' && row.status !== 'resolved' && row.status !== 'dismissed';
 }
 
 function eventStatusLabel(row: Api.Central.EventSummary) {
@@ -163,6 +168,34 @@ async function rejectRenewal(row: Api.Central.EventSummary) {
   loadEvents();
 }
 
+async function confirmClientReplacement(row: Api.Central.EventSummary) {
+  if (actionLoading.value) return;
+  const reset = async () => {
+    actionLoading.value = row.id;
+    const { error } = await resetUserFromReplacementEvent(row.id);
+    actionLoading.value = '';
+    if (error) {
+      window.$message?.error('客户更换确认失败，可能是 Inbound 已发生变化');
+      return;
+    }
+    window.$message?.success('已关闭旧用户并创建新用户，旧账务记录已保留');
+    notifyEventChanged();
+    loadEvents();
+  };
+  if (!window.$dialog) {
+    await reset();
+    return;
+  }
+  window.$dialog.warning({
+    title: '确认更换客户',
+    content: '确认后将关闭旧用户的路径和流量，仅保留账务记录，并为当前 Inbound 创建新用户。此操作不可恢复。',
+    positiveText: '确认更换',
+    negativeText: '取消',
+    maskClosable: false,
+    onPositiveClick: reset
+  });
+}
+
 async function resolve(row: Api.Central.EventSummary) {
   actionLoading.value = row.id;
   const { error } = await resolveEvent(row.id);
@@ -255,6 +288,24 @@ const columns: DataTableColumns<Api.Central.EventSummary> = [
             NButton,
             { size: 'small', loading: actionLoading.value === row.id, onClick: () => rejectRenewal(row) },
             { default: () => '非收费变更' }
+          )
+        );
+      } else if (isClientReplacement(row)) {
+        buttons.push(
+          h(
+            NButton,
+            {
+              size: 'small',
+              type: 'warning',
+              loading: actionLoading.value === row.id,
+              onClick: () => confirmClientReplacement(row)
+            },
+            { default: () => '确认更换客户' }
+          ),
+          h(
+            NButton,
+            { size: 'small', quaternary: true, loading: actionLoading.value === row.id, onClick: () => resolve(row) },
+            { default: () => '取消' }
           )
         );
       } else if (row.status !== 'resolved' && row.actionType === 'retry_sync') {

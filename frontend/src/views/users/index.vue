@@ -15,6 +15,7 @@ import {
   fetchUsers,
   importUserBillingRecords,
   rejectUserRenewal,
+  resetInboundUser,
   verifyUserBillingRecord,
   updateUser
 } from '@/service/api';
@@ -91,6 +92,7 @@ const pathAssetsLoading = ref(false);
 const pathLandingInboundsLoading = ref(false);
 const pathAssetsError = ref('');
 const pathSaving = ref(false);
+const resettingUser = ref(false);
 const pathError = ref('');
 const pathMode = ref<'relay' | 'landing' | 'external'>('relay');
 const pathLandingNodeID = ref<string | null>(null);
@@ -557,6 +559,36 @@ function confirmRemovePathAssignment() {
     positiveText: '解除',
     negativeText: '取消',
     onPositiveClick: remove
+  });
+}
+
+function confirmReplaceCurrentUser() {
+  const inboundID = detail.value?.inbound.id;
+  if (!inboundID || resettingUser.value) return;
+  const reset = async () => {
+    resettingUser.value = true;
+    const { data, error } = await resetInboundUser(inboundID);
+    resettingUser.value = false;
+    if (error || !data) {
+      window.$message?.error('更换客户失败，请稍后重试');
+      return;
+    }
+    window.$message?.success('已关闭旧用户并创建新用户，旧账务记录已保留');
+    drawerVisible.value = false;
+    void loadGroups();
+    void openDetail(data.newUserId);
+  };
+  if (!window.$dialog) {
+    void reset();
+    return;
+  }
+  window.$dialog.warning({
+    title: '更换当前 Inbound 的客户',
+    content: '确认后将关闭当前用户的路径和流量，仅保留账务记录，并创建新用户。此操作不可恢复。',
+    positiveText: '确认更换',
+    negativeText: '取消',
+    maskClosable: false,
+    onPositiveClick: reset
   });
 }
 
@@ -1323,6 +1355,18 @@ onMounted(() => {
             </NCard>
 
             <NCard title="X-Panel Inbound 快照（只读）" size="small" class="mt-16px">
+              <template #header-extra>
+                <NButton
+                  v-if="detail.inbound.id"
+                  size="small"
+                  type="warning"
+                  secondary
+                  :loading="resettingUser"
+                  @click="confirmReplaceCurrentUser"
+                >
+                  更换客户
+                </NButton>
+              </template>
               <NDescriptions label-placement="left" :column="1" bordered size="small">
                 <NDescriptionsItem label="线路机">
                   {{ detail.node.name || '--'

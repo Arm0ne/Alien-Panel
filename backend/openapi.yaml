@@ -949,6 +949,32 @@ paths:
         '200': { description: Event resolved }
         '404': { description: Event not found }
         '409': { description: Renewal event requires a billing action }
+  /events/{id}/reset-user:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema: { type: string }
+    post:
+      summary: Confirm a detected Client replacement
+      description: Retires the previous operational user, keeps its billing records, clears its active paths and traffic snapshots, and creates a new user for the current Inbound.
+      responses:
+        '200': { description: Replacement confirmed }
+        '404': { description: Event not found }
+        '409': { description: Event is stale or not a replacement event }
+  /inbounds/{id}/reset-user:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema: { type: string }
+    post:
+      summary: Explicitly reset an Inbound's business user
+      description: Fallback for reused remote Client IDs. Retires the current user while preserving billing records and creates a new user for the Inbound.
+      responses:
+        '200': { description: Inbound user reset }
+        '404': { description: Inbound not found }
+        '409': { description: Inbound has no current user }
   /health/live:
     get:
       security: []
@@ -1824,6 +1850,7 @@ components:
         down: { type: integer, format: int64 }
         all_time: { type: integer, format: int64 }
         config_hash: { type: string }
+        clients_complete: { type: boolean, description: True when clients is a complete X-Panel snapshot and absent Client rows may be removed. }
         clients:
           type: array
           items: { $ref: '#/components/schemas/AgentClient' }

@@ -50,11 +50,27 @@ func TestParseInboundsSupportsSettingsClientsAndTraffic(t *testing.T) {
 	if len(inbound.Clients) != 2 {
 		t.Fatalf("client count = %d", len(inbound.Clients))
 	}
+	if !inbound.ClientsComplete {
+		t.Fatal("clients_complete = false, want true")
+	}
 	if inbound.Clients[0].RemoteID != "client-a" || inbound.Clients[0].AllTime != 30 || inbound.Clients[0].LastOnline != 1791000000 {
 		t.Fatalf("client = %+v", inbound.Clients[0])
 	}
 	if inbound.ConfigHash == "" || len(inbound.ConfigHash) != 64 {
 		t.Fatalf("ConfigHash = %q", inbound.ConfigHash)
+	}
+}
+
+func TestParseInboundDoesNotMarkMissingClientFieldComplete(t *testing.T) {
+	inbounds, err := ParseInbounds(json.RawMessage(`[{"id": 303, "remark": "without-clients"}]`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(inbounds) != 1 {
+		t.Fatalf("inbound count = %d, want 1", len(inbounds))
+	}
+	if inbounds[0].ClientsComplete {
+		t.Fatal("clients_complete = true when client definitions are missing")
 	}
 }
 

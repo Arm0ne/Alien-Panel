@@ -159,7 +159,10 @@ FROM nodes n WHERE n.type = 'landing' AND n.deleted_at IS NULL ORDER BY n.name A
 func (s *Server) readLandingPathInbounds(nodeID, lastSync string) ([]map[string]any, string, error) {
 	rows, err := s.db.Query(`SELECT i.id, i.remote_inbound_id, COALESCE(i.tag, ''), COALESCE(i.remark, ''),
 COALESCE(i.kind, ''), COALESCE(i.protocol, ''), COALESCE(i.port, 0), COALESCE(i.listen, ''), i.enable,
-COALESCE(i.expiry_time, ''), COALESCE(i.client_count, 0), COALESCE(i.up, 0), COALESCE(i.down, 0), COALESCE(i.all_time, 0),
+COALESCE(i.expiry_time, ''), COALESCE(i.client_count, 0),
+CASE WHEN COALESCE(i.up, 0) > COALESCE(i.traffic_baseline_up, 0) THEN COALESCE(i.up, 0) - COALESCE(i.traffic_baseline_up, 0) ELSE 0 END,
+CASE WHEN COALESCE(i.down, 0) > COALESCE(i.traffic_baseline_down, 0) THEN COALESCE(i.down, 0) - COALESCE(i.traffic_baseline_down, 0) ELSE 0 END,
+CASE WHEN COALESCE(i.all_time, 0) > COALESCE(i.traffic_baseline_all_time, 0) THEN COALESCE(i.all_time, 0) - COALESCE(i.traffic_baseline_all_time, 0) ELSE 0 END,
 COALESCE(i.last_seen_at, ''), COALESCE(i.deleted_at, '')
 FROM inbounds i WHERE i.node_id = ? AND i.deleted_at IS NULL
 ORDER BY i.enable DESC, i.tag ASC, i.remote_inbound_id ASC`, nodeID)

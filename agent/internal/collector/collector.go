@@ -38,19 +38,23 @@ type Client struct {
 }
 
 type Inbound struct {
-	RemoteID   int64    `json:"remote_id"`
-	Tag        string   `json:"tag,omitempty"`
-	Remark     string   `json:"remark,omitempty"`
-	Protocol   string   `json:"protocol,omitempty"`
-	Port       int64    `json:"port,omitempty"`
-	Listen     string   `json:"listen,omitempty"`
-	Enable     bool     `json:"enable"`
-	ExpiryTime int64    `json:"expiry_time,omitempty"`
-	Up         int64    `json:"up"`
-	Down       int64    `json:"down"`
-	AllTime    int64    `json:"all_time"`
-	ConfigHash string   `json:"config_hash,omitempty"`
-	Clients    []Client `json:"clients,omitempty"`
+	RemoteID   int64  `json:"remote_id"`
+	Tag        string `json:"tag,omitempty"`
+	Remark     string `json:"remark,omitempty"`
+	Protocol   string `json:"protocol,omitempty"`
+	Port       int64  `json:"port,omitempty"`
+	Listen     string `json:"listen,omitempty"`
+	Enable     bool   `json:"enable"`
+	ExpiryTime int64  `json:"expiry_time,omitempty"`
+	Up         int64  `json:"up"`
+	Down       int64  `json:"down"`
+	AllTime    int64  `json:"all_time"`
+	ConfigHash string `json:"config_hash,omitempty"`
+	// Clients is always emitted, including an empty array.  The central API
+	// uses ClientsComplete to distinguish a complete empty snapshot from an
+	// older Agent that omitted the field when collection was unavailable.
+	Clients         []Client `json:"clients"`
+	ClientsComplete bool     `json:"clients_complete"`
 }
 
 type Snapshot struct {
@@ -229,7 +233,7 @@ func parseInbound(raw json.RawMessage) (Inbound, error) {
 	}
 
 	settings, _ := objectFromOptional(objectValueRaw(object, "settings"))
-	clientItems, err := findClientItems(object, settings)
+	clientItems, clientsComplete, err := findClientItems(object, settings)
 	if err != nil {
 		return Inbound{}, fmt.Errorf("inbound %d clients: %w", inbound.RemoteID, err)
 	}
@@ -247,6 +251,7 @@ func parseInbound(raw json.RawMessage) (Inbound, error) {
 	}
 	mergeClientTraffic(clients, trafficItems)
 	inbound.Clients = clients
+	inbound.ClientsComplete = clientsComplete
 	inbound.ConfigHash = configHash(object)
 	return inbound, nil
 }
@@ -277,18 +282,22 @@ func parseClient(raw json.RawMessage) (Client, error) {
 	return client, nil
 }
 
-func findClientItems(object, settings map[string]json.RawMessage) ([]json.RawMessage, error) {
+func findClientItems(object, settings map[string]json.RawMessage) ([]json.RawMessage, bool, error) {
 	for _, source := range []map[string]json.RawMessage{object, settings} {
 		if source == nil {
 			continue
 		}
 		for _, key := range []string{"clients", "clientList", "clientStats"} {
 			if raw, ok := source[key]; ok {
-				return rawList(raw)
+				if strings.TrimSpace(string(raw)) == "null" {
+					return nil, false, nil
+				}
+				items, err := rawList(raw)
+				return items, true, err
 			}
 		}
 	}
-	return nil, nil
+	return nil, false, nil
 }
 
 func trafficItemsFrom(object map[string]json.RawMessage) ([]json.RawMessage, error) {

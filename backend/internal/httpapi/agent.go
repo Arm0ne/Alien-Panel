@@ -2,7 +2,9 @@ package httpapi
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -69,19 +71,20 @@ type agentClientPayload struct {
 }
 
 type agentInboundPayload struct {
-	RemoteID   int64                `json:"remote_id"`
-	Tag        string               `json:"tag"`
-	Remark     string               `json:"remark"`
-	Protocol   string               `json:"protocol"`
-	Port       int64                `json:"port"`
-	Listen     string               `json:"listen"`
-	Enable     bool                 `json:"enable"`
-	ExpiryTime int64                `json:"expiry_time"`
-	Up         int64                `json:"up"`
-	Down       int64                `json:"down"`
-	AllTime    int64                `json:"all_time"`
-	ConfigHash string               `json:"config_hash"`
-	Clients    []agentClientPayload `json:"clients"`
+	RemoteID        int64                `json:"remote_id"`
+	Tag             string               `json:"tag"`
+	Remark          string               `json:"remark"`
+	Protocol        string               `json:"protocol"`
+	Port            int64                `json:"port"`
+	Listen          string               `json:"listen"`
+	Enable          bool                 `json:"enable"`
+	ExpiryTime      int64                `json:"expiry_time"`
+	Up              int64                `json:"up"`
+	Down            int64                `json:"down"`
+	AllTime         int64                `json:"all_time"`
+	ConfigHash      string               `json:"config_hash"`
+	Clients         []agentClientPayload `json:"clients"`
+	ClientsComplete bool                 `json:"clients_complete"`
 }
 
 type agentSyncRequest struct {
@@ -316,6 +319,7 @@ func (s *Server) agentSync(w http.ResponseWriter, r *http.Request) {
 	clientCount := 0
 	for _, inbound := range payload.Inbounds {
 		remoteInboundID := strconv.FormatInt(inbound.RemoteID, 10)
+		incomingClientIDs := normalizeClientIDs(inbound.Clients)
 		expiryText := ""
 		var expiry any
 		if inbound.ExpiryTime > 0 {
@@ -325,7 +329,7 @@ func (s *Server) agentSync(w http.ResponseWriter, r *http.Request) {
 		_, err := tx.Exec(`INSERT INTO inbounds (id, node_id, remote_inbound_id, tag, remark, protocol, port, listen, enable, expiry_time, up, down, all_time, client_count, config_hash, first_seen_at, last_seen_at, missing_since, missing_sync_count, deleted_at)
 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, 0, NULL)
 ON CONFLICT(node_id, remote_inbound_id) DO UPDATE SET tag = excluded.tag, remark = excluded.remark, protocol = excluded.protocol, port = excluded.port, listen = excluded.listen, enable = excluded.enable, expiry_time = excluded.expiry_time, up = excluded.up, down = excluded.down, all_time = excluded.all_time, client_count = excluded.client_count, config_hash = excluded.config_hash, last_seen_at = excluded.last_seen_at, missing_since = NULL, missing_sync_count = 0, deleted_at = NULL`,
-			newID(), principal.NodeID, remoteInboundID, inbound.Tag, inbound.Remark, inbound.Protocol, inbound.Port, inbound.Listen, boolInt(inbound.Enable), expiry, inbound.Up, inbound.Down, inbound.AllTime, len(inbound.Clients), inbound.ConfigHash, observedAt.Format(time.RFC3339Nano), observedAt.Format(time.RFC3339Nano))
+			newID(), principal.NodeID, remoteInboundID, inbound.Tag, inbound.Remark, inbound.Protocol, inbound.Port, inbound.Listen, boolInt(inbound.Enable), expiry, inbound.Up, inbound.Down, inbound.AllTime, len(incomingClientIDs), inbound.ConfigHash, observedAt.Format(time.RFC3339Nano), observedAt.Format(time.RFC3339Nano))
 		if err != nil {
 			s.failSync(w, tx, syncRunID, fmt.Errorf("upsert inbound %s: %w", remoteInboundID, err))
 			return
@@ -335,12 +339,39 @@ ON CONFLICT(node_id, remote_inbound_id) DO UPDATE SET tag = excluded.tag, remark
 			s.failSync(w, tx, syncRunID, fmt.Errorf("find inbound %s: %w", remoteInboundID, err))
 			return
 		}
+		var inboundUserID, inboundKind, storedClientSet string
+		if err := tx.QueryRow(`SELECT COALESCE(user_id, ''), kind, COALESCE(client_set_json, '[]') FROM inbounds WHERE id = ?`, inboundID).
+			Scan(&inboundUserID, &inboundKind, &storedClientSet); err != nil {
+			s.failSync(w, tx, syncRunID, fmt.Errorf("read inbound client state %s: %w", remoteInboundID, err))
+			return
+		}
+		previousClientIDs, err := decodeClientSet(storedClientSet)
+		if err != nil {
+			// A malformed value should never make a sync fail.  Rebuild the
+			// baseline from the live rows and let this sync repair the JSON.
+			previousClientIDs = nil
+		}
+		existingClientIDs, err := readInboundClientIDsTx(tx, inboundID)
+		if err != nil {
+			s.failSync(w, tx, syncRunID, fmt.Errorf("read existing clients %s: %w", remoteInboundID, err))
+			return
+		}
+		if len(previousClientIDs) == 0 && len(existingClientIDs) > 0 {
+			previousClientIDs = existingClientIDs
+		}
+		replacementDetected := inbound.ClientsComplete && nodeType == "relay" && inboundUserID != "" &&
+			inboundKind != "infrastructure" && len(previousClientIDs) > 0 && len(incomingClientIDs) > 0 &&
+			clientSetsDisjoint(previousClientIDs, incomingClientIDs)
 		resetDetected, err := detectTrafficReset(tx, inboundID, observedAt, inbound.AllTime)
 		if err != nil {
 			s.failSync(w, tx, syncRunID, fmt.Errorf("check traffic reset %s: %w", remoteInboundID, err))
 			return
 		}
 		if resetDetected {
+			if _, err := tx.Exec(`UPDATE inbounds SET traffic_baseline_up = ?, traffic_baseline_down = ?, traffic_baseline_all_time = ?, traffic_baseline_at = ? WHERE id = ?`, inbound.Up, inbound.Down, inbound.AllTime, observedAt.Format(time.RFC3339Nano), inboundID); err != nil {
+				s.failSync(w, tx, syncRunID, fmt.Errorf("reset inbound traffic baseline %s: %w", remoteInboundID, err))
+				return
+			}
 			err := insertNodeEventTx(tx, nodeEventSpec{
 				NodeID: principal.NodeID, EventType: "traffic_reset", Category: "node", Severity: "warning",
 				Title: "流量累计值发生回退", Message: "Inbound " + remoteInboundID + " 累计流量回退，已建立新基线",
@@ -365,9 +396,37 @@ ON CONFLICT(node_id, inbound_id, remote_client_id) DO UPDATE SET email = exclude
 				return
 			}
 		}
-		if err := s.ensureRelayInboundUser(tx, nodeType, inboundID, remoteInboundID, inbound, observedAt); err != nil {
+		if inbound.ClientsComplete {
+			if _, err := deleteStaleClientsTx(tx, inboundID, incomingClientIDs); err != nil {
+				s.failSync(w, tx, syncRunID, fmt.Errorf("remove deleted clients %s: %w", remoteInboundID, err))
+				return
+			}
+			clientSet := incomingClientIDs
+			if len(clientSet) == 0 {
+				// Keep the last non-empty identity set through an empty sync so a
+				// later replacement can still be detected after the old rows were
+				// purged.  This also repairs pre-024 databases on first use.
+				clientSet = previousClientIDs
+			}
+			encoded, encodeErr := encodeClientSet(clientSet)
+			if encodeErr != nil {
+				s.failSync(w, tx, syncRunID, fmt.Errorf("encode client state %s: %w", remoteInboundID, encodeErr))
+				return
+			}
+			if _, err := tx.Exec(`UPDATE inbounds SET client_set_json = ? WHERE id = ?`, encoded, inboundID); err != nil {
+				s.failSync(w, tx, syncRunID, fmt.Errorf("save client state %s: %w", remoteInboundID, err))
+				return
+			}
+		}
+		if err := s.ensureRelayInboundUserWithOptions(tx, nodeType, inboundID, remoteInboundID, inbound, observedAt, replacementDetected); err != nil {
 			s.failSync(w, tx, syncRunID, fmt.Errorf("ensure business user for inbound %s: %w", remoteInboundID, err))
 			return
+		}
+		if replacementDetected {
+			if err := insertClientReplacementEventTx(tx, principal.NodeID, inboundID, inboundUserID, previousClientIDs, incomingClientIDs, observedAt); err != nil {
+				s.failSync(w, tx, syncRunID, fmt.Errorf("record client replacement %s: %w", remoteInboundID, err))
+				return
+			}
 		}
 		resetFlag := 0
 		if resetDetected {
@@ -444,11 +503,168 @@ WHERE dedupe_key = ? AND event_status NOT IN ('resolved', 'dismissed')`, now, no
 	writeSuccess(w, map[string]any{"sync_id": payload.SyncID, "status": "success", "inboundCount": len(payload.Inbounds), "clientCount": clientCount, "idempotent": false})
 }
 
+func readInboundClientIDsTx(tx *sql.Tx, inboundID string) ([]string, error) {
+	rows, err := tx.Query(`SELECT remote_client_id FROM clients WHERE inbound_id = ? AND TRIM(remote_client_id) <> '' ORDER BY remote_client_id`, inboundID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	ids := make([]string, 0)
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return normalizeClientIDStrings(ids), nil
+}
+
+func normalizeClientIDs(clients []agentClientPayload) []string {
+	ids := make([]string, 0, len(clients))
+	for _, client := range clients {
+		if id := strings.TrimSpace(client.RemoteID); id != "" {
+			ids = append(ids, id)
+		}
+	}
+	return normalizeClientIDStrings(ids)
+}
+
+func normalizeClientIDStrings(ids []string) []string {
+	seen := make(map[string]struct{}, len(ids))
+	result := make([]string, 0, len(ids))
+	for _, value := range ids {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		if _, exists := seen[value]; exists {
+			continue
+		}
+		seen[value] = struct{}{}
+		result = append(result, value)
+	}
+	sort.Strings(result)
+	return result
+}
+
+func decodeClientSet(value string) ([]string, error) {
+	if strings.TrimSpace(value) == "" {
+		return nil, nil
+	}
+	var ids []string
+	if err := json.Unmarshal([]byte(value), &ids); err != nil {
+		return nil, err
+	}
+	return normalizeClientIDStrings(ids), nil
+}
+
+func encodeClientSet(ids []string) (string, error) {
+	encoded, err := json.Marshal(normalizeClientIDStrings(ids))
+	if err != nil {
+		return "", err
+	}
+	return string(encoded), nil
+}
+
+func clientSetsDisjoint(left, right []string) bool {
+	if len(left) == 0 || len(right) == 0 {
+		return false
+	}
+	seen := make(map[string]struct{}, len(left))
+	for _, value := range left {
+		seen[value] = struct{}{}
+	}
+	for _, value := range right {
+		if _, exists := seen[value]; exists {
+			return false
+		}
+	}
+	return true
+}
+
+func deleteStaleClientsTx(tx *sql.Tx, inboundID string, incomingIDs []string) (int64, error) {
+	incoming := make(map[string]struct{}, len(incomingIDs))
+	for _, id := range incomingIDs {
+		incoming[id] = struct{}{}
+	}
+	rows, err := tx.Query(`SELECT id, remote_client_id FROM clients WHERE inbound_id = ?`, inboundID)
+	if err != nil {
+		return 0, err
+	}
+	staleIDs := make([]string, 0)
+	for rows.Next() {
+		var id, remoteID string
+		if err := rows.Scan(&id, &remoteID); err != nil {
+			return 0, err
+		}
+		if _, exists := incoming[strings.TrimSpace(remoteID)]; !exists {
+			staleIDs = append(staleIDs, id)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return 0, err
+	}
+	if err := rows.Close(); err != nil {
+		return 0, err
+	}
+	var removed int64
+	for _, id := range staleIDs {
+		result, err := tx.Exec(`DELETE FROM clients WHERE id = ?`, id)
+		if err != nil {
+			return removed, err
+		}
+		if count, err := result.RowsAffected(); err == nil {
+			removed += count
+		}
+	}
+	return removed, nil
+}
+
+func clientSetHash(ids []string) string {
+	encoded, _ := encodeClientSet(ids)
+	hash := sha256.Sum256([]byte(encoded))
+	return hex.EncodeToString(hash[:])
+}
+
+func insertClientReplacementEventTx(tx *sql.Tx, nodeID, inboundID, userID string, oldClientIDs, newClientIDs []string, observedAt time.Time) error {
+	var inboundName, userName string
+	if err := tx.QueryRow(`SELECT COALESCE(NULLIF(i.remark, ''), NULLIF(i.tag, ''), i.remote_inbound_id), COALESCE(u.display_name, '')
+FROM inbounds i LEFT JOIN users u ON u.id = i.user_id WHERE i.id = ?`, inboundID).Scan(&inboundName, &userName); err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return fmt.Errorf("read replacement event context: %w", err)
+	}
+	if userName == "" {
+		userName = userID
+	}
+	if inboundName == "" {
+		inboundName = inboundID
+	}
+	payload := map[string]any{
+		"inboundId": inboundID, "userId": userID, "inboundName": inboundName,
+		"userName":       userName,
+		"oldClientCount": len(oldClientIDs), "newClientCount": len(newClientIDs),
+		"oldClientSetHash": clientSetHash(oldClientIDs), "clientSetHash": clientSetHash(newClientIDs),
+	}
+	return insertNodeEventTx(tx, nodeEventSpec{
+		NodeID: nodeID, EventType: "client_set_replacement_detected", Category: "business", Severity: "warning",
+		Title: "检测到客户更换，待确认", Message: fmt.Sprintf("Inbound「%s」的 Client 已全部更换。确认后将关闭旧用户的路径和流量，仅保留账务记录，并创建新用户。", inboundName),
+		RequiresAction: true, EventStatus: "open", ResourceType: "inbound", ResourceID: inboundID, ActionType: "reset_user",
+		Payload: payload, DedupeKey: "client-replacement:" + inboundID + ":" + clientSetHash(newClientIDs), Source: "agent", CorrelationID: inboundID, OccurredAt: observedAt,
+	})
+}
+
 // ensureRelayInboundUser keeps the business rule that one relay-node Inbound
 // is one central business user. The Inbound identifies the user and owns its
 // route and traffic, while its enabled Clients determine the user's expiry.
 // This deliberately does not merge equal Email values across Inbounds/nodes.
 func (s *Server) ensureRelayInboundUser(tx *sql.Tx, nodeType, inboundID, remoteInboundID string, inbound agentInboundPayload, observedAt time.Time) error {
+	return s.ensureRelayInboundUserWithOptions(tx, nodeType, inboundID, remoteInboundID, inbound, observedAt, false)
+}
+
+func (s *Server) ensureRelayInboundUserWithOptions(tx *sql.Tx, nodeType, inboundID, remoteInboundID string, inbound agentInboundPayload, observedAt time.Time, suppressRenewalCandidate bool) error {
 	if nodeType != "relay" {
 		// A landing/unknown node may have been synchronized by an older
 		// version that incorrectly attached its Inbound to a business user.
@@ -498,7 +714,7 @@ VALUES (?, ?, ?, ?, ?, ?)`, userID, inboundDisplayName(inbound, remoteInboundID)
 			Scan(&oldExpiry, &billingCycle, &billingAmount, &monthlyFee); err != nil {
 			return fmt.Errorf("read previous user billing state: %w", err)
 		}
-		if oldExpiry != "" && state.ExpiryText != "" {
+		if !suppressRenewalCandidate && oldExpiry != "" && state.ExpiryText != "" {
 			oldTime, oldErr := time.Parse(time.RFC3339Nano, oldExpiry)
 			newTime, newErr := time.Parse(time.RFC3339Nano, state.ExpiryText)
 			if oldErr == nil && newErr == nil && newTime.After(oldTime) {
@@ -722,13 +938,75 @@ WHERE node_id = ? AND deleted_at IS NULL AND (last_seen_at IS NULL OR last_seen_
 		if _, err := tx.Exec(`UPDATE inbounds SET deleted_at = ? WHERE id = ? AND deleted_at IS NULL`, observedAtText, inbound.id); err != nil {
 			return fmt.Errorf("archive inbound %s: %w", inbound.remoteID, err)
 		}
+		if err := s.cleanupArchivedInboundTx(tx, inbound.id, observedAt); err != nil {
+			return fmt.Errorf("clean up archived inbound %s: %w", inbound.remoteID, err)
+		}
 		if err := insertNodeEventTx(tx, nodeEventSpec{
 			NodeID: nodeID, EventType: "inbound_archived", Category: "node", Severity: "warning",
-			Title: "Inbound 已归档", Message: "Inbound " + label + " 连续三次同步缺失，已归档并保留历史数据",
+			Title: "Inbound 已归档", Message: "Inbound " + label + " 连续三次同步缺失，已归档并清理运营数据，账务记录继续保留",
 			ResourceType: "inbound", ResourceID: inbound.id, ActionType: "inspect_inbound", Source: "agent", OccurredAt: observedAt,
 		}); err != nil {
 			return fmt.Errorf("record inbound archive %s: %w", inbound.remoteID, err)
 		}
+	}
+	return nil
+}
+
+// cleanupArchivedInboundTx removes operational state that belongs exclusively
+// to an Inbound which has disappeared from a complete Agent snapshot. Billing
+// records are kept on the user row. If the user still has another live relay
+// Inbound, its shared path remains active; otherwise the path is closed so the
+// orphan cleanup that follows this sync can retire the user safely.
+func (s *Server) cleanupArchivedInboundTx(tx *sql.Tx, inboundID string, observedAt time.Time) error {
+	nowText := observedAt.UTC().Format(time.RFC3339Nano)
+	var userID string
+	if err := tx.QueryRow(`SELECT COALESCE(user_id, '') FROM inbounds WHERE id = ?`, inboundID).Scan(&userID); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`DELETE FROM clients WHERE inbound_id = ?`, inboundID); err != nil {
+		return fmt.Errorf("delete clients: %w", err)
+	}
+	if _, err := deleteInboundTrafficTx(tx, inboundID); err != nil {
+		return fmt.Errorf("delete traffic snapshots: %w", err)
+	}
+	if userID == "" {
+		return nil
+	}
+	if _, err := tx.Exec(`UPDATE user_inbounds SET active_to = ? WHERE user_id = ? AND inbound_id = ? AND active_to IS NULL`, nowText, userID, inboundID); err != nil {
+		return fmt.Errorf("close inbound mapping: %w", err)
+	}
+	var remainingAssociations int
+	if err := tx.QueryRow(`SELECT COUNT(*)
+FROM user_inbounds ui JOIN inbounds i ON i.id = ui.inbound_id
+WHERE ui.user_id = ? AND ui.active_to IS NULL AND i.deleted_at IS NULL AND i.kind = 'user'`, userID).Scan(&remainingAssociations); err != nil {
+		return fmt.Errorf("count remaining user inbounds: %w", err)
+	}
+	if remainingAssociations > 0 {
+		if err := closeRenewalCandidatesForInboundTx(tx, userID, inboundID, nowText); err != nil {
+			return err
+		}
+		return nil
+	}
+	if _, err := tx.Exec(`UPDATE user_paths SET active_to = ?, updated_at = ? WHERE user_id = ? AND active_to IS NULL`, nowText, nowText, userID); err != nil {
+		return fmt.Errorf("close user paths: %w", err)
+	}
+	if _, err := tx.Exec(`UPDATE user_routes SET is_primary = 0, active_to = ?, route_exit_ip_id = NULL WHERE user_id = ? AND active_to IS NULL`, nowText, userID); err != nil {
+		return fmt.Errorf("close user routes: %w", err)
+	}
+	return nil
+}
+
+func closeRenewalCandidatesForInboundTx(tx *sql.Tx, userID, inboundID, nowText string) error {
+	if _, err := tx.Exec(`UPDATE user_renewal_candidates SET status = 'rejected', processed_at = ?,
+notes = CASE WHEN COALESCE(notes, '') = '' THEN '自动关闭：客户已更换' ELSE notes || char(10) || '自动关闭：客户已更换' END
+WHERE user_id = ? AND inbound_id = ? AND status = 'pending'`, nowText, userID, inboundID); err != nil {
+		return fmt.Errorf("close renewal candidates: %w", err)
+	}
+	if _, err := tx.Exec(`UPDATE node_events SET requires_action = 0, event_status = 'resolved', acknowledged = 1,
+read_at = COALESCE(read_at, ?), resolved_at = COALESCE(resolved_at, ?)
+WHERE event_type = 'renewal_candidate_detected' AND resource_type = 'renewal' AND event_status NOT IN ('resolved', 'dismissed')
+  AND resource_id IN (SELECT id FROM user_renewal_candidates WHERE user_id = ? AND inbound_id = ? AND status = 'rejected')`, nowText, nowText, userID, inboundID); err != nil {
+		return fmt.Errorf("close renewal events: %w", err)
 	}
 	return nil
 }

@@ -387,3 +387,29 @@ export function resolveEvent(id: string) {
     method: 'post'
   });
 }
+
+export function resetUserFromReplacementEvent(id: string) {
+  return request<{
+    id: string;
+    resolved: boolean;
+    inboundId: string;
+    oldUserId: string;
+    newUserId: string;
+    removedTrafficSamples: number;
+  }>({
+    url: `/events/${encodeURIComponent(id)}/reset-user`,
+    method: 'post'
+  });
+}
+
+export function resetInboundUser(id: string) {
+  return request<{
+    inboundId: string;
+    oldUserId: string;
+    newUserId: string;
+    removedTrafficSamples: number;
+  }>({
+    url: `/inbounds/${encodeURIComponent(id)}/reset-user`,
+    method: 'post'
+  });
+}

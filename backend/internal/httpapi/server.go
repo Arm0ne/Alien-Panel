@@ -146,8 +146,10 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /api/events/summary", s.requireAuth(http.HandlerFunc(s.eventSummary)))
 	mux.Handle("POST /api/events/read-all", s.requireAuth(http.HandlerFunc(s.markAllEventsRead)))
 	mux.Handle("POST /api/events/{id}/read", s.requireAuth(http.HandlerFunc(s.markEventRead)))
+	mux.Handle("POST /api/events/{id}/reset-user", s.requireAuth(http.HandlerFunc(s.resetUserFromReplacementEvent)))
 	mux.Handle("POST /api/events/{id}/resolve", s.requireAuth(http.HandlerFunc(s.resolveEvent)))
 	mux.Handle("GET /api/events", s.requireAuth(http.HandlerFunc(s.events)))
+	mux.Handle("POST /api/inbounds/{id}/reset-user", s.requireAuth(http.HandlerFunc(s.resetInboundUser)))
 	mux.Handle("GET /api/system/backups/download", s.requireAuth(http.HandlerFunc(s.downloadBackup)))
 	mux.Handle("POST /api/system/restore", s.requireAuth(http.HandlerFunc(s.restoreBackup)))
 
@@ -422,7 +424,9 @@ WHERE ` + strings.Join(where, " AND ")
 COALESCE(i.node_id, ''), COALESCE(n.name, ''), COALESCE(i.tag, ''),
 COALESCE((SELECT r.name FROM user_routes ur JOIN routes r ON r.id = ur.route_id
  WHERE ur.user_id = u.id AND ur.is_primary = 1 AND ur.active_to IS NULL ORDER BY ur.active_from DESC LIMIT 1), ''),
-COALESCE(i.client_count, 0), COALESCE(i.up, 0) + COALESCE(i.down, 0),
+COALESCE(i.client_count, 0),
+(CASE WHEN COALESCE(i.up, 0) > COALESCE(i.traffic_baseline_up, 0) THEN COALESCE(i.up, 0) - COALESCE(i.traffic_baseline_up, 0) ELSE 0 END
+ + CASE WHEN COALESCE(i.down, 0) > COALESCE(i.traffic_baseline_down, 0) THEN COALESCE(i.down, 0) - COALESCE(i.traffic_baseline_down, 0) ELSE 0 END),
 COALESCE((SELECT MAX(NULLIF(c.last_online, '')) FROM clients c WHERE c.inbound_id = i.id), ''),
 COALESCE((SELECT n2.name FROM user_paths p LEFT JOIN nodes n2 ON n2.id = p.landing_node_id WHERE p.user_id = u.id AND p.active_to IS NULL LIMIT 1), ''),
 COALESCE((SELECT COALESCE(NULLIF(li.tag, ''), NULLIF(li.remote_inbound_id, ''), '') FROM user_paths p LEFT JOIN inbounds li ON li.id = p.landing_inbound_id WHERE p.user_id = u.id AND p.active_to IS NULL LIMIT 1), ''),
@@ -518,7 +522,10 @@ COALESCE(SUM(CASE WHEN u.status = 'expired' THEN 1 ELSE 0 END), 0),
 COALESCE(SUM(CASE WHEN u.status = 'disabled' THEN 1 ELSE 0 END), 0),
 COALESCE(SUM(CASE WHEN u.status = 'active' AND COALESCE(u.billing_type, 'paid') = 'paid' THEN 1 ELSE 0 END), 0),
 COALESCE(SUM(CASE WHEN u.status = 'active' AND COALESCE(u.billing_type, 'paid') = 'free' THEN 1 ELSE 0 END), 0),
-COALESCE(SUM(COALESCE(i.up, 0) + COALESCE(i.down, 0)), 0)
+COALESCE(SUM(
+  CASE WHEN COALESCE(i.up, 0) > COALESCE(i.traffic_baseline_up, 0) THEN COALESCE(i.up, 0) - COALESCE(i.traffic_baseline_up, 0) ELSE 0 END
+  + CASE WHEN COALESCE(i.down, 0) > COALESCE(i.traffic_baseline_down, 0) THEN COALESCE(i.down, 0) - COALESCE(i.traffic_baseline_down, 0) ELSE 0 END
+), 0)
 `+base+` GROUP BY n.id, n.name, n.type, n.health_status, n.sync_status, n.enabled
 ORDER BY CASE WHEN n.id IS NULL THEN 1 ELSE 0 END, COALESCE(n.name, '') ASC LIMIT ? OFFSET ?`, append(append([]any{unassignedUserGroupID}, args...), query.pageSize, query.offset)...)
 	if err != nil {
@@ -916,7 +923,11 @@ func (s *Server) readUserDetail(id string) (map[string]any, error) {
 	var up, down, allTime int64
 	err := s.db.QueryRow(`SELECT u.id, u.display_name, u.status, COALESCE(u.billing_type, 'paid'), COALESCE(u.free_reason, ''), u.monthly_fee, u.currency, COALESCE(u.notes, ''), COALESCE(u.expiry_time, ''),
 COALESCE(i.id, ''), COALESCE(i.remote_inbound_id, ''), COALESCE(i.tag, ''), COALESCE(i.remark, ''), COALESCE(i.protocol, ''), COALESCE(i.port, 0), COALESCE(i.enable, 0),
-COALESCE(i.client_count, 0), COALESCE(i.up, 0), COALESCE(i.down, 0), COALESCE(i.all_time, 0), COALESCE(i.last_seen_at, ''),
+COALESCE(i.client_count, 0),
+CASE WHEN COALESCE(i.up, 0) > COALESCE(i.traffic_baseline_up, 0) THEN COALESCE(i.up, 0) - COALESCE(i.traffic_baseline_up, 0) ELSE 0 END,
+CASE WHEN COALESCE(i.down, 0) > COALESCE(i.traffic_baseline_down, 0) THEN COALESCE(i.down, 0) - COALESCE(i.traffic_baseline_down, 0) ELSE 0 END,
+CASE WHEN COALESCE(i.all_time, 0) > COALESCE(i.traffic_baseline_all_time, 0) THEN COALESCE(i.all_time, 0) - COALESCE(i.traffic_baseline_all_time, 0) ELSE 0 END,
+COALESCE(i.last_seen_at, ''),
 COALESCE(n.id, ''), COALESCE(n.name, ''), COALESCE(n.type, '')
 FROM users u
 LEFT JOIN user_inbounds ui ON ui.user_id = u.id AND ui.is_primary = 1 AND ui.active_to IS NULL
@@ -1228,7 +1239,10 @@ ORDER BY COALESCE(sr.finished_at, sr.started_at) DESC LIMIT 1), ''),
 (SELECT COUNT(*) FROM clients c
  JOIN inbounds i ON i.id = c.inbound_id AND i.node_id = n.id AND i.kind = 'user' AND i.deleted_at IS NULL
  WHERE c.enable = 1),
-COALESCE((SELECT SUM(COALESCE(i.up, 0) + COALESCE(i.down, 0)) FROM inbounds i WHERE i.node_id = n.id AND i.deleted_at IS NULL), 0),
+COALESCE((SELECT SUM(
+  CASE WHEN COALESCE(i.up, 0) > COALESCE(i.traffic_baseline_up, 0) THEN COALESCE(i.up, 0) - COALESCE(i.traffic_baseline_up, 0) ELSE 0 END
+  + CASE WHEN COALESCE(i.down, 0) > COALESCE(i.traffic_baseline_down, 0) THEN COALESCE(i.down, 0) - COALESCE(i.traffic_baseline_down, 0) ELSE 0 END
+) FROM inbounds i WHERE i.node_id = n.id AND i.deleted_at IS NULL), 0),
 n.enabled
 FROM nodes n WHERE n.id = ? AND n.deleted_at IS NULL`, id).Scan(&nodeID, &nodeKey, &name, &nodeType, &status, &syncStatus, &lastSyncError,
 		&hostname, &managementURL, &publicIP, &region, &provider, &panelBasePath, &agentVersion, &xrayVersion,
@@ -1263,7 +1277,10 @@ FROM nodes n WHERE n.id = ? AND n.deleted_at IS NULL`, id).Scan(&nodeID, &nodeKe
 	inbounds := make([]map[string]any, 0)
 	rows, err := s.db.Query(`SELECT i.id, i.remote_inbound_id, COALESCE(i.tag, ''), COALESCE(i.remark, ''),
 COALESCE(i.kind, ''), COALESCE(i.protocol, ''), COALESCE(i.port, 0), COALESCE(i.listen, ''), i.enable,
-COALESCE(i.expiry_time, ''), COALESCE(i.client_count, 0), COALESCE(i.up, 0), COALESCE(i.down, 0), COALESCE(i.all_time, 0),
+COALESCE(i.expiry_time, ''), COALESCE(i.client_count, 0),
+CASE WHEN COALESCE(i.up, 0) > COALESCE(i.traffic_baseline_up, 0) THEN COALESCE(i.up, 0) - COALESCE(i.traffic_baseline_up, 0) ELSE 0 END,
+CASE WHEN COALESCE(i.down, 0) > COALESCE(i.traffic_baseline_down, 0) THEN COALESCE(i.down, 0) - COALESCE(i.traffic_baseline_down, 0) ELSE 0 END,
+CASE WHEN COALESCE(i.all_time, 0) > COALESCE(i.traffic_baseline_all_time, 0) THEN COALESCE(i.all_time, 0) - COALESCE(i.traffic_baseline_all_time, 0) ELSE 0 END,
 COALESCE(i.last_seen_at, ''), COALESCE(i.deleted_at, '')
 FROM inbounds i WHERE i.node_id = ? AND i.deleted_at IS NULL AND i.missing_since IS NULL ORDER BY i.tag ASC, i.remote_inbound_id ASC`, id)
 	if err != nil {

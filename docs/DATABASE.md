@@ -4,7 +4,7 @@
 
 中央使用 SQLite WAL，默认数据库路径为 `/var/lib/xpanel-central/panel.db`（Docker 中位于 `central-data` volume）。外键和 busy timeout 已在 `backend/internal/db/db.go` 打开。服务启动时读取嵌入的迁移文件并按文件名顺序执行，每个文件只记录一次。
 
-当前迁移到 `022_performance_indexes.sql`，空库和已有库都必须通过迁移测试。生产包不携带任何真实 `panel.db`、WAL/SHM 文件或备份。
+当前迁移到 `024_client_lifecycle.sql`，空库和已有库都必须通过迁移测试。生产包不携带任何真实 `panel.db`、WAL/SHM 文件或备份。
 
 ## 2. 核心表关系
 
@@ -28,6 +28,8 @@ nodes ── sync_runs ── traffic_snapshots
 - `user_path_exit_ips` 的 `(user_path_id, exit_ip_id)` 唯一，`position` 保留选择顺序，路径删除时关联记录级联删除。
 - `user_paths.exit_ip_id` 是第一出口 IP兼容列，迁移 020 会从它回填一条关联。
 - 收费记录和审计日志是业务历史，不随节点删除而物理删除。
+- 完整 Agent 同步会删除已不存在的 Client；Inbound 的 `client_set_json` 保留最近一组非空 Client ID，用于识别跨空同步的客户更换。
+- 确认客户更换后，旧用户软删除并保留 `user_billing_records`，当前路径和流量快照关闭/清理；Inbound 记录保留为技术资源，并用 `traffic_baseline_*` 作为新用户的流量起点。
 - `user_billing_records.origin=historical_import` 表示一次性历史账单导入；`verification_status=unverified` 的待核实记录保持在历史中，但不计入现金或服务期收入，核验后才进入财务统计。
 
 ## 3. 备份
@@ -48,7 +50,7 @@ sudo docker compose -p alien-panel -f /opt/alien-panel/deploy/docker-compose.yml
 
 ## 4. 升级迁移
 
-Docker 升级重新执行一键脚本即可；它不会覆盖 `/opt/alien-panel/.env` 或 `central-data` volume。服务启动时会自动执行尚未应用的 SQLite 迁移，包括性能索引迁移 `022_performance_indexes.sql`。手动 systemd 部署时先备份，再执行：
+Docker 升级重新执行一键脚本即可；它不会覆盖 `/opt/alien-panel/.env` 或 `central-data` volume。服务启动时会自动执行尚未应用的 SQLite 迁移，包括性能索引迁移和客户生命周期迁移 `024_client_lifecycle.sql`。手动 systemd 部署时先备份，再执行：
 
 ```bash
 XPANEL_DATABASE=/var/lib/xpanel-central/panel.db \
