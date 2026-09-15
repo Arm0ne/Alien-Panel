@@ -94,3 +94,54 @@ func TestDashboardTrafficUsesBusinessInboundScope(t *testing.T) {
 		t.Fatalf("dashboard last activity = %v, want latest Client online time %s", users[0].(map[string]any)["lastActivityAt"], onlineAt.Format(time.RFC3339Nano))
 	}
 }
+
+func TestDashboardTrafficIgnoresSnapshotsWithoutLiveUserMetadata(t *testing.T) {
+	server, database := testServer(t)
+	now := time.Now().UTC().Truncate(time.Second)
+	from := now.Add(-3 * time.Hour)
+	baseline := from.Add(-time.Hour)
+	usage := from.Add(time.Hour)
+	nowText := now.Format(time.RFC3339Nano)
+
+	statements := []struct {
+		query string
+		args  []any
+	}{
+		{`INSERT INTO nodes (id, node_key, name, type, health_status, created_at, updated_at) VALUES ('dashboard-live-node', 'dashboard-live-node', '在线节点', 'relay', 'online', ?, ?)`, []any{nowText, nowText}},
+		{`INSERT INTO users (id, display_name, status, created_at, updated_at) VALUES ('dashboard-live-user', '在线用户', 'active', ?, ?)`, []any{nowText, nowText}},
+		{`INSERT INTO users (id, display_name, status, deleted_at, created_at, updated_at) VALUES ('dashboard-deleted-user', '已删除用户', 'disabled', ?, ?, ?)`, []any{nowText, nowText, nowText}},
+		{`INSERT INTO inbounds (id, node_id, remote_inbound_id, user_id, kind, first_seen_at) VALUES ('dashboard-live-inbound', 'dashboard-live-node', '1', 'dashboard-live-user', 'user', ?)`, []any{nowText}},
+		{`INSERT INTO inbounds (id, node_id, remote_inbound_id, user_id, kind, first_seen_at) VALUES ('dashboard-deleted-inbound', 'dashboard-live-node', '2', 'dashboard-deleted-user', 'user', ?)`, []any{nowText}},
+		{`INSERT INTO user_inbounds (id, user_id, inbound_id, is_primary, active_from) VALUES ('dashboard-live-mapping', 'dashboard-live-user', 'dashboard-live-inbound', 1, ?)`, []any{nowText}},
+		{`INSERT INTO user_inbounds (id, user_id, inbound_id, is_primary, active_from) VALUES ('dashboard-deleted-mapping', 'dashboard-deleted-user', 'dashboard-deleted-inbound', 1, ?)`, []any{nowText}},
+		{`INSERT INTO traffic_snapshots (id, node_id, inbound_id, collected_at, up, down, all_time, source) VALUES ('dashboard-live-base', 'dashboard-live-node', 'dashboard-live-inbound', ?, 10, 20, 30, 'xpanel')`, []any{baseline.Format(time.RFC3339Nano)}},
+		{`INSERT INTO traffic_snapshots (id, node_id, inbound_id, collected_at, up, down, all_time, source) VALUES ('dashboard-live-usage', 'dashboard-live-node', 'dashboard-live-inbound', ?, 30, 50, 80, 'xpanel')`, []any{usage.Format(time.RFC3339Nano)}},
+		{`INSERT INTO traffic_snapshots (id, node_id, inbound_id, collected_at, up, down, all_time, source) VALUES ('dashboard-deleted-base', 'dashboard-live-node', 'dashboard-deleted-inbound', ?, 1000, 2000, 3000, 'xpanel')`, []any{baseline.Format(time.RFC3339Nano)}},
+		{`INSERT INTO traffic_snapshots (id, node_id, inbound_id, collected_at, up, down, all_time, source) VALUES ('dashboard-deleted-usage', 'dashboard-live-node', 'dashboard-deleted-inbound', ?, 9000, 12000, 21000, 'xpanel')`, []any{usage.Format(time.RFC3339Nano)}},
+	}
+	for _, statement := range statements {
+		if _, err := database.Exec(statement.query, statement.args...); err != nil {
+			t.Fatalf("seed deleted-user dashboard data: %v", err)
+		}
+	}
+
+	ts := httptest.NewServer(server.Handler())
+	defer ts.Close()
+	login := doJSON(t, ts.Client(), http.MethodPost, ts.URL+"/api/auth/login", "", map[string]string{"userName": "admin", "password": "test-password"})
+	token := login["data"].(map[string]any)["token"].(string)
+	query := url.Values{"range": {"custom"}, "from": {from.Format(time.RFC3339Nano)}, "to": {now.Format(time.RFC3339Nano)}}
+	response := doJSON(t, ts.Client(), http.MethodGet, ts.URL+"/api/dashboard?"+query.Encode(), token, nil)
+	if response["code"] != successCode {
+		t.Fatalf("dashboard response = %#v", response)
+	}
+
+	data := response["data"].(map[string]any)
+	traffic := data["traffic"].(map[string]any)
+	if traffic["totalBytes"] != float64(50) {
+		t.Fatalf("traffic = %#v, want deleted-user snapshot excluded", traffic)
+	}
+	users := data["userTrafficRanking"].([]any)
+	if len(users) != 1 || users[0].(map[string]any)["userId"] != "dashboard-live-user" {
+		t.Fatalf("user traffic ranking = %#v, want only live user", users)
+	}
+}

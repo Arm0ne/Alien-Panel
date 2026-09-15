@@ -425,6 +425,7 @@ func (s *Server) dashboardTraffic(from, to time.Time, spec dashboardRangeSpec, i
   SELECT i.id AS inbound_id
   FROM inbounds i
   JOIN nodes n ON n.id = i.node_id
+  JOIN users u ON u.id = i.user_id AND u.deleted_at IS NULL
   WHERE i.kind = 'user' AND i.deleted_at IS NULL
     AND n.type = 'relay' AND n.deleted_at IS NULL
     AND EXISTS (
@@ -515,12 +516,22 @@ ORDER BY inbound_id, collected_at`, from.Format(time.RFC3339Nano), to.Format(tim
 		if downDelta < 0 {
 			downDelta = 0
 		}
-		inbound := inbounds[snapshot.inboundID]
-		inboundTraffic := result.byInbound[snapshot.inboundID]
+		inbound, ok := inbounds[snapshot.inboundID]
+		inboundTraffic, trafficOK := result.byInbound[snapshot.inboundID]
+		if !ok || !trafficOK || inboundTraffic == nil {
+			// Keep malformed or stale snapshots from taking down the
+			// whole dashboard if their Inbound metadata disappeared.
+			previous = snapshot
+			continue
+		}
 		inboundTraffic.uploadBytes += uploadDelta
 		inboundTraffic.downloadBytes += downDelta
 		inboundTraffic.totalBytes += uploadDelta + downDelta
 		nodeTraffic := result.byNode[inbound.nodeID]
+		if nodeTraffic == nil {
+			previous = snapshot
+			continue
+		}
 		nodeTraffic.uploadBytes += uploadDelta
 		nodeTraffic.downloadBytes += downDelta
 		nodeTraffic.totalBytes += uploadDelta + downDelta
