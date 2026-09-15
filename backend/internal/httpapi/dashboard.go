@@ -205,10 +205,21 @@ func dashboardBucketLabel(bucket time.Duration) string {
 
 func (s *Server) dashboard(w http.ResponseWriter, r *http.Request) {
 	now := time.Now().UTC()
-	s.refreshOperationalStatuses(now)
 	spec, from, to, err := parseDashboardRange(r, now)
 	if err != nil {
 		writeFailure(w, http.StatusBadRequest, validationCode, err.Error())
+		return
+	}
+	cacheKey := r.URL.Query().Encode()
+	s.dashboardCacheMu.Lock()
+	defer s.dashboardCacheMu.Unlock()
+	for key, cached := range s.dashboardCache {
+		if !now.Before(cached.expiresAt) {
+			delete(s.dashboardCache, key)
+		}
+	}
+	if cached, ok := s.dashboardCache[cacheKey]; ok && now.Before(cached.expiresAt) {
+		writeSuccess(w, cached.data)
 		return
 	}
 	traffic, err := s.dashboardTraffic(from, to, spec)
@@ -219,10 +230,15 @@ func (s *Server) dashboard(w http.ResponseWriter, r *http.Request) {
 	}
 	todaySpec := dashboardRanges["today"]
 	todayStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
-	todayTraffic, err := s.dashboardTraffic(todayStart, now, todaySpec)
-	if err != nil {
-		writeFailure(w, http.StatusInternalServerError, internalErrorCode, "could not read today traffic")
-		return
+	var todayTraffic dashboardTrafficAggregate
+	if spec.name == todaySpec.name && from.Equal(todayStart) && to.Equal(now) {
+		todayTraffic = traffic
+	} else {
+		todayTraffic, err = s.dashboardTraffic(todayStart, now, todaySpec)
+		if err != nil {
+			writeFailure(w, http.StatusInternalServerError, internalErrorCode, "could not read today traffic")
+			return
+		}
 	}
 	monthStart := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC)
 	monthSpec := dashboardRangeSpec{name: "month", duration: now.Sub(monthStart), bucket: 24 * time.Hour}
@@ -294,6 +310,7 @@ func (s *Server) dashboard(w http.ResponseWriter, r *http.Request) {
 		"events":             events,
 		"finance":            finance,
 	}
+	s.dashboardCache[cacheKey] = dashboardCacheEntry{data: response, expiresAt: now.Add(dashboardCacheTTL)}
 	writeSuccess(w, response)
 }
 
@@ -473,7 +490,7 @@ ORDER BY t.inbound_id, t.collected_at`, from.Format(time.RFC3339Nano), to.Format
 		inboundTraffic.uploadBytes += uploadDelta
 		inboundTraffic.downloadBytes += downDelta
 		inboundTraffic.totalBytes += uploadDelta + downDelta
-        nodeTraffic := result.byNode[inbound.nodeID]
+		nodeTraffic := result.byNode[inbound.nodeID]
 		nodeTraffic.uploadBytes += uploadDelta
 		nodeTraffic.downloadBytes += downDelta
 		nodeTraffic.totalBytes += uploadDelta + downDelta

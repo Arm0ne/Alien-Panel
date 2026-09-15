@@ -9,14 +9,14 @@ import { setupUnplugin } from './unplugin';
 import { setupHtmlPlugin } from './html';
 import { setupDevtoolsPlugin } from './devtools';
 
-export function setupVitePlugins(viteEnv: Env.ImportMeta, buildTime: string) {
+export function setupVitePlugins(viteEnv: Env.ImportMeta, buildTime: string, command: 'build' | 'serve') {
   const plugins: PluginOption = [
     vue(),
     vueJsx(),
     setupDevtoolsPlugin(viteEnv),
     setupElegantRouter(),
     setupUnocss(viteEnv),
-    ...setupUnplugin(viteEnv),
+    ...setupUnplugin(viteEnv, command),
     progress(),
     setupHtmlPlugin(buildTime),
     vueRootValidator()

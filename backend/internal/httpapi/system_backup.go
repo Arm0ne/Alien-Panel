@@ -126,6 +126,7 @@ func (s *Server) restoreBackup(w http.ResponseWriter, r *http.Request) {
 		writeFailure(w, http.StatusInternalServerError, internalErrorCode, "恢复失败，原数据已保留")
 		return
 	}
+	s.clearDashboardCache()
 	s.writeAuditLog(r, "system.database_restore", "database", "panel", nil, map[string]any{"restored": true})
 	previousBackup := ""
 	if result.PreviousBackup != "" {

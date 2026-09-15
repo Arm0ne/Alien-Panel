@@ -1011,8 +1011,10 @@ func TestOperationalStatusRefresh(t *testing.T) {
 	ts := httptest.NewServer(server.Handler())
 	defer ts.Close()
 	login := doJSON(t, ts.Client(), http.MethodPost, ts.URL+"/api/auth/login", "", map[string]string{"userName": "admin", "password": "test-password"})
-	token := login["data"].(map[string]any)["token"].(string)
-	_ = doJSON(t, ts.Client(), http.MethodGet, ts.URL+"/api/dashboard", token, nil)
+	if login["code"] != successCode {
+		t.Fatalf("login code = %v", login["code"])
+	}
+	server.refreshOperationalStatuses(now)
 	var expiredStatus, expiringStatus, activeStatus, nodeStatus string
 	queries := []struct {
 		query  string

@@ -34,11 +34,20 @@ const (
 )
 
 type Server struct {
-	cfg     config.Config
-	db      *sql.DB
-	logger  *slog.Logger
-	origins map[string]struct{}
-	dbMu    sync.RWMutex
+	cfg              config.Config
+	db               *sql.DB
+	logger           *slog.Logger
+	origins          map[string]struct{}
+	dbMu             sync.RWMutex
+	dashboardCacheMu sync.Mutex
+	dashboardCache   map[string]dashboardCacheEntry
+}
+
+const dashboardCacheTTL = 20 * time.Second
+
+type dashboardCacheEntry struct {
+	data      map[string]any
+	expiresAt time.Time
 }
 
 type principal struct {
@@ -54,7 +63,13 @@ func NewServer(cfg config.Config, database *sql.DB, logger *slog.Logger) (*Serve
 	if logger == nil {
 		logger = slog.Default()
 	}
-	server := &Server{cfg: cfg, db: database, logger: logger, origins: make(map[string]struct{}, len(cfg.CorsOrigins))}
+	server := &Server{
+		cfg:            cfg,
+		db:             database,
+		logger:         logger,
+		origins:        make(map[string]struct{}, len(cfg.CorsOrigins)),
+		dashboardCache: make(map[string]dashboardCacheEntry),
+	}
 	for _, origin := range cfg.CorsOrigins {
 		server.origins[origin] = struct{}{}
 	}
@@ -164,6 +179,12 @@ func (s *Server) Close() error {
 		return nil
 	}
 	return s.db.Close()
+}
+
+func (s *Server) clearDashboardCache() {
+	s.dashboardCacheMu.Lock()
+	defer s.dashboardCacheMu.Unlock()
+	s.dashboardCache = make(map[string]dashboardCacheEntry)
 }
 
 func (s *Server) ensureAdmin() error {
@@ -356,7 +377,6 @@ func (s *Server) updateAccount(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) users(w http.ResponseWriter, r *http.Request) {
-	s.refreshOperationalStatuses(time.Now().UTC())
 	query := parseListQuery(r)
 	where := []string{"u.deleted_at IS NULL", "i.id IS NOT NULL"}
 	args := make([]any, 0, 6)
@@ -446,7 +466,6 @@ const unassignedUserGroupID = "__unassigned__"
 // users with a current primary relay Inbound by that Inbound's node. Orphaned
 // users are cleaned up during Agent sync and are excluded from this view.
 func (s *Server) userGroups(w http.ResponseWriter, r *http.Request) {
-	s.refreshOperationalStatuses(time.Now().UTC())
 	query := parseListQuery(r)
 	where := []string{"u.deleted_at IS NULL", "i.id IS NOT NULL"}
 	args := make([]any, 0, 8)
@@ -752,7 +771,6 @@ func (s *Server) validateUserExists(id string) error {
 // Inbound and Client snapshot. It does not return X-Panel credentials or a
 // complete Xray configuration.
 func (s *Server) userDetail(w http.ResponseWriter, r *http.Request) {
-	s.refreshOperationalStatuses(time.Now().UTC())
 	id := strings.TrimSpace(r.PathValue("id"))
 	if id == "" {
 		writeFailure(w, http.StatusBadRequest, validationCode, "user id is required")
@@ -1057,7 +1075,6 @@ FROM traffic_snapshots WHERE inbound_id = ? ORDER BY collected_at DESC LIMIT 30`
 }
 
 func (s *Server) nodes(w http.ResponseWriter, r *http.Request) {
-	s.refreshOperationalStatuses(time.Now().UTC())
 	query := parseListQuery(r)
 	where := []string{"n.deleted_at IS NULL"}
 	args := make([]any, 0, 4)
@@ -1174,7 +1191,6 @@ func (s *Server) nodeListStats() (map[string]int, error) {
 // central operational history; no credentials or raw Xray configuration is
 // exposed here.
 func (s *Server) nodeDetail(w http.ResponseWriter, r *http.Request) {
-	s.refreshOperationalStatuses(time.Now().UTC())
 	id := strings.TrimSpace(r.PathValue("id"))
 	if id == "" {
 		writeFailure(w, http.StatusBadRequest, validationCode, "node id is required")
@@ -2873,7 +2889,6 @@ type financeResponse struct {
 }
 
 func (s *Server) finance(w http.ResponseWriter, r *http.Request) {
-	s.refreshOperationalStatuses(time.Now().UTC())
 	period := r.URL.Query().Get("period")
 	if period == "" {
 		period = time.Now().UTC().Format("2006-01")

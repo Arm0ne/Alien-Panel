@@ -8,7 +8,7 @@ import Components from 'unplugin-vue-components/vite';
 import { NaiveUiResolver } from 'unplugin-vue-components/resolvers';
 import { FileSystemIconLoader } from 'unplugin-icons/loaders';
 
-export function setupUnplugin(viteEnv: Env.ImportMeta) {
+export function setupUnplugin(viteEnv: Env.ImportMeta, command: 'build' | 'serve') {
   const { VITE_ICON_PREFIX, VITE_ICON_LOCAL_PREFIX } = viteEnv;
 
   const localIconPath = path.join(process.cwd(), 'src/assets/svg-icon');
@@ -28,7 +28,7 @@ export function setupUnplugin(viteEnv: Env.ImportMeta) {
       defaultClass: 'inline-block'
     }),
     Components({
-      dts: 'src/typings/components.d.ts',
+      dts: command === 'serve' ? 'src/typings/components.d.ts' : false,
       types: [{ from: 'vue-router', names: ['RouterLink', 'RouterView'] }],
       resolvers: [
         NaiveUiResolver(),

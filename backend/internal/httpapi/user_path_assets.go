@@ -13,7 +13,6 @@ import (
 // derived from the user itself; landing inbounds are infrastructure assets
 // and are deliberately never returned as business users.
 func (s *Server) userPathAssets(w http.ResponseWriter, r *http.Request) {
-	s.refreshOperationalStatuses(time.Now().UTC())
 	userID := strings.TrimSpace(r.PathValue("id"))
 	if userID == "" {
 		writeFailure(w, http.StatusBadRequest, validationCode, "user id is required")

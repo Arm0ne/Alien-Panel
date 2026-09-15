@@ -4,7 +4,7 @@
 
 中央使用 SQLite WAL，默认数据库路径为 `/var/lib/xpanel-central/panel.db`（Docker 中位于 `central-data` volume）。外键和 busy timeout 已在 `backend/internal/db/db.go` 打开。服务启动时读取嵌入的迁移文件并按文件名顺序执行，每个文件只记录一次。
 
-当前迁移到 `021_billing_history_import.sql`，空库和已有库都必须通过迁移测试。生产包不携带任何真实 `panel.db`、WAL/SHM 文件或备份。
+当前迁移到 `022_performance_indexes.sql`，空库和已有库都必须通过迁移测试。生产包不携带任何真实 `panel.db`、WAL/SHM 文件或备份。
 
 ## 2. 核心表关系
 
@@ -48,7 +48,7 @@ sudo docker compose -p alien-panel -f /opt/alien-panel/deploy/docker-compose.yml
 
 ## 4. 升级迁移
 
-Docker 升级重新执行一键脚本即可；它不会覆盖 `/opt/alien-panel/.env` 或 `central-data` volume。手动 systemd 部署时先备份，再执行：
+Docker 升级重新执行一键脚本即可；它不会覆盖 `/opt/alien-panel/.env` 或 `central-data` volume。服务启动时会自动执行尚未应用的 SQLite 迁移，包括性能索引迁移 `022_performance_indexes.sql`。手动 systemd 部署时先备份，再执行：
 
 ```bash
 XPANEL_DATABASE=/var/lib/xpanel-central/panel.db \

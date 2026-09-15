@@ -47,7 +47,12 @@ function Assert-LinuxElf([string]$Path) {
 if (-not $SkipFrontend) {
   Write-Host 'Building frontend...'
   Push-Location $Frontend
-  try { pnpm.cmd build } finally { Pop-Location }
+  try {
+    pnpm.cmd build
+    if ($LASTEXITCODE -ne 0) {
+      throw "Frontend build failed with exit code $LASTEXITCODE"
+    }
+  } finally { Pop-Location }
 }
 
 $BuiltDist = Join-Path $Frontend 'dist'
