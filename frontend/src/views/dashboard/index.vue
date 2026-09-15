@@ -348,7 +348,7 @@ onMounted(loadDashboard);
         </div>
 
         <div class="operations-main-grid mt-16px">
-          <NCard :bordered="false" size="small">
+          <NCard :bordered="false" size="small" class="operations-main-card">
             <template #header>
               <div class="font-600">业务流量趋势</div>
               <div class="mt-2px text-12px text-gray-400">{{ trendSubtitle }}</div>
@@ -360,9 +360,9 @@ onMounted(loadDashboard);
               v-if="!hasTrendData"
               description="当前范围暂无足够的流量快照"
               size="small"
-              class="h-260px flex-center"
+              class="operations-trend-empty flex-center"
             />
-            <div v-else ref="trendChartRef" class="h-260px w-full" />
+            <div v-else ref="trendChartRef" class="operations-trend-chart w-full" />
             <div
               v-if="hasTrendData"
               class="mt-12px flex flex-wrap items-center gap-x-18px gap-y-6px text-12px text-gray-500"
@@ -396,7 +396,7 @@ onMounted(loadDashboard);
             </NSpace>
           </NCard>
 
-          <NCard :bordered="false" size="small">
+          <NCard :bordered="false" size="small" class="operations-main-card">
             <template #header>
               <div class="font-600">节点流量排行</div>
               <div class="mt-2px text-12px text-gray-400">线路机用户 Inbound 的业务流量</div>
@@ -651,7 +651,16 @@ onMounted(loadDashboard);
   display: grid;
   grid-template-columns: minmax(0, 1fr);
   gap: 16px;
-  align-items: start;
+  align-items: stretch;
+}
+.operations-main-card :deep(.n-card-content) {
+  display: flex;
+  flex-direction: column;
+}
+.operations-trend-chart,
+.operations-trend-empty {
+  flex: 1;
+  min-height: 260px;
 }
 .operations-bottom-grid {
   display: grid;
