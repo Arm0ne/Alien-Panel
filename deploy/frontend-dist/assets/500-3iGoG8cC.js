@@ -1,0 +1,1 @@
+import{aa as e,ea as t,ma as n}from"./router-Cmj66Rpr.js";import{t as r}from"./exception-base-F625FAJB.js";var i=e({name:`500`,__name:`index`,setup(e){return(e,i)=>{let a=r;return n(),t(a,{type:`500`})}}});export{i as default};
