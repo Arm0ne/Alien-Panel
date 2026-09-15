@@ -25,8 +25,8 @@ func TestMigrateIsIdempotent(t *testing.T) {
 	if err := database.QueryRow(`SELECT COUNT(*) FROM schema_migrations`).Scan(&count); err != nil {
 		t.Fatalf("count migrations: %v", err)
 	}
-	if count != 22 {
-		t.Fatalf("migration count = %d, want 22", count)
+	if count != 23 {
+		t.Fatalf("migration count = %d, want 23", count)
 	}
 	var duplicateIndexCount int
 	if err := database.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name = 'idx_traffic_snapshots_inbound_collected'`).Scan(&duplicateIndexCount); err != nil {

@@ -222,7 +222,12 @@ func (s *Server) dashboard(w http.ResponseWriter, r *http.Request) {
 		writeSuccess(w, cached.data)
 		return
 	}
-	traffic, err := s.dashboardTraffic(from, to, spec)
+	inbounds, err := s.dashboardInbounds()
+	if err != nil {
+		writeFailure(w, http.StatusInternalServerError, internalErrorCode, "could not read dashboard users")
+		return
+	}
+	traffic, err := s.dashboardTraffic(from, to, spec, inbounds)
 	if err != nil {
 		s.logger.Error("dashboard traffic query", "error", err)
 		writeFailure(w, http.StatusInternalServerError, internalErrorCode, "could not read dashboard traffic")
@@ -234,7 +239,7 @@ func (s *Server) dashboard(w http.ResponseWriter, r *http.Request) {
 	if spec.name == todaySpec.name && from.Equal(todayStart) && to.Equal(now) {
 		todayTraffic = traffic
 	} else {
-		todayTraffic, err = s.dashboardTraffic(todayStart, now, todaySpec)
+		todayTraffic, err = s.dashboardTraffic(todayStart, now, todaySpec, inbounds)
 		if err != nil {
 			writeFailure(w, http.StatusInternalServerError, internalErrorCode, "could not read today traffic")
 			return
@@ -242,7 +247,7 @@ func (s *Server) dashboard(w http.ResponseWriter, r *http.Request) {
 	}
 	monthStart := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC)
 	monthSpec := dashboardRangeSpec{name: "month", duration: now.Sub(monthStart), bucket: 24 * time.Hour}
-	monthTraffic, err := s.dashboardTraffic(monthStart, now, monthSpec)
+	monthTraffic, err := s.dashboardTraffic(monthStart, now, monthSpec, inbounds)
 	if err != nil {
 		writeFailure(w, http.StatusInternalServerError, internalErrorCode, "could not read month traffic")
 		return
@@ -283,7 +288,7 @@ func (s *Server) dashboard(w http.ResponseWriter, r *http.Request) {
 		writeFailure(w, http.StatusInternalServerError, internalErrorCode, "could not read finance summary")
 		return
 	}
-	userRanking, err := s.dashboardUserRanking(traffic)
+	userRanking, err := s.dashboardUserRanking(traffic, inbounds)
 	if err != nil {
 		writeFailure(w, http.StatusInternalServerError, internalErrorCode, "could not read dashboard users")
 		return
@@ -400,14 +405,10 @@ WHERE i.kind = 'user' AND i.deleted_at IS NULL AND n.type = 'relay' AND n.delete
 	return result, rows.Err()
 }
 
-func (s *Server) dashboardTraffic(from, to time.Time, spec dashboardRangeSpec) (dashboardTrafficAggregate, error) {
+func (s *Server) dashboardTraffic(from, to time.Time, spec dashboardRangeSpec, inbounds map[string]dashboardInbound) (dashboardTrafficAggregate, error) {
 	result := dashboardTrafficAggregate{
 		trend:     dashboardTrafficTrend{Range: spec.name, From: from.Format(time.RFC3339Nano), To: to.Format(time.RFC3339Nano), Bucket: dashboardBucketLabel(spec.bucket), Points: make([]dashboardTrafficPoint, 0)},
 		byInbound: make(map[string]*dashboardInboundTraffic), byNode: make(map[string]*dashboardNodeTraffic),
-	}
-	inbounds, err := s.dashboardInbounds()
-	if err != nil {
-		return result, err
 	}
 	result.eligibleCount = len(inbounds)
 	for _, inbound := range inbounds {
@@ -417,14 +418,43 @@ func (s *Server) dashboardTraffic(from, to time.Time, spec dashboardRangeSpec) (
 	if len(inbounds) == 0 {
 		return result, nil
 	}
-	rows, err := s.db.Query(`SELECT t.inbound_id, t.collected_at, t.up, t.down, t.reset_detected
-FROM traffic_snapshots t JOIN inbounds i ON i.id = t.inbound_id JOIN nodes n ON n.id = i.node_id
-WHERE i.kind = 'user' AND i.deleted_at IS NULL AND n.type = 'relay' AND n.deleted_at IS NULL
-  AND EXISTS (SELECT 1 FROM user_inbounds ui WHERE ui.user_id = i.user_id AND ui.inbound_id = i.id AND ui.is_primary = 1 AND ui.active_to IS NULL)
-  AND ((t.collected_at >= ? AND t.collected_at <= ?) OR t.collected_at = (
-    SELECT MAX(p.collected_at) FROM traffic_snapshots p WHERE p.inbound_id = t.inbound_id AND p.collected_at < ?
-  ))
-ORDER BY t.inbound_id, t.collected_at`, from.Format(time.RFC3339Nano), to.Format(time.RFC3339Nano), from.Format(time.RFC3339Nano))
+	// Read only the requested range plus one baseline sample per inbound. The
+	// previous query applied an OR with a per-snapshot MAX() lookup, which made
+	// SQLite walk the full history even for a one-day dashboard.
+	rows, err := s.db.Query(`WITH eligible AS MATERIALIZED (
+  SELECT i.id AS inbound_id
+  FROM inbounds i
+  JOIN nodes n ON n.id = i.node_id
+  WHERE i.kind = 'user' AND i.deleted_at IS NULL
+    AND n.type = 'relay' AND n.deleted_at IS NULL
+    AND EXISTS (
+      SELECT 1 FROM user_inbounds ui
+      WHERE ui.user_id = i.user_id AND ui.inbound_id = i.id
+        AND ui.is_primary = 1 AND ui.active_to IS NULL
+    )
+), range_rows AS MATERIALIZED (
+  SELECT t.inbound_id, t.collected_at, t.up, t.down, t.reset_detected
+  FROM traffic_snapshots t
+  JOIN eligible e ON e.inbound_id = t.inbound_id
+  WHERE t.collected_at >= ? AND t.collected_at <= ?
+), baseline_times AS MATERIALIZED (
+  SELECT e.inbound_id,
+    (SELECT MAX(t.collected_at)
+     FROM traffic_snapshots t
+     WHERE t.inbound_id = e.inbound_id AND t.collected_at < ?) AS collected_at
+  FROM eligible e
+), baseline_rows AS MATERIALIZED (
+  SELECT t.inbound_id, t.collected_at, t.up, t.down, t.reset_detected
+  FROM traffic_snapshots t
+  JOIN baseline_times b ON b.inbound_id = t.inbound_id AND b.collected_at = t.collected_at
+)
+SELECT inbound_id, collected_at, up, down, reset_detected
+FROM (
+  SELECT inbound_id, collected_at, up, down, reset_detected FROM baseline_rows
+  UNION ALL
+  SELECT inbound_id, collected_at, up, down, reset_detected FROM range_rows
+)
+ORDER BY inbound_id, collected_at`, from.Format(time.RFC3339Nano), to.Format(time.RFC3339Nano), from.Format(time.RFC3339Nano))
 	if err != nil {
 		return result, err
 	}
@@ -569,12 +599,8 @@ func (s *Server) dashboardNodeRanking(traffic dashboardTrafficAggregate) []dashb
 	return items
 }
 
-func (s *Server) dashboardUserRanking(traffic dashboardTrafficAggregate) ([]dashboardUserTrafficItem, error) {
+func (s *Server) dashboardUserRanking(traffic dashboardTrafficAggregate, inbounds map[string]dashboardInbound) ([]dashboardUserTrafficItem, error) {
 	items := make([]dashboardUserTrafficItem, 0, len(traffic.byInbound))
-	inbounds, err := s.dashboardInbounds()
-	if err != nil {
-		return items, err
-	}
 	for inboundID, trafficItem := range traffic.byInbound {
 		inbound, ok := inbounds[inboundID]
 		if !ok {
