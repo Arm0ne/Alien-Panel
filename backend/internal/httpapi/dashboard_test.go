@@ -8,6 +8,39 @@ import (
 	"time"
 )
 
+func TestParseDashboardRangeUsesBusinessMidnight(t *testing.T) {
+	now := time.Date(2026, 9, 16, 0, 30, 0, 0, time.UTC)
+	r := httptest.NewRequest(http.MethodGet, "/api/dashboard?range=today", nil)
+
+	spec, from, to, err := parseDashboardRange(r, now)
+	if err != nil {
+		t.Fatalf("parse dashboard range: %v", err)
+	}
+	if spec.name != "today" {
+		t.Fatalf("range name = %q, want today", spec.name)
+	}
+	wantFrom := time.Date(2026, 9, 15, 16, 0, 0, 0, time.UTC)
+	if !from.Equal(wantFrom) {
+		t.Fatalf("today from = %s, want %s", from.Format(time.RFC3339), wantFrom.Format(time.RFC3339))
+	}
+	if !to.Equal(now) {
+		t.Fatalf("today to = %s, want %s", to.Format(time.RFC3339), now.Format(time.RFC3339))
+	}
+}
+
+func TestParseDashboardCustomDateUsesBusinessMidnight(t *testing.T) {
+	r := httptest.NewRequest(http.MethodGet, "/api/dashboard?range=custom&from=2026-09-16&to=2026-09-17", nil)
+	_, from, to, err := parseDashboardRange(r, time.Date(2026, 9, 16, 12, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatalf("parse custom dashboard range: %v", err)
+	}
+	wantFrom := time.Date(2026, 9, 15, 16, 0, 0, 0, time.UTC)
+	wantTo := time.Date(2026, 9, 17, 16, 0, 0, 0, time.UTC)
+	if !from.Equal(wantFrom) || !to.Equal(wantTo) {
+		t.Fatalf("custom range = %s to %s, want %s to %s", from.Format(time.RFC3339), to.Format(time.RFC3339), wantFrom.Format(time.RFC3339), wantTo.Format(time.RFC3339))
+	}
+}
+
 func TestDashboardTrafficUsesBusinessInboundScope(t *testing.T) {
 	server, database := testServer(t)
 	now := time.Now().UTC().Truncate(time.Second)

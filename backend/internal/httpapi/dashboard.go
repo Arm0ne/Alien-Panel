@@ -20,6 +20,13 @@ var dashboardRanges = map[string]dashboardRangeSpec{
 	"30d":   {name: "30d", duration: 30 * 24 * time.Hour, bucket: 24 * time.Hour},
 }
 
+// Dashboard ranges represent business calendar days. The panel is operated
+// in China, so a "today" range starts at midnight in Asia/Shanghai and is
+// converted to UTC only when querying the database (timestamps are stored in
+// UTC). Keeping this boundary explicit avoids using the container's timezone
+// or accidentally making the business day start at 08:00 in the UI.
+var dashboardBusinessLocation = time.FixedZone("Asia/Shanghai", 8*60*60)
+
 type dashboardTrafficPoint struct {
 	Time          string `json:"time"`
 	UploadBytes   int64  `json:"uploadBytes"`
@@ -168,25 +175,35 @@ func parseDashboardRange(r *http.Request, now time.Time) (dashboardRangeSpec, ti
 	}
 	var from time.Time
 	if name == "today" {
-		from = time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
+		from = dashboardDayStart(now)
 	} else {
 		from = now.Add(-spec.duration)
 	}
 	return spec, from, now, nil
 }
 
+func dashboardDayStart(now time.Time) time.Time {
+	localNow := now.In(dashboardBusinessLocation)
+	return time.Date(localNow.Year(), localNow.Month(), localNow.Day(), 0, 0, 0, 0, dashboardBusinessLocation).UTC()
+}
+
+func dashboardMonthStart(now time.Time) time.Time {
+	localNow := now.In(dashboardBusinessLocation)
+	return time.Date(localNow.Year(), localNow.Month(), 1, 0, 0, 0, 0, dashboardBusinessLocation).UTC()
+}
+
 func parseDashboardTime(value string, endOfDay bool) (time.Time, error) {
 	if parsed, err := time.Parse(time.RFC3339, value); err == nil {
 		return parsed.UTC(), nil
 	}
-	parsed, err := time.ParseInLocation("2006-01-02", value, time.UTC)
+	parsed, err := time.ParseInLocation("2006-01-02", value, dashboardBusinessLocation)
 	if err != nil {
 		return time.Time{}, err
 	}
 	if endOfDay {
-		return parsed.Add(24 * time.Hour), nil
+		return parsed.AddDate(0, 0, 1).UTC(), nil
 	}
-	return parsed, nil
+	return parsed.UTC(), nil
 }
 
 func dashboardBucketForDuration(duration time.Duration) time.Duration {
@@ -234,7 +251,7 @@ func (s *Server) dashboard(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	todaySpec := dashboardRanges["today"]
-	todayStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
+	todayStart := dashboardDayStart(now)
 	var todayTraffic dashboardTrafficAggregate
 	if spec.name == todaySpec.name && from.Equal(todayStart) && to.Equal(now) {
 		todayTraffic = traffic
@@ -245,7 +262,7 @@ func (s *Server) dashboard(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	monthStart := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC)
+	monthStart := dashboardMonthStart(now)
 	monthSpec := dashboardRangeSpec{name: "month", duration: now.Sub(monthStart), bucket: 24 * time.Hour}
 	monthTraffic, err := s.dashboardTraffic(monthStart, now, monthSpec, inbounds)
 	if err != nil {
