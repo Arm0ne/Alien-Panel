@@ -3,6 +3,7 @@ package httpapi
 import (
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"testing"
 	"time"
 )
@@ -166,6 +167,93 @@ func TestAgentSyncDetectsReplacementAfterEmptyCompleteSync(t *testing.T) {
 	}
 	if events != 1 {
 		t.Fatalf("replacement events after empty sync = %d", events)
+	}
+}
+
+func TestAgentSyncCreatesNewUserWhenArchivedInboundReappears(t *testing.T) {
+	server, database := testServer(t)
+	ts := httptest.NewServer(server.Handler())
+	defer ts.Close()
+
+	now := time.Now().UTC().Truncate(time.Second)
+	nowText := now.Format(time.RFC3339Nano)
+	if _, err := database.Exec(`INSERT INTO nodes (id, node_key, name, type, health_status, created_at, updated_at) VALUES ('reactivated-node', 'reactivated-node', 'Reactivated Node', 'relay', 'online', ?, ?)`, nowText, nowText); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.Exec(`INSERT INTO node_credentials (id, node_id, token_hash, last_rotated_at, created_at) VALUES ('reactivated-credential', 'reactivated-node', ?, ?, ?)`, hashToken("reactivated-token"), nowText, nowText); err != nil {
+		t.Fatal(err)
+	}
+
+	initial := lifecycleSyncPayload("reactivated-node", "reactivated-1", now, []map[string]any{
+		{"remote_id": "old-client", "email": "old@example.com", "enable": true, "expiry_time": now.Add(30 * 24 * time.Hour).Unix()},
+	})
+	if result := doJSON(t, ts.Client(), http.MethodPost, ts.URL+"/api/agent/v1/sync", "reactivated-token", initial); result["code"] != successCode {
+		t.Fatalf("initial sync response = %#v", result)
+	}
+	var oldUserID, inboundID string
+	if err := database.QueryRow(`SELECT u.id, i.id FROM users u JOIN inbounds i ON i.user_id = u.id WHERE i.node_id = 'reactivated-node' AND i.remote_inbound_id = '42'`).Scan(&oldUserID, &inboundID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.Exec(`INSERT INTO user_billing_records (id, user_id, billing_cycle, amount, currency, service_from, service_to, paid_at, status, source, created_at) VALUES ('reactivated-order', ?, 'monthly', 100, 'CNY', ?, ?, ?, 'confirmed', 'manual', ?)`, oldUserID, nowText, now.Add(30*24*time.Hour).Format(time.RFC3339Nano), nowText, nowText); err != nil {
+		t.Fatal(err)
+	}
+
+	for count := 1; count <= missingInboundArchiveAfter; count++ {
+		observedAt := now.Add(time.Duration(count) * time.Minute)
+		missing := map[string]any{
+			"node_key": "reactivated-node", "sync_id": "reactivated-missing-" + strconv.Itoa(count), "observed_at": observedAt.Format(time.RFC3339Nano),
+			"status": map[string]any{"xray_running": true}, "inbounds": []any{},
+		}
+		if result := doJSON(t, ts.Client(), http.MethodPost, ts.URL+"/api/agent/v1/sync", "reactivated-token", missing); result["code"] != successCode {
+			t.Fatalf("missing sync %d response = %#v", count, result)
+		}
+	}
+
+	var oldDeleted string
+	if err := database.QueryRow(`SELECT COALESCE(deleted_at, '') FROM users WHERE id = ?`, oldUserID).Scan(&oldDeleted); err != nil {
+		t.Fatal(err)
+	}
+	if oldDeleted == "" {
+		t.Fatalf("old user was not retired after inbound archive")
+	}
+
+	reappearedAt := now.Add(4 * time.Minute)
+	reappeared := lifecycleSyncPayload("reactivated-node", "reactivated-2", reappearedAt, []map[string]any{
+		{"remote_id": "new-client", "email": "new@example.com", "enable": true, "expiry_time": reappearedAt.Add(30 * 24 * time.Hour).Unix()},
+	})
+	if result := doJSON(t, ts.Client(), http.MethodPost, ts.URL+"/api/agent/v1/sync", "reactivated-token", reappeared); result["code"] != successCode {
+		t.Fatalf("reappeared sync response = %#v", result)
+	}
+
+	var newUserID, inboundUserID string
+	if err := database.QueryRow(`SELECT id FROM users WHERE id <> ? AND deleted_at IS NULL ORDER BY created_at DESC LIMIT 1`, oldUserID).Scan(&newUserID); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.QueryRow(`SELECT user_id FROM inbounds WHERE id = ?`, inboundID).Scan(&inboundUserID); err != nil {
+		t.Fatal(err)
+	}
+	if newUserID == "" || newUserID == oldUserID || inboundUserID != newUserID {
+		t.Fatalf("reactivated user old=%q new=%q inbound=%q", oldUserID, newUserID, inboundUserID)
+	}
+
+	var activeMapping, oldClients, newClients, replacementEvents, billingRecords int
+	if err := database.QueryRow(`SELECT COUNT(*) FROM user_inbounds WHERE user_id = ? AND inbound_id = ? AND active_to IS NULL`, newUserID, inboundID).Scan(&activeMapping); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.QueryRow(`SELECT COUNT(*) FROM clients WHERE inbound_id = ? AND remote_client_id = 'old-client'`, inboundID).Scan(&oldClients); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.QueryRow(`SELECT COUNT(*) FROM clients WHERE inbound_id = ? AND remote_client_id = 'new-client'`, inboundID).Scan(&newClients); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.QueryRow(`SELECT COUNT(*) FROM node_events WHERE event_type = 'client_set_replacement_detected'`).Scan(&replacementEvents); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.QueryRow(`SELECT COUNT(*) FROM user_billing_records WHERE user_id = ?`, oldUserID).Scan(&billingRecords); err != nil {
+		t.Fatal(err)
+	}
+	if activeMapping != 1 || oldClients != 0 || newClients != 1 || replacementEvents != 0 || billingRecords != 1 {
+		t.Fatalf("reactivated lifecycle mapping=%d oldClients=%d newClients=%d replacementEvents=%d billingRecords=%d", activeMapping, oldClients, newClients, replacementEvents, billingRecords)
 	}
 }
 

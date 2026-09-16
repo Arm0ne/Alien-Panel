@@ -30,6 +30,7 @@ nodes ── sync_runs ── traffic_snapshots
 - 收费记录和审计日志是业务历史，不随节点删除而物理删除。
 - 完整 Agent 同步会删除已不存在的 Client；Inbound 的 `client_set_json` 保留最近一组非空 Client ID，用于识别跨空同步的客户更换。
 - 确认客户更换后，旧用户软删除并保留 `user_billing_records`，当前路径和流量快照关闭/清理；Inbound 记录保留为技术资源，并用 `traffic_baseline_*` 作为新用户的流量起点。
+- 已归档 Inbound 恢复同步且原 `user_id` 已指向软删除用户时，中央会建立新的用户关联并保留旧用户的账务和审计历史，避免复用已删除用户。
 - `user_billing_records.origin=historical_import` 表示一次性历史账单导入；`verification_status=unverified` 的待核实记录保持在历史中，但不计入现金或服务期收入，核验后才进入财务统计。
 
 ## 3. 备份

@@ -339,9 +339,10 @@ ON CONFLICT(node_id, remote_inbound_id) DO UPDATE SET tag = excluded.tag, remark
 			s.failSync(w, tx, syncRunID, fmt.Errorf("find inbound %s: %w", remoteInboundID, err))
 			return
 		}
-		var inboundUserID, inboundKind, storedClientSet string
-		if err := tx.QueryRow(`SELECT COALESCE(user_id, ''), kind, COALESCE(client_set_json, '[]') FROM inbounds WHERE id = ?`, inboundID).
-			Scan(&inboundUserID, &inboundKind, &storedClientSet); err != nil {
+		var inboundUserID, inboundKind, inboundUserDeletedAt, storedClientSet string
+		if err := tx.QueryRow(`SELECT COALESCE(i.user_id, ''), COALESCE(i.kind, 'unknown'), COALESCE(u.deleted_at, ''), COALESCE(i.client_set_json, '[]')
+FROM inbounds i LEFT JOIN users u ON u.id = i.user_id WHERE i.id = ?`, inboundID).
+			Scan(&inboundUserID, &inboundKind, &inboundUserDeletedAt, &storedClientSet); err != nil {
 			s.failSync(w, tx, syncRunID, fmt.Errorf("read inbound client state %s: %w", remoteInboundID, err))
 			return
 		}
@@ -359,7 +360,15 @@ ON CONFLICT(node_id, remote_inbound_id) DO UPDATE SET tag = excluded.tag, remark
 		if len(previousClientIDs) == 0 && len(existingClientIDs) > 0 {
 			previousClientIDs = existingClientIDs
 		}
+		// A deleted central user means this Inbound belonged to a customer that
+		// was already retired (usually after the Inbound was archived).  Its
+		// return must start a new customer lifecycle instead of reusing the old
+		// soft-deleted user.  Do not create a second replacement-confirmation
+		// event for that case; the archive/retirement boundary already confirms
+		// that the old operational state is no longer current.
+		deletedUserReappeared := inboundUserID != "" && inboundUserDeletedAt != ""
 		replacementDetected := inbound.ClientsComplete && nodeType == "relay" && inboundUserID != "" &&
+			!deletedUserReappeared &&
 			inboundKind != "infrastructure" && len(previousClientIDs) > 0 && len(incomingClientIDs) > 0 &&
 			clientSetsDisjoint(previousClientIDs, incomingClientIDs)
 		resetDetected, err := detectTrafficReset(tx, inboundID, observedAt, inbound.AllTime)
@@ -679,8 +688,9 @@ func (s *Server) ensureRelayInboundUserWithOptions(tx *sql.Tx, nodeType, inbound
 		return nil
 	}
 
-	var userID, kind string
-	if err := tx.QueryRow(`SELECT COALESCE(user_id, ''), kind FROM inbounds WHERE id = ?`, inboundID).Scan(&userID, &kind); err != nil {
+	var userID, kind, userDeletedAt string
+	if err := tx.QueryRow(`SELECT COALESCE(i.user_id, ''), COALESCE(i.kind, 'unknown'), COALESCE(u.deleted_at, '')
+FROM inbounds i LEFT JOIN users u ON u.id = i.user_id WHERE i.id = ?`, inboundID).Scan(&userID, &kind, &userDeletedAt); err != nil {
 		return fmt.Errorf("read inbound classification: %w", err)
 	}
 	if kind == "infrastructure" {
@@ -690,6 +700,13 @@ func (s *Server) ensureRelayInboundUserWithOptions(tx *sql.Tx, nodeType, inbound
 		if _, err := tx.Exec(`UPDATE inbounds SET kind = 'user' WHERE id = ?`, inboundID); err != nil {
 			return fmt.Errorf("classify relay inbound as user: %w", err)
 		}
+	}
+	if userID != "" && userDeletedAt != "" {
+		newUserID, err := s.replaceDeletedInboundUserTx(tx, inboundID, userID, inbound, remoteInboundID, observedAt)
+		if err != nil {
+			return err
+		}
+		userID = newUserID
 	}
 
 	now := observedAt.UTC().Format(time.RFC3339Nano)
@@ -775,6 +792,64 @@ VALUES (?, ?, ?, 1, ?)`, newID(), userID, inboundID, now); err != nil {
 		return err
 	}
 	return nil
+}
+
+// replaceDeletedInboundUserTx starts a new operational customer lifecycle
+// when a previously archived Inbound reappears while still pointing at a
+// soft-deleted central user.  Billing rows remain attached to the old user;
+// paths, routes and traffic belong to the retired customer and are closed or
+// removed before the new user is linked by ensureRelayInboundUser.
+func (s *Server) replaceDeletedInboundUserTx(tx *sql.Tx, inboundID, oldUserID string, inbound agentInboundPayload, remoteInboundID string, observedAt time.Time) (string, error) {
+	nowText := observedAt.UTC().Format(time.RFC3339Nano)
+
+	if _, err := tx.Exec(`UPDATE user_inbounds SET active_to = ? WHERE user_id = ? AND inbound_id = ? AND active_to IS NULL`, nowText, oldUserID, inboundID); err != nil {
+		return "", fmt.Errorf("close deleted user inbound mapping: %w", err)
+	}
+
+	var remainingAssociations int
+	if err := tx.QueryRow(`SELECT COUNT(*)
+FROM user_inbounds ui JOIN inbounds i ON i.id = ui.inbound_id
+JOIN nodes n ON n.id = i.node_id
+WHERE ui.user_id = ? AND ui.active_to IS NULL AND i.id <> ? AND i.deleted_at IS NULL
+  AND i.kind = 'user' AND n.type = 'relay' AND n.deleted_at IS NULL`, oldUserID, inboundID).Scan(&remainingAssociations); err != nil {
+		return "", fmt.Errorf("count deleted user inbound mappings: %w", err)
+	}
+	if remainingAssociations == 0 {
+		if _, err := tx.Exec(`UPDATE user_paths SET active_to = ?, updated_at = ? WHERE user_id = ? AND active_to IS NULL`, nowText, nowText, oldUserID); err != nil {
+			return "", fmt.Errorf("close deleted user paths: %w", err)
+		}
+		if _, err := tx.Exec(`UPDATE user_routes SET is_primary = 0, active_to = ?, route_exit_ip_id = NULL WHERE user_id = ? AND active_to IS NULL`, nowText, oldUserID); err != nil {
+			return "", fmt.Errorf("close deleted user routes: %w", err)
+		}
+	}
+	if err := closeRenewalCandidatesForInboundTx(tx, oldUserID, inboundID, nowText); err != nil {
+		return "", err
+	}
+	if _, err := deleteInboundTrafficTx(tx, inboundID); err != nil {
+		return "", fmt.Errorf("purge deleted user traffic: %w", err)
+	}
+	if _, err := tx.Exec(`UPDATE inbounds
+SET traffic_baseline_up = ?, traffic_baseline_down = ?, traffic_baseline_all_time = ?, traffic_baseline_at = ?
+WHERE id = ?`, inbound.Up, inbound.Down, inbound.AllTime, nowText, inboundID); err != nil {
+		return "", fmt.Errorf("save reactivated inbound traffic baseline: %w", err)
+	}
+
+	state := userStateFromClients(inbound, observedAt)
+	newUserID := newID()
+	if _, err := tx.Exec(`INSERT INTO users (id, display_name, status, expiry_time, created_at, updated_at)
+VALUES (?, ?, ?, ?, ?, ?)`, newUserID, inboundDisplayName(inbound, remoteInboundID), state.Status, nullableDBString(state.ExpiryText), nowText, nowText); err != nil {
+		return "", fmt.Errorf("create user for reactivated inbound: %w", err)
+	}
+	if _, err := tx.Exec(`UPDATE inbounds SET user_id = ?, kind = 'user' WHERE id = ?`, newUserID, inboundID); err != nil {
+		return "", fmt.Errorf("link user for reactivated inbound: %w", err)
+	}
+
+	if err := s.writeAuditLogTx(tx, nil, "user.replace_from_deleted_inbound", "user", oldUserID,
+		map[string]any{"inboundId": inboundID, "displayName": inboundDisplayName(inbound, remoteInboundID)},
+		map[string]any{"newUserId": newUserID, "reason": "archived_inbound_reappeared", "trafficSamplesRemoved": true}, observedAt); err != nil {
+		return "", fmt.Errorf("write reactivation audit: %w", err)
+	}
+	return newUserID, nil
 }
 
 type businessUserState struct {

@@ -221,16 +221,22 @@ func (s *Server) writeAuditLogTx(tx *sql.Tx, r *http.Request, action, resourceTy
 	}
 
 	var adminUserID any
-	if current, ok := r.Context().Value(principalContextKey{}).(principal); ok && current.UserID != "" {
-		adminUserID = current.UserID
+	if r != nil {
+		if current, ok := r.Context().Value(principalContextKey{}).(principal); ok && current.UserID != "" {
+			adminUserID = current.UserID
+		}
 	}
 	var requestID any
-	if value, ok := r.Context().Value(requestIDContextKey{}).(string); ok && value != "" {
-		requestID = value
+	if r != nil {
+		if value, ok := r.Context().Value(requestIDContextKey{}).(string); ok && value != "" {
+			requestID = value
+		}
 	}
 	var ip any
-	if value := clientIP(r.RemoteAddr); value != "" {
-		ip = value
+	if r != nil {
+		if value := clientIP(r.RemoteAddr); value != "" {
+			ip = value
+		}
 	}
 	_, err = tx.Exec(`INSERT INTO audit_logs (id, admin_user_id, action, resource_type, resource_id, request_id, before_json, after_json, ip, created_at)
 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
