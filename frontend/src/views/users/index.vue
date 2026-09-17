@@ -643,6 +643,7 @@ async function saveBusinessFields() {
   detail.value = data;
   copyDetailToForm(data);
   window.$message?.success('中央业务信息已保存');
+  window.dispatchEvent(new Event('xpanel-events-updated'));
   void loadGroups();
 }
 

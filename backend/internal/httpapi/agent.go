@@ -712,8 +712,10 @@ FROM inbounds i LEFT JOIN users u ON u.id = i.user_id WHERE i.id = ?`, inboundID
 	now := observedAt.UTC().Format(time.RFC3339Nano)
 	state := userStateFromClients(inbound, observedAt)
 	expiry := nullableDBString(state.ExpiryText)
+	newUserCreated := false
 	if userID == "" {
 		userID = newID()
+		newUserCreated = true
 		if _, err := tx.Exec(`INSERT INTO users (id, display_name, status, expiry_time, created_at, updated_at)
 VALUES (?, ?, ?, ?, ?, ?)`, userID, inboundDisplayName(inbound, remoteInboundID), state.Status, expiry, now, now); err != nil {
 			return fmt.Errorf("create business user: %w", err)
@@ -788,6 +790,11 @@ WHERE id = ?`, expiry, state.Status, now, userID); err != nil {
 VALUES (?, ?, ?, 1, ?)`, newID(), userID, inboundID, now); err != nil {
 		return fmt.Errorf("save business user mapping: %w", err)
 	}
+	if newUserCreated {
+		if err := insertNewUserProfileEventTx(tx, inboundID, userID, inboundDisplayName(inbound, remoteInboundID), observedAt); err != nil {
+			return fmt.Errorf("record new user profile event: %w", err)
+		}
+	}
 	if err := reconcileClientExpiryMismatchEvent(tx, inboundID, userID, inboundDisplayName(inbound, remoteInboundID), state, observedAt); err != nil {
 		return err
 	}
@@ -842,6 +849,9 @@ VALUES (?, ?, ?, ?, ?, ?)`, newUserID, inboundDisplayName(inbound, remoteInbound
 	}
 	if _, err := tx.Exec(`UPDATE inbounds SET user_id = ?, kind = 'user' WHERE id = ?`, newUserID, inboundID); err != nil {
 		return "", fmt.Errorf("link user for reactivated inbound: %w", err)
+	}
+	if err := insertNewUserProfileEventTx(tx, inboundID, newUserID, inboundDisplayName(inbound, remoteInboundID), observedAt); err != nil {
+		return "", fmt.Errorf("record reactivated user profile event: %w", err)
 	}
 
 	if err := s.writeAuditLogTx(tx, nil, "user.replace_from_deleted_inbound", "user", oldUserID,

@@ -70,9 +70,6 @@ func TestAgentSyncPurgesDeletedClientsAndDetectsReplacement(t *testing.T) {
 	token := login["data"].(map[string]any)["token"].(string)
 	events := doJSON(t, ts.Client(), http.MethodGet, ts.URL+"/api/events?status=pending", token, nil)
 	items := events["data"].(map[string]any)["items"].([]any)
-	if len(items) != 1 {
-		t.Fatalf("pending events = %#v", items)
-	}
 	var eventID string
 	for _, item := range items {
 		candidate := item.(map[string]any)
@@ -92,6 +89,18 @@ func TestAgentSyncPurgesDeletedClientsAndDetectsReplacement(t *testing.T) {
 	newUserID := resetData["newUserId"].(string)
 	if newUserID == "" || newUserID == oldUserID {
 		t.Fatalf("replacement user id = %q, old=%q", newUserID, oldUserID)
+	}
+	var oldProfileEvents, newProfileEvents int
+	if err := database.QueryRow(`SELECT COUNT(*) FROM node_events
+WHERE event_type = 'new_user_profile_required' AND resource_id = ? AND event_status = 'resolved' AND requires_action = 0`, oldUserID).Scan(&oldProfileEvents); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.QueryRow(`SELECT COUNT(*) FROM node_events
+WHERE event_type = 'new_user_profile_required' AND resource_id = ? AND event_status = 'open' AND requires_action = 1`, newUserID).Scan(&newProfileEvents); err != nil {
+		t.Fatal(err)
+	}
+	if oldProfileEvents != 1 || newProfileEvents != 1 {
+		t.Fatalf("profile events after replacement oldResolved=%d newOpen=%d", oldProfileEvents, newProfileEvents)
 	}
 	var oldDeleted, oldStatus string
 	if err := database.QueryRow(`SELECT COALESCE(deleted_at, ''), status FROM users WHERE id = ?`, oldUserID).Scan(&oldDeleted, &oldStatus); err != nil {
@@ -236,7 +245,7 @@ func TestAgentSyncCreatesNewUserWhenArchivedInboundReappears(t *testing.T) {
 		t.Fatalf("reactivated user old=%q new=%q inbound=%q", oldUserID, newUserID, inboundUserID)
 	}
 
-	var activeMapping, oldClients, newClients, replacementEvents, billingRecords int
+	var activeMapping, oldClients, newClients, replacementEvents, billingRecords, oldProfileEvents, newProfileEvents int
 	if err := database.QueryRow(`SELECT COUNT(*) FROM user_inbounds WHERE user_id = ? AND inbound_id = ? AND active_to IS NULL`, newUserID, inboundID).Scan(&activeMapping); err != nil {
 		t.Fatal(err)
 	}
@@ -252,8 +261,16 @@ func TestAgentSyncCreatesNewUserWhenArchivedInboundReappears(t *testing.T) {
 	if err := database.QueryRow(`SELECT COUNT(*) FROM user_billing_records WHERE user_id = ?`, oldUserID).Scan(&billingRecords); err != nil {
 		t.Fatal(err)
 	}
-	if activeMapping != 1 || oldClients != 0 || newClients != 1 || replacementEvents != 0 || billingRecords != 1 {
-		t.Fatalf("reactivated lifecycle mapping=%d oldClients=%d newClients=%d replacementEvents=%d billingRecords=%d", activeMapping, oldClients, newClients, replacementEvents, billingRecords)
+	if err := database.QueryRow(`SELECT COUNT(*) FROM node_events
+WHERE event_type = 'new_user_profile_required' AND resource_id = ? AND event_status = 'resolved' AND requires_action = 0`, oldUserID).Scan(&oldProfileEvents); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.QueryRow(`SELECT COUNT(*) FROM node_events
+WHERE event_type = 'new_user_profile_required' AND resource_id = ? AND event_status = 'open' AND requires_action = 1`, newUserID).Scan(&newProfileEvents); err != nil {
+		t.Fatal(err)
+	}
+	if activeMapping != 1 || oldClients != 0 || newClients != 1 || replacementEvents != 0 || billingRecords != 1 || oldProfileEvents != 1 || newProfileEvents != 1 {
+		t.Fatalf("reactivated lifecycle mapping=%d oldClients=%d newClients=%d replacementEvents=%d billingRecords=%d oldProfileEvents=%d newProfileEvents=%d", activeMapping, oldClients, newClients, replacementEvents, billingRecords, oldProfileEvents, newProfileEvents)
 	}
 }
 

@@ -184,6 +184,15 @@ SET status = 'rejected', processed_at = ?,
 WHERE user_id = ? AND status = 'pending'`, nowText, "自动关闭：用户已无当前节点关联", "自动关闭：用户已无当前节点关联", userID); err != nil {
 			return fmt.Errorf("close renewal candidates for user %s: %w", userID, err)
 		}
+		resolvedBy := ""
+		if r != nil {
+			if current, ok := r.Context().Value(principalContextKey{}).(principal); ok {
+				resolvedBy = current.UserID
+			}
+		}
+		if err := resolveNewUserProfileEventTx(tx, userID, resolvedBy, now); err != nil {
+			return fmt.Errorf("resolve new user profile event for user %s: %w", userID, err)
+		}
 		if _, err := tx.Exec(`UPDATE users
 SET deleted_at = ?, status = 'disabled', updated_at = ?
 WHERE id = ? AND deleted_at IS NULL`, nowText, nowText, userID); err != nil {

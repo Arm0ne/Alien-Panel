@@ -37,13 +37,19 @@ function alertPendingEvents(items: Api.Central.EventSummary[]) {
   const count = newItems.length;
   newItems.forEach(item => alertedIds.add(item.id));
   sessionStg.set('eventAlertedIds', [...alertedIds].slice(-100));
+  const newUserEvent = count === 1 && newItems[0].type === 'new_user_profile_required' ? newItems[0] : null;
+  const newUserId = typeof newUserEvent?.payload?.userId === 'string' ? newUserEvent.payload.userId : '';
+  const newUserName = typeof newUserEvent?.payload?.userName === 'string' ? newUserEvent.payload.userName : '新用户';
   window.$dialog?.warning({
-    title: '有待处理事件',
-    content: `检测到 ${count} 条需要处理的事件${count > 0 ? '，请及时确认' : ''}`,
-    positiveText: '立即处理',
+    title: newUserId ? '发现新增用户' : '有待处理事件',
+    content: newUserId
+      ? `线路机已同步新增用户「${newUserName}」，请及时完善收费类型、金额和业务资料。`
+      : `检测到 ${count} 条需要处理的事件，请及时确认`,
+    positiveText: newUserId ? '完善资料' : '立即处理',
     negativeText: '稍后处理',
     maskClosable: false,
-    onPositiveClick: () => routerPushByKey('events')
+    onPositiveClick: () =>
+      newUserId ? routerPushByKey('users', { query: { userId: newUserId } }) : routerPushByKey('events')
   });
 }
 

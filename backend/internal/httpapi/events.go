@@ -146,6 +146,39 @@ func insertNodeEvent(database *sql.DB, event nodeEventSpec) error {
 	return tx.Commit()
 }
 
+func insertNewUserProfileEventTx(tx *sql.Tx, inboundID, userID, userName string, occurredAt time.Time) error {
+	var nodeID, inboundName string
+	if err := tx.QueryRow(`SELECT i.node_id,
+COALESCE(NULLIF(i.remark, ''), NULLIF(i.tag, ''), i.remote_inbound_id)
+FROM inbounds i WHERE i.id = ?`, inboundID).Scan(&nodeID, &inboundName); err != nil {
+		return fmt.Errorf("read new user event context: %w", err)
+	}
+	if strings.TrimSpace(userName) == "" {
+		userName = inboundName
+	}
+	payload := map[string]any{
+		"userId": userID, "userName": userName,
+		"inboundId": inboundID, "inboundName": inboundName,
+	}
+	return insertNodeEventTx(tx, nodeEventSpec{
+		NodeID: nodeID, EventType: "new_user_profile_required", Category: "business", Severity: "warning",
+		Title:          "发现新增用户，待完善资料",
+		Message:        fmt.Sprintf("线路机新增用户「%s」（Inbound「%s」），请完善收费类型、金额和业务资料。", userName, inboundName),
+		RequiresAction: true, EventStatus: "open", ResourceType: "user", ResourceID: userID, ActionType: "complete_user_profile",
+		Payload: payload, DedupeKey: "new-user-profile:" + userID, Source: "agent", CorrelationID: inboundID, OccurredAt: occurredAt,
+	})
+}
+
+func resolveNewUserProfileEventTx(tx *sql.Tx, userID, resolvedBy string, resolvedAt time.Time) error {
+	now := resolvedAt.UTC().Format(time.RFC3339Nano)
+	_, err := tx.Exec(`UPDATE node_events
+SET requires_action = 0, event_status = 'resolved', acknowledged = 1,
+    read_at = COALESCE(read_at, ?), resolved_at = COALESCE(resolved_at, ?), resolved_by = COALESCE(resolved_by, ?)
+WHERE event_type = 'new_user_profile_required' AND resource_type = 'user' AND resource_id = ?
+  AND event_status NOT IN ('resolved', 'dismissed')`, now, now, nullableDBString(resolvedBy), userID)
+	return err
+}
+
 func resolveRenewalEventTx(tx *sql.Tx, candidateID, eventType string, payload any, occurredAt time.Time, resolvedBy string) error {
 	now := occurredAt.UTC().Format(time.RFC3339Nano)
 	if _, err := tx.Exec(`UPDATE node_events

@@ -62,6 +62,10 @@ function isClientReplacement(row: Api.Central.EventSummary) {
   return row.type === 'client_set_replacement_detected' && row.status !== 'resolved' && row.status !== 'dismissed';
 }
 
+function isNewUserProfile(row: Api.Central.EventSummary) {
+  return row.type === 'new_user_profile_required' && row.status !== 'resolved' && row.status !== 'dismissed';
+}
+
 function eventStatusLabel(row: Api.Central.EventSummary) {
   if (row.status === 'resolved' || row.status === 'dismissed') return '已处理';
   if (row.requiresAction) return '待处理';
@@ -75,6 +79,17 @@ function notifyEventChanged() {
 function openUser(row: Api.Central.EventSummary) {
   const userId = payloadValue(row, 'userId');
   if (userId) router.push({ name: 'users', query: { userId } });
+}
+
+async function completeNewUserProfile(row: Api.Central.EventSummary) {
+  if (!row.acknowledged) {
+    const { error } = await markEventRead(row.id);
+    if (!error) {
+      row.acknowledged = true;
+      notifyEventChanged();
+    }
+  }
+  openUser(row);
 }
 
 async function loadEvents() {
@@ -288,6 +303,14 @@ const columns: DataTableColumns<Api.Central.EventSummary> = [
             NButton,
             { size: 'small', loading: actionLoading.value === row.id, onClick: () => rejectRenewal(row) },
             { default: () => '非收费变更' }
+          )
+        );
+      } else if (isNewUserProfile(row)) {
+        buttons.push(
+          h(
+            NButton,
+            { size: 'small', type: 'primary', onClick: () => completeNewUserProfile(row) },
+            { default: () => '完善资料' }
           )
         );
       } else if (isClientReplacement(row)) {

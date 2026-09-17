@@ -200,6 +200,13 @@ WHERE ui.user_id = ? AND ui.active_to IS NULL AND i.id <> ? AND i.deleted_at IS 
 		} else if affected, rowsErr := count.RowsAffected(); rowsErr == nil {
 			result.ClosedRouteCount = affected
 		}
+		resolvedBy := ""
+		if current, ok := r.Context().Value(principalContextKey{}).(principal); ok {
+			resolvedBy = current.UserID
+		}
+		if err := resolveNewUserProfileEventTx(tx, expectedUserID, resolvedBy, now); err != nil {
+			return result, fmt.Errorf("resolve previous new user profile event: %w", err)
+		}
 	}
 
 	// Billing rows remain immutable and continue to reference the retired user.
@@ -252,6 +259,9 @@ VALUES (?, ?, ?, ?, ?, ?)`, newUserID, inboundName, newState.Status, nullableDBS
 	if _, err := tx.Exec(`INSERT INTO user_inbounds (id, user_id, inbound_id, is_primary, active_from)
 VALUES (?, ?, ?, 1, ?)`, newID(), newUserID, inboundID, nowText); err != nil {
 		return result, fmt.Errorf("save replacement user mapping: %w", err)
+	}
+	if err := insertNewUserProfileEventTx(tx, inboundID, newUserID, inboundName, now); err != nil {
+		return result, fmt.Errorf("record replacement user profile event: %w", err)
 	}
 	if err := s.writeAuditLogTx(tx, r, "user.replace_from_client_sync", "user", expectedUserID,
 		map[string]any{"inboundId": inboundID, "displayName": inboundName},

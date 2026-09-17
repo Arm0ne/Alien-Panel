@@ -898,14 +898,40 @@ func (s *Server) updateUser(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	now := time.Now().UTC().Format(time.RFC3339Nano)
-	if _, err := s.db.Exec(`UPDATE users SET display_name = ?, monthly_fee = ?, billing_cycle = ?, billing_amount = ?, currency = ?, notes = ?, billing_type = ?, free_reason = ?, updated_at = ? WHERE id = ? AND deleted_at IS NULL`, displayName, monthlyFee, billingCycle, billingAmount, currency, nullableDBString(notes), billingType, nullableDBString(freeReason), now, id); err != nil {
+	nowTime := time.Now().UTC()
+	now := nowTime.Format(time.RFC3339Nano)
+	tx, err := s.db.Begin()
+	if err != nil {
+		s.logger.Error("begin user business field update", "user_id", id, "error", err)
+		writeFailure(w, http.StatusInternalServerError, internalErrorCode, "could not update user")
+		return
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec(`UPDATE users SET display_name = ?, monthly_fee = ?, billing_cycle = ?, billing_amount = ?, currency = ?, notes = ?, billing_type = ?, free_reason = ?, updated_at = ? WHERE id = ? AND deleted_at IS NULL`, displayName, monthlyFee, billingCycle, billingAmount, currency, nullableDBString(notes), billingType, nullableDBString(freeReason), now, id); err != nil {
 		s.logger.Error("update user business fields", "user_id", id, "error", err)
+		writeFailure(w, http.StatusInternalServerError, internalErrorCode, "could not update user")
+		return
+	}
+	profileCompleted := payload.DisplayName != nil && payload.BillingType != nil &&
+		(billingType == "free" || (payload.BillingCycle != nil && payload.BillingAmount != nil))
+	if profileCompleted {
+		current, _ := r.Context().Value(principalContextKey{}).(principal)
+		if err := resolveNewUserProfileEventTx(tx, id, current.UserID, nowTime); err != nil {
+			s.logger.Error("resolve new user profile event", "user_id", id, "error", err)
+			writeFailure(w, http.StatusInternalServerError, internalErrorCode, "could not update user")
+			return
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		s.logger.Error("commit user business field update", "user_id", id, "error", err)
 		writeFailure(w, http.StatusInternalServerError, internalErrorCode, "could not update user")
 		return
 	}
 	after := map[string]any{"displayName": displayName, "monthlyFee": monthlyFee, "billingCycle": billingCycle, "billingAmount": billingAmount, "currency": currency, "notes": notes, "billingType": billingType, "freeReason": freeReason}
 	s.writeAuditLog(r, "user.update", "user", id, before, after)
+	if profileCompleted {
+		s.clearDashboardCache()
+	}
 	result, err := s.readUserDetail(id)
 	if err != nil {
 		s.logger.Error("read updated user", "user_id", id, "error", err)
