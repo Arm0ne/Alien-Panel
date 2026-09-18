@@ -30,7 +30,7 @@ async function readPendingEvents() {
 }
 
 function alertPendingEvents(items: Api.Central.EventSummary[]) {
-  const newItems = items.filter(item => !knownIds.has(item.id) && !alertedIds.has(item.id));
+  const newItems = items.filter(item => item.requiresAction && !knownIds.has(item.id) && !alertedIds.has(item.id));
   const shouldAlert = newItems.length > 0;
   items.forEach(item => knownIds.add(item.id));
   if (!shouldAlert) return;
@@ -59,7 +59,7 @@ async function refresh() {
     pendingCount.value = data.pendingCount;
     unreadCount.value = data.unreadCount;
   }
-  const { data: events } = await fetchEvents({ status: 'pending', page: 1, page_size: 5 });
+  const { data: events } = await fetchEvents({ status: 'required', page: 1, page_size: 5 });
   if (events) {
     pendingEvents.value = events.items;
     alertPendingEvents(events.items);

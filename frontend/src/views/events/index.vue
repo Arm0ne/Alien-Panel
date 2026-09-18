@@ -66,9 +66,13 @@ function isNewUserProfile(row: Api.Central.EventSummary) {
   return row.type === 'new_user_profile_required' && row.status !== 'resolved' && row.status !== 'dismissed';
 }
 
+function isPendingEvent(row: Api.Central.EventSummary) {
+  return row.status !== 'resolved' && row.status !== 'dismissed' && (row.requiresAction || Boolean(row.actionType?.trim()));
+}
+
 function eventStatusLabel(row: Api.Central.EventSummary) {
   if (row.status === 'resolved' || row.status === 'dismissed') return '已处理';
-  if (row.requiresAction) return '待处理';
+  if (isPendingEvent(row)) return '待处理';
   return row.acknowledged ? '已读' : '未读';
 }
 
@@ -273,7 +277,7 @@ const columns: DataTableColumns<Api.Central.EventSummary> = [
           type:
             row.status === 'resolved' || row.status === 'dismissed'
               ? 'success'
-              : row.requiresAction
+              : isPendingEvent(row)
                 ? 'warning'
                 : 'default'
         },

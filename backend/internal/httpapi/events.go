@@ -10,6 +10,18 @@ import (
 	"time"
 )
 
+// pendingEventFilter returns the shared predicate for operator-actionable
+// events. Older events may have requires_action=0 even though they carry an
+// action_type, so both signals are considered while resolved and dismissed
+// events remain excluded.
+func pendingEventFilter(alias string) string {
+	if strings.TrimSpace(alias) == "" {
+		return "(requires_action = 1 OR NULLIF(TRIM(action_type), '') IS NOT NULL) AND event_status NOT IN ('resolved', 'dismissed')"
+	}
+	prefix := strings.TrimSpace(alias) + "."
+	return "(" + prefix + "requires_action = 1 OR NULLIF(TRIM(" + prefix + "action_type), '') IS NOT NULL) AND " + prefix + "event_status NOT IN ('resolved', 'dismissed')"
+}
+
 func (s *Server) ensurePendingRenewalEvents() error {
 	rows, err := s.db.Query(`SELECT c.id, c.user_id, COALESCE(u.display_name, ''), COALESCE(c.inbound_id, ''),
 COALESCE(i.node_id, ''), c.old_expiry_at, c.new_expiry_at, c.suggested_cycle, c.suggested_amount, c.currency, c.detected_at
@@ -273,8 +285,7 @@ WHERE id = ? AND visibility = 'public' AND event_status NOT IN ('resolved', 'dis
 
 func (s *Server) eventSummary(w http.ResponseWriter, _ *http.Request) {
 	var pending, unread int
-	if err := s.db.QueryRow(`SELECT COUNT(*) FROM node_events
-WHERE visibility = 'public' AND requires_action = 1 AND event_status NOT IN ('resolved', 'dismissed')`).Scan(&pending); err != nil {
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM node_events WHERE visibility = 'public' AND ` + pendingEventFilter("")).Scan(&pending); err != nil {
 		writeFailure(w, http.StatusInternalServerError, internalErrorCode, "could not count pending events")
 		return
 	}

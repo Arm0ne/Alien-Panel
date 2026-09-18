@@ -3134,6 +3134,8 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 	}
 	switch query.status {
 	case "pending":
+		where = append(where, pendingEventFilter("e"))
+	case "required":
 		where = append(where, "e.requires_action = 1 AND e.event_status NOT IN ('resolved', 'dismissed')")
 	case "unread":
 		where = append(where, "e.acknowledged = 0 AND e.event_status NOT IN ('resolved', 'dismissed')")

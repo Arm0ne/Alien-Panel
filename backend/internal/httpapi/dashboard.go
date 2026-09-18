@@ -368,13 +368,13 @@ type dashboardEventsResponse struct {
 
 func (s *Server) dashboardEvents() (dashboardEventsResponse, error) {
 	result := dashboardEventsResponse{Items: make([]dashboardEventItem, 0)}
-	if err := s.db.QueryRow(`SELECT COUNT(*) FROM node_events WHERE visibility = 'public' AND requires_action = 1 AND event_status NOT IN ('resolved', 'dismissed')`).Scan(&result.PendingCount); err != nil {
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM node_events WHERE visibility = 'public' AND ` + pendingEventFilter("")).Scan(&result.PendingCount); err != nil {
 		return result, err
 	}
 	rows, err := s.db.Query(`SELECT e.id, e.event_type, e.event_category, e.severity, COALESCE(e.title, ''),
 COALESCE(e.node_id, ''), COALESCE(n.name, ''), e.message, e.created_at, e.acknowledged, e.requires_action, e.event_status
 FROM node_events e LEFT JOIN nodes n ON n.id = e.node_id
-WHERE e.visibility = 'public' AND e.requires_action = 1 AND e.event_status NOT IN ('resolved', 'dismissed')
+WHERE e.visibility = 'public' AND ` + pendingEventFilter("e") + `
 ORDER BY CASE e.severity WHEN 'error' THEN 0 WHEN 'warning' THEN 1 ELSE 2 END, e.created_at DESC LIMIT 5`)
 	if err != nil {
 		return result, err

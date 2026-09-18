@@ -19,6 +19,9 @@ func TestEventCenterHidesInternalSyncRequests(t *testing.T) {
 	if _, err := database.Exec(`INSERT INTO node_events (id, node_id, event_type, severity, message, created_at, event_category, title, visibility, requires_action, event_status, action_type) VALUES ('public-error', 'event-node', 'sync_failed', 'error', 'timeout', ?, 'sync', '节点同步失败', 'public', 0, 'open', 'retry_sync')`, now); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := database.Exec(`INSERT INTO node_events (id, node_id, event_type, severity, message, created_at, event_category, title, visibility, requires_action, event_status) VALUES ('public-info', 'event-node', 'node_recovered', 'info', 'recovered', ?, 'node', '节点已恢复', 'public', 0, 'open')`, now); err != nil {
+		t.Fatal(err)
+	}
 	ts := httptest.NewServer(server.Handler())
 	defer ts.Close()
 	login := doJSON(t, ts.Client(), http.MethodPost, ts.URL+"/api/auth/login", "", map[string]string{"userName": "admin", "password": "test-password"})
@@ -27,8 +30,24 @@ func TestEventCenterHidesInternalSyncRequests(t *testing.T) {
 	if list["code"] != successCode {
 		t.Fatalf("events response = %#v", list)
 	}
-	if list["data"].(map[string]any)["total"] != float64(1) {
+	if list["data"].(map[string]any)["total"] != float64(2) {
 		t.Fatalf("visible event total = %#v", list)
+	}
+	pending := doJSON(t, ts.Client(), http.MethodGet, ts.URL+"/api/events?status=pending", token, nil)
+	if pending["code"] != successCode || pending["data"].(map[string]any)["total"] != float64(1) {
+		t.Fatalf("actionable open event missing from pending tab = %#v", pending)
+	}
+	required := doJSON(t, ts.Client(), http.MethodGet, ts.URL+"/api/events?status=required", token, nil)
+	if required["code"] != successCode || required["data"].(map[string]any)["total"] != float64(0) {
+		t.Fatalf("non-required actionable event triggered strong reminder = %#v", required)
+	}
+	counts := doJSON(t, ts.Client(), http.MethodGet, ts.URL+"/api/events/summary", token, nil)
+	if counts["code"] != successCode || counts["data"].(map[string]any)["pendingCount"] != float64(1) {
+		t.Fatalf("pending event summary = %#v", counts)
+	}
+	dashboardEvents, err := server.dashboardEvents()
+	if err != nil || dashboardEvents.PendingCount != 1 || len(dashboardEvents.Items) != 1 {
+		t.Fatalf("dashboard pending events = %#v, err=%v", dashboardEvents, err)
 	}
 
 	read := doJSON(t, ts.Client(), http.MethodPost, ts.URL+"/api/events/public-error/read", token, nil)
@@ -39,7 +58,7 @@ func TestEventCenterHidesInternalSyncRequests(t *testing.T) {
 	if resolved["code"] != successCode {
 		t.Fatalf("resolve response = %#v", resolved)
 	}
-	counts := doJSON(t, ts.Client(), http.MethodGet, ts.URL+"/api/events/summary", token, nil)
+	counts = doJSON(t, ts.Client(), http.MethodGet, ts.URL+"/api/events/summary", token, nil)
 	if counts["code"] != successCode || counts["data"].(map[string]any)["pendingCount"] != float64(0) {
 		t.Fatalf("event summary = %#v", counts)
 	}
