@@ -1,0 +1,1 @@
+import{ga as e,na as t,sa as n}from"./router-fP7H3g3r.js";import{t as r}from"./exception-base-7UtsREik.js";var i=n({name:`403`,__name:`index`,setup(n){return(n,i)=>{let a=r;return e(),t(a,{type:`403`})}}});export{i as default};
