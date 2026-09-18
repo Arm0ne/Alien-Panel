@@ -105,7 +105,15 @@ onUnmounted(() => {
     @clickoutside="close"
   >
     <template #trigger>
-      <NBadge :value="pendingCount" :max="99" :show-zero="false" :dot="pendingCount > 0" type="error" processing>
+      <NBadge
+        :value="pendingCount"
+        :max="99"
+        :show-zero="false"
+        :dot="pendingCount > 0"
+        :offset="[-16, 0]"
+        type="error"
+        processing
+      >
         <ButtonIcon :tooltip-content="$t('route.events')" aria-label="事件中心" @click="toggle">
           <icon-mdi-bell-outline />
         </ButtonIcon>
