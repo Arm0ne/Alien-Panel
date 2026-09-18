@@ -1,0 +1,1 @@
+import{ga as e,na as t,sa as n}from"./router-B1h4A-0f.js";import{t as r}from"./exception-base-BPnhtxsV.js";var i=n({name:`404`,__name:`index`,setup(n){return(n,i)=>{let a=r;return e(),t(a,{type:`404`})}}});export{i as default};
