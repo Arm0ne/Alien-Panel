@@ -1,1 +1,0 @@
-import{ga as e,na as t,sa as n}from"./router-Bly_k9Sk.js";import{t as r}from"./exception-base-DJsaag85.js";var i=n({name:`403`,__name:`index`,setup(n){return(n,i)=>{let a=r;return e(),t(a,{type:`403`})}}});export{i as default};
