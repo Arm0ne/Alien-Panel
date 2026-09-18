@@ -110,7 +110,7 @@ onUnmounted(() => {
         :max="99"
         :show-zero="false"
         :dot="pendingCount > 0"
-        :offset="[-16, 0]"
+        :offset="[-18, 12]"
         type="error"
         processing
       >
