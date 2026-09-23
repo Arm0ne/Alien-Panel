@@ -302,9 +302,13 @@ func (s *Server) dashboard(w http.ResponseWriter, r *http.Request) {
 	}
 	traffic := trafficWindows[0]
 	todayTraffic := trafficWindows[todayIndex]
-	monthTraffic, err := s.dashboardTrafficSummary(monthStart, now, monthSpec, inbounds)
+	// Keep the month card on the streaming delta path for now. A SQLite
+	// window-function aggregate over every monthly snapshot can be more
+	// expensive than the ordered Go pass on large production databases. The
+	// hourly rollup planned for the next iteration will remove this scan.
+	monthTraffic, err := s.dashboardTraffic(monthStart, now, monthSpec, inbounds)
 	if err != nil {
-		s.logger.Error("dashboard month traffic summary", "error", err)
+		s.logger.Error("dashboard month traffic query", "error", err)
 		writeFailure(w, http.StatusInternalServerError, internalErrorCode, "could not read month traffic")
 		return
 	}
@@ -687,81 +691,6 @@ ORDER BY inbound_id, collected_at`, broadFrom.Format(time.RFC3339Nano), broadTo.
 		}
 	}
 	return results, nil
-}
-
-// dashboardTrafficSummary calculates a range that is only displayed as a
-// total (currently the month card) inside SQLite. Returning one aggregate row
-// avoids transferring every minute-level snapshot to the Go process just to
-// add the same deltas together.
-func (s *Server) dashboardTrafficSummary(from, to time.Time, spec dashboardRangeSpec, inbounds map[string]dashboardInbound) (dashboardTrafficAggregate, error) {
-	result := newDashboardTrafficAggregate(from, to, spec, inbounds)
-	if len(inbounds) == 0 {
-		return result, nil
-	}
-	var uploadBytes, downloadBytes, totalBytes, sampleCount int64
-	var observedSeconds float64
-	err := s.db.QueryRow(`WITH eligible AS MATERIALIZED (
-  SELECT i.id AS inbound_id
-  FROM inbounds i
-  JOIN nodes n ON n.id = i.node_id
-  JOIN users u ON u.id = i.user_id AND u.deleted_at IS NULL
-  WHERE i.kind = 'user' AND i.deleted_at IS NULL
-    AND n.type = 'relay' AND n.deleted_at IS NULL
-    AND EXISTS (
-      SELECT 1 FROM user_inbounds ui
-      WHERE ui.user_id = i.user_id AND ui.inbound_id = i.id
-        AND ui.is_primary = 1 AND ui.active_to IS NULL
-    )
-), range_rows AS MATERIALIZED (
-  SELECT t.inbound_id, t.collected_at, t.up, t.down, t.reset_detected
-  FROM traffic_snapshots t
-  JOIN eligible e ON e.inbound_id = t.inbound_id
-  WHERE t.collected_at >= ? AND t.collected_at <= ?
-), baseline_times AS MATERIALIZED (
-  SELECT e.inbound_id,
-    (SELECT MAX(t.collected_at)
-     FROM traffic_snapshots t
-     WHERE t.inbound_id = e.inbound_id AND t.collected_at < ?) AS collected_at
-  FROM eligible e
-), baseline_rows AS MATERIALIZED (
-  SELECT t.inbound_id, t.collected_at, t.up, t.down, t.reset_detected
-  FROM traffic_snapshots t
-  JOIN baseline_times b ON b.inbound_id = t.inbound_id AND b.collected_at = t.collected_at
-), snapshots AS MATERIALIZED (
-  SELECT inbound_id, collected_at, up, down, reset_detected FROM baseline_rows
-  UNION ALL
-  SELECT inbound_id, collected_at, up, down, reset_detected FROM range_rows
-), ordered AS (
-  SELECT inbound_id, collected_at, up, down, reset_detected,
-    LAG(collected_at) OVER (PARTITION BY inbound_id ORDER BY collected_at) AS previous_at,
-    LAG(up) OVER (PARTITION BY inbound_id ORDER BY collected_at) AS previous_up,
-    LAG(down) OVER (PARTITION BY inbound_id ORDER BY collected_at) AS previous_down
-  FROM snapshots
-), deltas AS (
-  SELECT collected_at,
-    CASE WHEN reset_detected = 1 OR up < previous_up THEN up ELSE MAX(up - previous_up, 0) END AS upload_delta,
-    CASE WHEN reset_detected = 1 OR down < previous_down THEN down ELSE MAX(down - previous_down, 0) END AS download_delta,
-    (julianday(collected_at) - julianday(previous_at)) * 86400.0 AS interval_seconds
-  FROM ordered
-  WHERE previous_at IS NOT NULL
-)
-SELECT COALESCE(SUM(upload_delta), 0), COALESCE(SUM(download_delta), 0),
-  COALESCE(SUM(upload_delta + download_delta), 0), COALESCE(SUM(interval_seconds), 0), COUNT(*)
-FROM deltas
-WHERE collected_at >= ? AND collected_at <= ? AND interval_seconds > 0`,
-		from.Format(time.RFC3339Nano), to.Format(time.RFC3339Nano), from.Format(time.RFC3339Nano),
-		from.Format(time.RFC3339Nano), to.Format(time.RFC3339Nano)).Scan(&uploadBytes, &downloadBytes, &totalBytes, &observedSeconds, &sampleCount)
-	if err != nil {
-		return result, err
-	}
-	result.trend.Summary = dashboardTrafficSummary{UploadBytes: uploadBytes, DownloadBytes: downloadBytes, TotalBytes: totalBytes, SampleCount: int(sampleCount)}
-	if result.eligibleCount > 0 && spec.duration > 0 {
-		result.trend.Summary.Coverage = observedSeconds / (spec.duration.Seconds() * float64(result.eligibleCount))
-		if result.trend.Summary.Coverage > 1 {
-			result.trend.Summary.Coverage = 1
-		}
-	}
-	return result, nil
 }
 
 func dashboardNullableString(value string) *string {

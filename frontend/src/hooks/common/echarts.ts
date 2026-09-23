@@ -147,7 +147,17 @@ export function useEcharts<T extends ECOption>(optionsFactory: () => T, hooks: C
   async function render() {
     if (isRendered()) return;
 
+    // Some charts are conditionally mounted with `v-if`. The element-size
+    // watcher can run once before Vue has attached the ref; ECharts expects a
+    // real HTMLElement and otherwise crashes while reading getAttribute().
+    if (!domRef.value) return;
+
     const chartTheme = darkMode.value ? 'dark' : 'light';
+
+    // The element may have been mounted after the initial options snapshot
+    // was created (for example behind a v-if). Refresh the options at render
+    // time so the first paint uses the current data instead of an empty chart.
+    Object.assign(chartOptions, optionsFactory());
 
     chart.value = echarts.init(domRef.value, chartTheme);
 
@@ -158,6 +168,7 @@ export function useEcharts<T extends ECOption>(optionsFactory: () => T, hooks: C
 
   /** resize chart */
   function resize() {
+    if (!isRendered()) return;
     chart.value?.resize();
   }
 
@@ -173,8 +184,11 @@ export function useEcharts<T extends ECOption>(optionsFactory: () => T, hooks: C
   /** change chart theme */
   async function changeTheme() {
     await destroy();
+    if (!domRef.value) return;
     await render();
-    await onUpdated?.(chart.value!);
+    if (chart.value) {
+      await onUpdated?.(chart.value);
+    }
   }
 
   /**
@@ -186,6 +200,10 @@ export function useEcharts<T extends ECOption>(optionsFactory: () => T, hooks: C
   async function renderChartBySize(w: number, h: number) {
     initialSize.width = w;
     initialSize.height = h;
+
+    // Do not initialize ECharts for a missing or zero-sized conditional
+    // element. The next element-size update will retry after mount.
+    if (!domRef.value || w <= 0 || h <= 0) return;
 
     // resize chart
     if (isRendered()) {

@@ -250,6 +250,10 @@ const { domRef: trendChartRef, updateOptions } = useEcharts(() => buildTrafficOp
 watch(
   () => dashboard.value?.trafficTrend,
   () => {
+    // The chart container is conditionally mounted below. Ignore the first
+    // data update until Vue has attached the element ref; useEcharts will
+    // apply the latest options when the element becomes measurable.
+    if (!trendChartRef.value) return;
     void updateOptions(() => buildTrafficOptions());
   },
   { deep: true }
