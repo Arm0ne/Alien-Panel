@@ -34,13 +34,15 @@ const (
 )
 
 type Server struct {
-	cfg              config.Config
-	db               *sql.DB
-	logger           *slog.Logger
-	origins          map[string]struct{}
-	dbMu             sync.RWMutex
-	dashboardCacheMu sync.Mutex
-	dashboardCache   map[string]dashboardCacheEntry
+	cfg               config.Config
+	db                *sql.DB
+	logger            *slog.Logger
+	origins           map[string]struct{}
+	dbMu              sync.RWMutex
+	dashboardCacheMu  sync.Mutex
+	dashboardCache    map[string]dashboardCacheEntry
+	dashboardFlightMu sync.Mutex
+	dashboardFlights  map[string]*dashboardFlight
 }
 
 const dashboardCacheTTL = 20 * time.Second
@@ -48,6 +50,11 @@ const dashboardCacheTTL = 20 * time.Second
 type dashboardCacheEntry struct {
 	data      map[string]any
 	expiresAt time.Time
+}
+
+type dashboardFlight struct {
+	done chan struct{}
+	data map[string]any
 }
 
 type principal struct {
@@ -64,11 +71,12 @@ func NewServer(cfg config.Config, database *sql.DB, logger *slog.Logger) (*Serve
 		logger = slog.Default()
 	}
 	server := &Server{
-		cfg:            cfg,
-		db:             database,
-		logger:         logger,
-		origins:        make(map[string]struct{}, len(cfg.CorsOrigins)),
-		dashboardCache: make(map[string]dashboardCacheEntry),
+		cfg:              cfg,
+		db:               database,
+		logger:           logger,
+		origins:          make(map[string]struct{}, len(cfg.CorsOrigins)),
+		dashboardCache:   make(map[string]dashboardCacheEntry),
+		dashboardFlights: make(map[string]*dashboardFlight),
 	}
 	for _, origin := range cfg.CorsOrigins {
 		server.origins[origin] = struct{}{}

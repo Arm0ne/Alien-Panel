@@ -621,8 +621,22 @@ func deleteStaleClientsTx(tx *sql.Tx, inboundID string, incomingIDs []string) (i
 		return 0, err
 	}
 	var removed int64
-	for _, id := range staleIDs {
-		result, err := tx.Exec(`DELETE FROM clients WHERE id = ?`, id)
+	// Keep the statement below well below SQLite's default bind-variable
+	// limit while replacing one DELETE per stale Client with a small number of
+	// batched deletes.
+	const deleteBatchSize = 500
+	for start := 0; start < len(staleIDs); start += deleteBatchSize {
+		end := start + deleteBatchSize
+		if end > len(staleIDs) {
+			end = len(staleIDs)
+		}
+		placeholders := make([]string, end-start)
+		args := make([]any, end-start)
+		for index, id := range staleIDs[start:end] {
+			placeholders[index] = "?"
+			args[index] = id
+		}
+		result, err := tx.Exec(`DELETE FROM clients WHERE id IN (`+strings.Join(placeholders, ",")+")", args...)
 		if err != nil {
 			return removed, err
 		}

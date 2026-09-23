@@ -310,6 +310,22 @@ func trafficItemsFrom(object map[string]json.RawMessage) ([]json.RawMessage, err
 }
 
 func mergeClientTraffic(clients []Client, trafficItems []json.RawMessage) {
+	byEmail := make(map[string]int, len(clients))
+	byRemoteID := make(map[string]int, len(clients))
+	for index, client := range clients {
+		// Preserve the old first-match behavior if malformed X-Panel data
+		// contains duplicate email or remote ID values.
+		if client.Email != "" {
+			if _, exists := byEmail[client.Email]; !exists {
+				byEmail[client.Email] = index
+			}
+		}
+		if client.RemoteID != "" {
+			if _, exists := byRemoteID[client.RemoteID]; !exists {
+				byRemoteID[client.RemoteID] = index
+			}
+		}
+	}
 	for _, raw := range trafficItems {
 		traffic, err := objectFromPayload(raw)
 		if err != nil {
@@ -317,21 +333,31 @@ func mergeClientTraffic(clients []Client, trafficItems []json.RawMessage) {
 		}
 		email := stringField(traffic, "email")
 		remoteID := stringField(traffic, "id", "client_id", "clientId")
-		for index := range clients {
-			if (email != "" && clients[index].Email == email) || (remoteID != "" && clients[index].RemoteID == remoteID) {
-				clients[index].Up = intField(traffic, "up", "upload")
-				clients[index].Down = intField(traffic, "down", "download")
-				clients[index].AllTime = intField(traffic, "all_time", "allTime", "total")
-				// Some X-Panel versions omit lastOnline from traffic records. Do
-				// not erase a value parsed from the client definition in that case.
-				if lastOnline := timestampField(traffic, "last_online", "lastOnline", "last_online_at", "lastOnlineAt", "last_online_time", "lastOnlineTime"); lastOnline > 0 {
-					clients[index].LastOnline = lastOnline
-				}
-				if clients[index].AllTime == 0 {
-					clients[index].AllTime = clients[index].Up + clients[index].Down
-				}
-				break
+		index := -1
+		if email != "" {
+			index = byEmail[email]
+			if _, exists := byEmail[email]; !exists {
+				index = -1
 			}
+		}
+		if remoteID != "" {
+			if candidate, exists := byRemoteID[remoteID]; exists && (index < 0 || candidate < index) {
+				index = candidate
+			}
+		}
+		if index < 0 {
+			continue
+		}
+		clients[index].Up = intField(traffic, "up", "upload")
+		clients[index].Down = intField(traffic, "down", "download")
+		clients[index].AllTime = intField(traffic, "all_time", "allTime", "total")
+		// Some X-Panel versions omit lastOnline from traffic records. Do
+		// not erase a value parsed from the client definition in that case.
+		if lastOnline := timestampField(traffic, "last_online", "lastOnline", "last_online_at", "lastOnlineAt", "last_online_time", "lastOnlineTime"); lastOnline > 0 {
+			clients[index].LastOnline = lastOnline
+		}
+		if clients[index].AllTime == 0 {
+			clients[index].AllTime = clients[index].Up + clients[index].Down
 		}
 	}
 }

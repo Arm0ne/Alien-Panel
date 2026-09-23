@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"errors"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 )
@@ -252,13 +253,7 @@ ORDER BY collected_at ASC`, inboundID, from.Format(time.RFC3339Nano), to.Format(
 	for key := range buckets {
 		keys = append(keys, key)
 	}
-	for index := 0; index < len(keys); index++ {
-		for next := index + 1; next < len(keys); next++ {
-			if keys[next] < keys[index] {
-				keys[index], keys[next] = keys[next], keys[index]
-			}
-		}
-	}
+	sort.Slice(keys, func(i, j int) bool { return keys[i] < keys[j] })
 	var cumulativeUpload, cumulativeDownload int64
 	for _, key := range keys {
 		bucket := buckets[key]
