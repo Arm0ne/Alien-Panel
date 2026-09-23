@@ -6,6 +6,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	centraldb "xpanel-central/backend/internal/db"
 )
 
 type dashboardRangeSpec struct {
@@ -244,6 +246,7 @@ func (s *Server) finishDashboardFlight(key string, flight *dashboardFlight, data
 }
 
 func (s *Server) dashboard(w http.ResponseWriter, r *http.Request) {
+	requestStarted := time.Now()
 	now := time.Now().UTC()
 	spec, from, to, err := parseDashboardRange(r, now)
 	if err != nil {
@@ -284,34 +287,35 @@ func (s *Server) dashboard(w http.ResponseWriter, r *http.Request) {
 	}
 	todaySpec := dashboardRanges["today"]
 	todayStart := dashboardDayStart(now)
-	windowSpecs := []dashboardTrafficWindowSpec{{from: from, to: to, spec: spec}}
-	todayIndex := 0
+	trafficStarted := time.Now()
+	trafficSource := "raw"
+	var traffic, todayTraffic dashboardTrafficAggregate
 	if spec.name == todaySpec.name && from.Equal(todayStart) && to.Equal(now) {
-		// Reuse the selected range when the dashboard is showing today.
+		traffic, err = s.dashboardTraffic(from, to, spec, inbounds)
+		todayTraffic = traffic
 	} else {
-		todayIndex = len(windowSpecs)
-		windowSpecs = append(windowSpecs, dashboardTrafficWindowSpec{from: todayStart, to: now, spec: todaySpec})
+		traffic, trafficSource, err = s.dashboardTrafficForRange(from, to, spec, inbounds)
+		if err == nil {
+			todayTraffic, err = s.dashboardTraffic(todayStart, now, todaySpec, inbounds)
+		}
 	}
-	monthStart := dashboardMonthStart(now)
-	monthSpec := dashboardRangeSpec{name: "month", duration: now.Sub(monthStart), bucket: 24 * time.Hour}
-	trafficWindows, err := s.dashboardTrafficWindows(windowSpecs, inbounds)
 	if err != nil {
 		s.logger.Error("dashboard traffic query", "error", err)
 		writeFailure(w, http.StatusInternalServerError, internalErrorCode, "could not read dashboard traffic")
 		return
 	}
-	traffic := trafficWindows[0]
-	todayTraffic := trafficWindows[todayIndex]
-	// Keep the month card on the streaming delta path for now. A SQLite
-	// window-function aggregate over every monthly snapshot can be more
-	// expensive than the ordered Go pass on large production databases. The
-	// hourly rollup planned for the next iteration will remove this scan.
-	monthTraffic, err := s.dashboardTraffic(monthStart, now, monthSpec, inbounds)
+	monthStart := dashboardMonthStart(now)
+	monthSpec := dashboardRangeSpec{name: "month", duration: now.Sub(monthStart), bucket: 24 * time.Hour}
+	monthTraffic, monthSource, err := s.dashboardTrafficForRange(monthStart, now, monthSpec, inbounds)
 	if err != nil {
 		s.logger.Error("dashboard month traffic query", "error", err)
 		writeFailure(w, http.StatusInternalServerError, internalErrorCode, "could not read month traffic")
 		return
 	}
+	if monthSource == "rollup" && trafficSource == "raw" {
+		trafficSource = "raw+rollup"
+	}
+	trafficDuration := time.Since(trafficStarted)
 
 	var nodes struct {
 		Total   int `json:"total"`
@@ -379,6 +383,8 @@ func (s *Server) dashboard(w http.ResponseWriter, r *http.Request) {
 	s.dashboardCache[cacheKey] = dashboardCacheEntry{data: response, expiresAt: now.Add(dashboardCacheTTL)}
 	s.dashboardCacheMu.Unlock()
 	dashboardResult = response
+	s.logger.Info("dashboard query completed", "range", spec.name, "duration_ms", time.Since(requestStarted).Milliseconds(),
+		"traffic_ms", trafficDuration.Milliseconds(), "traffic_source", trafficSource, "points", len(traffic.trend.Points))
 	writeSuccess(w, response)
 }
 
@@ -502,6 +508,198 @@ func (s *Server) dashboardTraffic(from, to time.Time, spec dashboardRangeSpec, i
 		return dashboardTrafficAggregate{}, err
 	}
 	return results[0], nil
+}
+
+func (s *Server) dashboardTrafficForRange(from, to time.Time, spec dashboardRangeSpec, inbounds map[string]dashboardInbound) (dashboardTrafficAggregate, string, error) {
+	if spec.duration <= 48*time.Hour {
+		result, err := s.dashboardTraffic(from, to, spec, inbounds)
+		return result, "raw", err
+	}
+	ready, err := centraldb.TrafficHourlyRollupsReady(s.db)
+	if err != nil {
+		return dashboardTrafficAggregate{}, "rollup", err
+	}
+	if !ready {
+		result, err := s.dashboardTraffic(from, to, spec, inbounds)
+		return result, "raw", err
+	}
+	result, err := s.dashboardTrafficHourly(from, to, spec, inbounds)
+	return result, "rollup", err
+}
+
+// dashboardTrafficHourly combines complete UTC-hour rollups with at most two
+// short raw edge scans. Deltas are assigned by the timestamp of the newer
+// snapshot, matching dashboardTrafficWindows exactly.
+func (s *Server) dashboardTrafficHourly(from, to time.Time, spec dashboardRangeSpec, inbounds map[string]dashboardInbound) (dashboardTrafficAggregate, error) {
+	result := newDashboardTrafficAggregate(from, to, spec, inbounds)
+	if len(inbounds) == 0 {
+		return result, nil
+	}
+	var latestDataAt string
+	if err := s.db.QueryRow(`WITH eligible AS MATERIALIZED (
+  SELECT i.id AS inbound_id
+  FROM inbounds i
+  JOIN nodes n ON n.id = i.node_id
+  JOIN users u ON u.id = i.user_id AND u.deleted_at IS NULL
+  WHERE i.kind = 'user' AND i.deleted_at IS NULL
+    AND n.type = 'relay' AND n.deleted_at IS NULL
+    AND EXISTS (SELECT 1 FROM user_inbounds ui WHERE ui.user_id = i.user_id AND ui.inbound_id = i.id AND ui.is_primary = 1 AND ui.active_to IS NULL)
+)
+SELECT COALESCE(MAX(t.collected_at), '') FROM traffic_snapshots t JOIN eligible e ON e.inbound_id = t.inbound_id
+WHERE t.collected_at <= ?`, to.Format(time.RFC3339Nano)).Scan(&latestDataAt); err != nil {
+		return result, err
+	}
+	setLatestDashboardDataAt(&result.trend.DataAt, latestDataAt)
+	fullFrom := centraldb.TrafficHourStart(from)
+	if fullFrom.Before(from) {
+		fullFrom = fullFrom.Add(time.Hour)
+	}
+	fullTo := centraldb.TrafficHourStart(to)
+
+	if fullFrom.Before(fullTo) {
+		rows, err := s.db.Query(`SELECT inbound_id, bucket_start, upload_bytes, download_bytes,
+sample_count, observed_seconds, reset_count, has_gap, COALESCE(data_at, '')
+FROM traffic_hourly_rollups
+WHERE bucket_start >= ? AND bucket_start < ?
+ORDER BY bucket_start, inbound_id`, fullFrom.Format(time.RFC3339Nano), fullTo.Format(time.RFC3339Nano))
+		if err != nil {
+			return result, err
+		}
+		for rows.Next() {
+			var inboundID, bucketText, dataAt string
+			var uploadBytes, downloadBytes, observedSeconds int64
+			var sampleCount, resetCount, hasGap int
+			if err := rows.Scan(&inboundID, &bucketText, &uploadBytes, &downloadBytes, &sampleCount, &observedSeconds, &resetCount, &hasGap, &dataAt); err != nil {
+				_ = rows.Close()
+				return result, err
+			}
+			inbound, ok := inbounds[inboundID]
+			if !ok {
+				continue
+			}
+			bucketStart, err := time.Parse(time.RFC3339Nano, bucketText)
+			if err != nil {
+				continue
+			}
+			inboundTraffic := result.byInbound[inboundID]
+			inboundTraffic.uploadBytes += uploadBytes
+			inboundTraffic.downloadBytes += downloadBytes
+			inboundTraffic.totalBytes += uploadBytes + downloadBytes
+			nodeTraffic := result.byNode[inbound.nodeID]
+			if nodeTraffic != nil {
+				nodeTraffic.uploadBytes += uploadBytes
+				nodeTraffic.downloadBytes += downloadBytes
+				nodeTraffic.totalBytes += uploadBytes + downloadBytes
+			}
+			trendStart := time.Unix((bucketStart.Unix()/int64(spec.bucket.Seconds()))*int64(spec.bucket.Seconds()), 0).UTC()
+			point := result.trendPoint(trendStart.Unix(), trendStart)
+			point.UploadBytes += uploadBytes
+			point.DownloadBytes += downloadBytes
+			point.TotalBytes += uploadBytes + downloadBytes
+			point.SampleCount += sampleCount
+			point.ResetDetected = point.ResetDetected || resetCount > 0
+			point.HasGap = point.HasGap || hasGap == 1
+			result.trend.Summary.UploadBytes += uploadBytes
+			result.trend.Summary.DownloadBytes += downloadBytes
+			result.trend.Summary.TotalBytes += uploadBytes + downloadBytes
+			result.trend.Summary.SampleCount += sampleCount
+			result.coverageSecs += float64(observedSeconds)
+			setLatestDashboardDataAt(&result.trend.DataAt, dataAt)
+		}
+		if err := rows.Err(); err != nil {
+			_ = rows.Close()
+			return result, err
+		}
+		if err := rows.Close(); err != nil {
+			return result, err
+		}
+	}
+
+	if !fullFrom.Before(fullTo) {
+		return s.dashboardTraffic(from, to, spec, inbounds)
+	}
+	if from.Before(fullFrom) {
+		headTo := fullFrom.Add(-time.Nanosecond)
+		if headTo.After(to) {
+			headTo = to
+		}
+		head, err := s.dashboardTraffic(from, headTo, spec, inbounds)
+		if err != nil {
+			return result, err
+		}
+		mergeDashboardTrafficAggregate(&result, head)
+	}
+	if !fullTo.After(to) {
+		tailFrom := fullTo
+		if tailFrom.Before(from) {
+			tailFrom = from
+		}
+		tail, err := s.dashboardTraffic(tailFrom, to, spec, inbounds)
+		if err != nil {
+			return result, err
+		}
+		mergeDashboardTrafficAggregate(&result, tail)
+	}
+
+	finalizeDashboardTraffic(&result, spec)
+	return result, nil
+}
+
+func mergeDashboardTrafficAggregate(target *dashboardTrafficAggregate, source dashboardTrafficAggregate) {
+	for inboundID, sourceTraffic := range source.byInbound {
+		if targetTraffic := target.byInbound[inboundID]; targetTraffic != nil {
+			targetTraffic.uploadBytes += sourceTraffic.uploadBytes
+			targetTraffic.downloadBytes += sourceTraffic.downloadBytes
+			targetTraffic.totalBytes += sourceTraffic.totalBytes
+		}
+	}
+	for nodeID, sourceTraffic := range source.byNode {
+		if targetTraffic := target.byNode[nodeID]; targetTraffic != nil {
+			targetTraffic.uploadBytes += sourceTraffic.uploadBytes
+			targetTraffic.downloadBytes += sourceTraffic.downloadBytes
+			targetTraffic.totalBytes += sourceTraffic.totalBytes
+		}
+	}
+	target.trend.Summary.UploadBytes += source.trend.Summary.UploadBytes
+	target.trend.Summary.DownloadBytes += source.trend.Summary.DownloadBytes
+	target.trend.Summary.TotalBytes += source.trend.Summary.TotalBytes
+	target.trend.Summary.SampleCount += source.trend.Summary.SampleCount
+	target.coverageSecs += source.coverageSecs
+	if source.trend.DataAt != nil {
+		setLatestDashboardDataAt(&target.trend.DataAt, *source.trend.DataAt)
+	}
+	var previousUpload, previousDownload int64
+	for _, sourcePoint := range source.trend.Points {
+		pointAt, err := time.Parse(time.RFC3339Nano, sourcePoint.Time)
+		if err != nil {
+			continue
+		}
+		point := target.trendPoint(pointAt.Unix(), pointAt)
+		uploadDelta := sourcePoint.UploadBytes - previousUpload
+		downloadDelta := sourcePoint.DownloadBytes - previousDownload
+		previousUpload, previousDownload = sourcePoint.UploadBytes, sourcePoint.DownloadBytes
+		point.UploadBytes += uploadDelta
+		point.DownloadBytes += downloadDelta
+		point.TotalBytes += uploadDelta + downloadDelta
+		point.SampleCount += sourcePoint.SampleCount
+		point.ResetDetected = point.ResetDetected || sourcePoint.ResetDetected
+		point.HasGap = point.HasGap || sourcePoint.HasGap
+	}
+}
+
+func setLatestDashboardDataAt(target **string, candidate string) {
+	if candidate == "" {
+		return
+	}
+	if *target == nil {
+		*target = dashboardNullableString(candidate)
+		return
+	}
+	currentTime, currentErr := time.Parse(time.RFC3339Nano, **target)
+	candidateTime, candidateErr := time.Parse(time.RFC3339Nano, candidate)
+	if candidateErr == nil && (currentErr != nil || candidateTime.After(currentTime)) {
+		*target = dashboardNullableString(candidate)
+	}
 }
 
 // dashboardTrafficWindows reads a single broad snapshot window and computes
@@ -666,31 +864,35 @@ ORDER BY inbound_id, collected_at`, broadFrom.Format(time.RFC3339Nano), broadTo.
 	}
 
 	for index, window := range windowSpecs {
-		result := &results[index]
-		keys := make([]int64, 0, len(result.trendPoints))
-		for key := range result.trendPoints {
-			keys = append(keys, key)
-		}
-		sort.Slice(keys, func(i, j int) bool { return keys[i] < keys[j] })
-		var cumulativeUpload, cumulativeDownload int64
-		for _, key := range keys {
-			point := *result.trendPoints[key]
-			cumulativeUpload += point.UploadBytes
-			cumulativeDownload += point.DownloadBytes
-			point.UploadBytes = cumulativeUpload
-			point.DownloadBytes = cumulativeDownload
-			point.TotalBytes = cumulativeUpload + cumulativeDownload
-			result.trend.Points = append(result.trend.Points, point)
-		}
-		result.trend.Summary.Coverage = 0
-		if result.eligibleCount > 0 && window.spec.duration > 0 {
-			result.trend.Summary.Coverage = result.coverageSecs / (window.spec.duration.Seconds() * float64(result.eligibleCount))
-			if result.trend.Summary.Coverage > 1 {
-				result.trend.Summary.Coverage = 1
-			}
-		}
+		finalizeDashboardTraffic(&results[index], window.spec)
 	}
 	return results, nil
+}
+
+func finalizeDashboardTraffic(result *dashboardTrafficAggregate, spec dashboardRangeSpec) {
+	keys := make([]int64, 0, len(result.trendPoints))
+	for key := range result.trendPoints {
+		keys = append(keys, key)
+	}
+	sort.Slice(keys, func(i, j int) bool { return keys[i] < keys[j] })
+	result.trend.Points = result.trend.Points[:0]
+	var cumulativeUpload, cumulativeDownload int64
+	for _, key := range keys {
+		point := *result.trendPoints[key]
+		cumulativeUpload += point.UploadBytes
+		cumulativeDownload += point.DownloadBytes
+		point.UploadBytes = cumulativeUpload
+		point.DownloadBytes = cumulativeDownload
+		point.TotalBytes = cumulativeUpload + cumulativeDownload
+		result.trend.Points = append(result.trend.Points, point)
+	}
+	result.trend.Summary.Coverage = 0
+	if result.eligibleCount > 0 && spec.duration > 0 {
+		result.trend.Summary.Coverage = result.coverageSecs / (spec.duration.Seconds() * float64(result.eligibleCount))
+		if result.trend.Summary.Coverage > 1 {
+			result.trend.Summary.Coverage = 1
+		}
+	}
 }
 
 func dashboardNullableString(value string) *string {

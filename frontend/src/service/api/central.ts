@@ -6,7 +6,7 @@ const { baseURL: centralBaseURL } = getServiceBaseURL(import.meta.env, import.me
 
 /** Fetch the business traffic and operations summary for the selected period. */
 export function fetchDashboard(params: Api.Central.DashboardQuery = {}) {
-  return request<Api.Central.DashboardSummary>({ url: '/dashboard', params });
+  return request<Api.Central.DashboardSummary>({ url: '/dashboard', params, timeout: 30_000 });
 }
 
 /** Generate a consistent SQLite snapshot and download it as an attachment. */

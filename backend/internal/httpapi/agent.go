@@ -14,6 +14,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	centraldb "xpanel-central/backend/internal/db"
 )
 
 type agentPrincipal struct {
@@ -441,9 +443,57 @@ ON CONFLICT(node_id, inbound_id, remote_client_id) DO UPDATE SET email = exclude
 		if resetDetected {
 			resetFlag = 1
 		}
-		if _, err := tx.Exec(`INSERT OR IGNORE INTO traffic_snapshots (id, node_id, inbound_id, collected_at, up, down, all_time, source, reset_detected, sync_run_id) VALUES (?, ?, ?, ?, ?, ?, ?, 'xpanel', ?, ?)`, newID(), principal.NodeID, inboundID, observedAt.Format(time.RFC3339Nano), inbound.Up, inbound.Down, inbound.AllTime, resetFlag, syncRunID); err != nil {
+		insertedSnapshot, err := tx.Exec(`INSERT OR IGNORE INTO traffic_snapshots (id, node_id, inbound_id, collected_at, up, down, all_time, source, reset_detected, sync_run_id) VALUES (?, ?, ?, ?, ?, ?, ?, 'xpanel', ?, ?)`, newID(), principal.NodeID, inboundID, observedAt.Format(time.RFC3339Nano), inbound.Up, inbound.Down, inbound.AllTime, resetFlag, syncRunID)
+		if err != nil {
 			s.failSync(w, tx, syncRunID, fmt.Errorf("save traffic snapshot %s: %w", remoteInboundID, err))
 			return
+		}
+		if rowsAffected, rowsErr := insertedSnapshot.RowsAffected(); rowsErr != nil {
+			s.failSync(w, tx, syncRunID, fmt.Errorf("check traffic snapshot %s: %w", remoteInboundID, rowsErr))
+			return
+		} else if rowsAffected > 0 {
+			buckets := []time.Time{centraldb.TrafficHourStart(observedAt)}
+			var nextCollected string
+			nextErr := tx.QueryRow(`SELECT collected_at FROM traffic_snapshots WHERE inbound_id = ? AND collected_at > ? ORDER BY collected_at LIMIT 1`, inboundID, observedAt.Format(time.RFC3339Nano)).Scan(&nextCollected)
+			if nextErr != nil && !errors.Is(nextErr, sql.ErrNoRows) {
+				s.failSync(w, tx, syncRunID, fmt.Errorf("read next traffic snapshot %s: %w", remoteInboundID, nextErr))
+				return
+			}
+			if nextErr == nil {
+				nextAt, parseErr := time.Parse(time.RFC3339Nano, nextCollected)
+				if parseErr != nil {
+					s.failSync(w, tx, syncRunID, fmt.Errorf("parse next traffic snapshot %s: %w", remoteInboundID, parseErr))
+					return
+				}
+				nextBucket := centraldb.TrafficHourStart(nextAt)
+				if !nextBucket.Equal(buckets[0]) {
+					buckets = append(buckets, nextBucket)
+				}
+			}
+			var rollupsReady int
+			if err := tx.QueryRow(`SELECT COUNT(*) FROM traffic_rollup_state WHERE id = 1 AND status = 'complete'`).Scan(&rollupsReady); err != nil {
+				s.failSync(w, tx, syncRunID, fmt.Errorf("read traffic rollup state %s: %w", remoteInboundID, err))
+				return
+			}
+			for _, bucket := range buckets {
+				if _, err := tx.Exec(`INSERT OR IGNORE INTO traffic_rollup_dirty_buckets (inbound_id, bucket_start) VALUES (?, ?)`, inboundID, bucket.Format(time.RFC3339Nano)); err != nil {
+					s.failSync(w, tx, syncRunID, fmt.Errorf("mark traffic rollup bucket %s: %w", remoteInboundID, err))
+					return
+				}
+			}
+			if rollupsReady == 0 {
+				continue
+			}
+			for _, bucket := range buckets {
+				if err := centraldb.RebuildTrafficHourlyBucketTx(r.Context(), tx, inboundID, bucket); err != nil {
+					s.failSync(w, tx, syncRunID, fmt.Errorf("update traffic rollup %s: %w", remoteInboundID, err))
+					return
+				}
+				if _, err := tx.Exec(`DELETE FROM traffic_rollup_dirty_buckets WHERE inbound_id = ? AND bucket_start = ?`, inboundID, bucket.Format(time.RFC3339Nano)); err != nil {
+					s.failSync(w, tx, syncRunID, fmt.Errorf("clear traffic rollup bucket %s: %w", remoteInboundID, err))
+					return
+				}
+			}
 		}
 	}
 	err = s.markMissingAndArchiveInbounds(tx, principal.NodeID, observedAt)

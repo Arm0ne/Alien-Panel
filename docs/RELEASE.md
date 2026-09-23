@@ -5,8 +5,8 @@
 - 产品：Alien-Panel `v1.0.0`。
 - Agent：`v1.0.3`。
 - 目标：Linux amd64。
-- 数据库迁移：`001`–`024`。
-- 源码提交：`21636918fb1b22118c1c6b3d482a8bb5f2de458b`。
+- 数据库迁移：`001`–`025`。
+- 源码提交：以 `RELEASE_MANIFEST.json` 中的 `sourceCommit` 为准。
 
 ## 发布前门禁
 
@@ -31,7 +31,7 @@
 powershell -ExecutionPolicy Bypass -File .\deploy\build-bundle.ps1 -GoArch amd64
 ```
 
-脚本读取 `agent/VERSION`，将版本、提交号和构建时间写入 Agent；生成 `release/xpanel-agent.sha256`。构建后更新 `RELEASE_MANIFEST.json` 的 `sourceCommit` 和版本字段，再提交 `release/`、`deploy/frontend-dist/` 和本目录。
+脚本读取 `agent/VERSION`，将版本、提交号和构建时间写入 Agent；生成 `release/xpanel-agent.sha256`。构建后更新 `RELEASE_MANIFEST.json` 的 `sourceCommit`，再刷新 `checksums/release.sha256` 与 `checksums/source-files.sha256`，提交 `release/`、`deploy/frontend-dist/` 和发布清单。
 
 ## 回滚
 

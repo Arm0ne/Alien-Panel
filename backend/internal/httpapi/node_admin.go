@@ -544,6 +544,14 @@ func (s *Server) deleteNode(w http.ResponseWriter, r *http.Request) {
 		writeFailure(w, http.StatusInternalServerError, internalErrorCode, "could not delete node legacy routes")
 		return
 	}
+	if err := execDelete("traffic hourly rollups", `DELETE FROM traffic_hourly_rollups WHERE inbound_id IN (SELECT id FROM inbounds WHERE node_id = ?)`, id); err != nil {
+		writeFailure(w, http.StatusInternalServerError, internalErrorCode, "could not delete node traffic rollups")
+		return
+	}
+	if err := execDelete("dirty traffic rollups", `DELETE FROM traffic_rollup_dirty_buckets WHERE inbound_id IN (SELECT id FROM inbounds WHERE node_id = ?)`, id); err != nil {
+		writeFailure(w, http.StatusInternalServerError, internalErrorCode, "could not delete node traffic rollups")
+		return
+	}
 	if err := execDelete("traffic snapshots", `DELETE FROM traffic_snapshots WHERE node_id = ? OR inbound_id IN (SELECT id FROM inbounds WHERE node_id = ?)`, id, id); err != nil {
 		writeFailure(w, http.StatusInternalServerError, internalErrorCode, "could not delete node traffic snapshots")
 		return

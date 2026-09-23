@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 
 	"xpanel-central/backend/internal/db"
 )
@@ -22,7 +23,7 @@ func main() {
 
 func run(args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: db-maintenance <backup|verify|restore|migrate> [flags]")
+		return errors.New("usage: db-maintenance <backup|verify|restore|migrate|traffic-rollup> [flags]")
 	}
 	ctx := context.Background()
 	switch args[0] {
@@ -111,8 +112,33 @@ func run(args []string) error {
 		fmt.Printf("migrations are up to date: %s\n", filepath.Clean(*database))
 		return nil
 
+	case "traffic-rollup":
+		flags := flag.NewFlagSet("traffic-rollup", flag.ContinueOnError)
+		database := flags.String("database", envOr("XPANEL_DATABASE", "./data/panel.db"), "SQLite database path")
+		if err := flags.Parse(args[1:]); err != nil {
+			return err
+		}
+		databaseHandle, err := db.Open(*database)
+		if err != nil {
+			return err
+		}
+		defer databaseHandle.Close()
+		if err := db.Migrate(databaseHandle); err != nil {
+			return err
+		}
+		if _, err := databaseHandle.Exec(`UPDATE traffic_rollup_state SET status = 'pending', updated_at = ? WHERE id = 1`, time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+			return fmt.Errorf("reset traffic rollup state: %w", err)
+		}
+		if err := db.EnsureTrafficHourlyRollups(ctx, databaseHandle, func(progress db.TrafficRollupProgress) {
+			fmt.Printf("traffic rollup progress: %d snapshots\n", progress.ProcessedSnapshots)
+		}); err != nil {
+			return err
+		}
+		fmt.Printf("traffic hourly rollups are ready: %s\n", filepath.Clean(*database))
+		return nil
+
 	default:
-		return fmt.Errorf("unknown command %q; use backup, verify, restore or migrate", args[0])
+		return fmt.Errorf("unknown command %q; use backup, verify, restore, migrate or traffic-rollup", args[0])
 	}
 }
 

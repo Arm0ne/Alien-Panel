@@ -273,6 +273,12 @@ VALUES (?, ?, ?, 1, ?)`, newID(), newUserID, inboundID, nowText); err != nil {
 }
 
 func deleteInboundTrafficTx(tx *sql.Tx, inboundID string) (int64, error) {
+	if _, err := tx.Exec(`DELETE FROM traffic_hourly_rollups WHERE inbound_id = ?`, inboundID); err != nil {
+		return 0, err
+	}
+	if _, err := tx.Exec(`DELETE FROM traffic_rollup_dirty_buckets WHERE inbound_id = ?`, inboundID); err != nil {
+		return 0, err
+	}
 	result, err := tx.Exec(`DELETE FROM traffic_snapshots WHERE inbound_id = ?`, inboundID)
 	if err != nil {
 		return 0, err

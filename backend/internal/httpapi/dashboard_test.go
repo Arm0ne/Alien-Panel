@@ -1,11 +1,16 @@
 package httpapi
 
 import (
+	"context"
+	"database/sql"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"testing"
 	"time"
+
+	centraldb "xpanel-central/backend/internal/db"
 )
 
 func TestParseDashboardRangeUsesBusinessMidnight(t *testing.T) {
@@ -25,6 +30,208 @@ func TestParseDashboardRangeUsesBusinessMidnight(t *testing.T) {
 	}
 	if !to.Equal(now) {
 		t.Fatalf("today to = %s, want %s", to.Format(time.RFC3339), now.Format(time.RFC3339))
+	}
+}
+
+func TestDashboardHourlyRollupMatchesRawTraffic(t *testing.T) {
+	server, database := testServer(t)
+	to := time.Date(2026, 9, 23, 6, 53, 0, 0, time.UTC)
+	from := to.Add(-7 * 24 * time.Hour)
+	createdAt := from.Add(-time.Hour).Format(time.RFC3339Nano)
+	if _, err := database.Exec(`INSERT INTO nodes (id, node_key, name, type, health_status, created_at, updated_at)
+VALUES ('rollup-node', 'rollup-node', 'Rollup node', 'relay', 'online', ?, ?)`, createdAt, createdAt); err != nil {
+		t.Fatalf("seed rollup node: %v", err)
+	}
+	if _, err := database.Exec(`INSERT INTO users (id, display_name, status, created_at, updated_at)
+VALUES ('rollup-user', 'Rollup user', 'active', ?, ?)`, createdAt, createdAt); err != nil {
+		t.Fatalf("seed rollup user: %v", err)
+	}
+	if _, err := database.Exec(`INSERT INTO inbounds (id, node_id, remote_inbound_id, user_id, kind, first_seen_at)
+VALUES ('rollup-inbound', 'rollup-node', '1', 'rollup-user', 'user', ?)`, createdAt); err != nil {
+		t.Fatalf("seed rollup inbound: %v", err)
+	}
+	if _, err := database.Exec(`INSERT INTO user_inbounds (id, user_id, inbound_id, is_primary, active_from)
+VALUES ('rollup-mapping', 'rollup-user', 'rollup-inbound', 1, ?)`, createdAt); err != nil {
+		t.Fatalf("seed rollup mapping: %v", err)
+	}
+
+	transaction, err := database.Begin()
+	if err != nil {
+		t.Fatalf("begin traffic seed: %v", err)
+	}
+	start := from.Add(-33 * time.Minute)
+	for index, at := 0, start; !at.After(to); index, at = index+1, at.Add(20*time.Minute) {
+		up := int64(index * 17)
+		down := int64(index * 29)
+		reset := 0
+		if index == 240 {
+			up, down, reset = 3, 5, 1
+		}
+		if index > 240 {
+			up = 3 + int64(index-240)*11
+			down = 5 + int64(index-240)*19
+		}
+		if _, err := transaction.Exec(`INSERT INTO traffic_snapshots
+(id, node_id, inbound_id, collected_at, up, down, all_time, source, reset_detected)
+VALUES (?, 'rollup-node', 'rollup-inbound', ?, ?, ?, ?, 'xpanel', ?)`,
+			fmt.Sprintf("rollup-sample-%d", index), at.Format(time.RFC3339Nano), up, down, up+down, reset); err != nil {
+			_ = transaction.Rollback()
+			t.Fatalf("seed traffic sample: %v", err)
+		}
+	}
+	if err := transaction.Commit(); err != nil {
+		t.Fatalf("commit traffic seed: %v", err)
+	}
+	inbounds, err := server.dashboardInbounds()
+	if err != nil {
+		t.Fatalf("read dashboard inbounds: %v", err)
+	}
+	spec := dashboardRangeSpec{name: "7d", duration: to.Sub(from), bucket: 24 * time.Hour}
+	raw, err := server.dashboardTraffic(from, to, spec, inbounds)
+	if err != nil {
+		t.Fatalf("read raw dashboard traffic: %v", err)
+	}
+	if err := centraldb.EnsureTrafficHourlyRollups(context.Background(), database, nil); err != nil {
+		t.Fatalf("build traffic rollups: %v", err)
+	}
+	rolledUp, source, err := server.dashboardTrafficForRange(from, to, spec, inbounds)
+	if err != nil {
+		t.Fatalf("read rolled up dashboard traffic: %v", err)
+	}
+	if source != "rollup" {
+		t.Fatalf("dashboard traffic source = %q, want rollup", source)
+	}
+	if raw.trend.Summary != rolledUp.trend.Summary {
+		t.Fatalf("rollup summary = %#v, raw = %#v", rolledUp.trend.Summary, raw.trend.Summary)
+	}
+	if len(raw.trend.Points) != len(rolledUp.trend.Points) {
+		t.Fatalf("rollup points = %d, raw = %d", len(rolledUp.trend.Points), len(raw.trend.Points))
+	}
+	for index := range raw.trend.Points {
+		if raw.trend.Points[index] != rolledUp.trend.Points[index] {
+			t.Fatalf("rollup point %d = %#v, raw = %#v", index, rolledUp.trend.Points[index], raw.trend.Points[index])
+		}
+	}
+	if *raw.byInbound["rollup-inbound"] != *rolledUp.byInbound["rollup-inbound"] {
+		t.Fatalf("rollup inbound traffic = %#v, raw = %#v", rolledUp.byInbound["rollup-inbound"], raw.byInbound["rollup-inbound"])
+	}
+}
+
+func TestDashboardThirtyDayHourlyRollupScalesToProductionHistory(t *testing.T) {
+	if testing.Short() {
+		t.Skip("large production-scale dataset is covered by the non-short performance test")
+	}
+	server, database := testServer(t)
+	const inboundCount = 68
+	const sampleInterval = 10 * time.Minute
+	to := time.Date(2026, 9, 23, 6, 50, 0, 0, time.UTC)
+	from := to.Add(-30 * 24 * time.Hour)
+	createdAt := from.Add(-time.Hour).Format(time.RFC3339Nano)
+	transaction, err := database.Begin()
+	if err != nil {
+		t.Fatalf("begin production-scale seed: %v", err)
+	}
+	nodeStatement, err := transaction.Prepare(`INSERT INTO nodes (id, node_key, name, type, health_status, created_at, updated_at) VALUES (?, ?, ?, 'relay', 'online', ?, ?)`)
+	if err != nil {
+		_ = transaction.Rollback()
+		t.Fatalf("prepare production-scale node: %v", err)
+	}
+	userStatement, err := transaction.Prepare(`INSERT INTO users (id, display_name, status, created_at, updated_at) VALUES (?, ?, 'active', ?, ?)`)
+	if err != nil {
+		_ = nodeStatement.Close()
+		_ = transaction.Rollback()
+		t.Fatalf("prepare production-scale user: %v", err)
+	}
+	inboundStatement, err := transaction.Prepare(`INSERT INTO inbounds (id, node_id, remote_inbound_id, user_id, kind, first_seen_at) VALUES (?, ?, ?, ?, 'user', ?)`)
+	if err != nil {
+		_ = nodeStatement.Close()
+		_ = userStatement.Close()
+		_ = transaction.Rollback()
+		t.Fatalf("prepare production-scale inbound: %v", err)
+	}
+	mappingStatement, err := transaction.Prepare(`INSERT INTO user_inbounds (id, user_id, inbound_id, is_primary, active_from) VALUES (?, ?, ?, 1, ?)`)
+	if err != nil {
+		_ = nodeStatement.Close()
+		_ = userStatement.Close()
+		_ = inboundStatement.Close()
+		_ = transaction.Rollback()
+		t.Fatalf("prepare production-scale mapping: %v", err)
+	}
+	snapshotStatement, err := transaction.Prepare(`INSERT INTO traffic_snapshots
+(id, node_id, inbound_id, collected_at, up, down, all_time, source)
+VALUES (?, ?, ?, ?, ?, ?, ?, 'xpanel')`)
+	if err != nil {
+		_ = nodeStatement.Close()
+		_ = userStatement.Close()
+		_ = inboundStatement.Close()
+		_ = mappingStatement.Close()
+		_ = transaction.Rollback()
+		t.Fatalf("prepare production-scale snapshot: %v", err)
+	}
+	for index := 0; index < inboundCount; index++ {
+		nodeID := fmt.Sprintf("scale-node-%02d", index)
+		userID := fmt.Sprintf("scale-user-%02d", index)
+		inboundID := fmt.Sprintf("scale-inbound-%02d", index)
+		if _, err := nodeStatement.Exec(nodeID, nodeID, nodeID, createdAt, createdAt); err != nil {
+			t.Fatalf("insert production-scale node: %v", err)
+		}
+		if _, err := userStatement.Exec(userID, userID, createdAt, createdAt); err != nil {
+			t.Fatalf("insert production-scale user: %v", err)
+		}
+		if _, err := inboundStatement.Exec(inboundID, nodeID, inboundID, userID, createdAt); err != nil {
+			t.Fatalf("insert production-scale inbound: %v", err)
+		}
+		if _, err := mappingStatement.Exec("scale-map-"+inboundID, userID, inboundID, createdAt); err != nil {
+			t.Fatalf("insert production-scale mapping: %v", err)
+		}
+		counter := int64(0)
+		for sampleIndex, at := 0, from.Add(-sampleInterval); !at.After(to); sampleIndex, at = sampleIndex+1, at.Add(sampleInterval) {
+			counter += int64(1000 + index*13)
+			if _, err := snapshotStatement.Exec(fmt.Sprintf("scale-sample-%02d-%05d", index, sampleIndex), nodeID, inboundID,
+				at.Format(time.RFC3339Nano), counter/3, counter-counter/3, counter); err != nil {
+				t.Fatalf("insert production-scale snapshot: %v", err)
+			}
+		}
+	}
+	for _, statement := range []*sql.Stmt{nodeStatement, userStatement, inboundStatement, mappingStatement, snapshotStatement} {
+		if err := statement.Close(); err != nil {
+			_ = transaction.Rollback()
+			t.Fatalf("close production-scale statement: %v", err)
+		}
+	}
+	if err := transaction.Commit(); err != nil {
+		t.Fatalf("commit production-scale seed: %v", err)
+	}
+	inbounds, err := server.dashboardInbounds()
+	if err != nil {
+		t.Fatalf("read production-scale inbounds: %v", err)
+	}
+	spec := dashboardRangeSpec{name: "30d", duration: to.Sub(from), bucket: 24 * time.Hour}
+	raw, err := server.dashboardTraffic(from, to, spec, inbounds)
+	if err != nil {
+		t.Fatalf("read production-scale raw traffic: %v", err)
+	}
+	if raw.trend.Summary.SampleCount < 250_000 {
+		t.Fatalf("seeded only %d traffic samples, want minute-level production history", raw.trend.Summary.SampleCount)
+	}
+	if err := centraldb.EnsureTrafficHourlyRollups(context.Background(), database, nil); err != nil {
+		t.Fatalf("build production-scale rollups: %v", err)
+	}
+	started := time.Now()
+	rolledUp, source, err := server.dashboardTrafficForRange(from, to, spec, inbounds)
+	queryDuration := time.Since(started)
+	if err != nil {
+		t.Fatalf("read production-scale rolled up traffic: %v", err)
+	}
+	if source != "rollup" {
+		t.Fatalf("traffic source = %q, want rollup", source)
+	}
+	if queryDuration >= time.Second {
+		t.Fatalf("30-day rollup query took %s for %d snapshots", queryDuration, raw.trend.Summary.SampleCount)
+	}
+	t.Logf("30-day rollup query: %s for %d minute-level snapshots across %d Inbounds", queryDuration, raw.trend.Summary.SampleCount, inboundCount)
+	if rolledUp.trend.Summary != raw.trend.Summary {
+		t.Fatalf("production-scale rollup summary = %#v, raw = %#v", rolledUp.trend.Summary, raw.trend.Summary)
 	}
 }
 

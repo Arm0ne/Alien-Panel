@@ -34,7 +34,6 @@ func main() {
 		logger.Error("migrate database", "error", err)
 		os.Exit(1)
 	}
-
 	server, err := httpapi.NewServer(cfg, database, logger)
 	if err != nil {
 		logger.Error("initialize http server", "error", err)
@@ -44,6 +43,16 @@ func main() {
 	maintenanceContext, stopMaintenance := context.WithCancel(context.Background())
 	defer stopMaintenance()
 	go server.RunMaintenance(maintenanceContext, cfg.MaintenanceInterval)
+	go func() {
+		rollupStarted := time.Now()
+		if err := db.EnsureTrafficHourlyRollups(maintenanceContext, database, func(progress db.TrafficRollupProgress) {
+			logger.Info("traffic rollup backfill progress", "processed_snapshots", progress.ProcessedSnapshots)
+		}); err != nil && !errors.Is(err, context.Canceled) {
+			logger.Error("build traffic hourly rollups", "error", err)
+			return
+		}
+		logger.Info("traffic hourly rollups ready", "duration_ms", time.Since(rollupStarted).Milliseconds())
+	}()
 
 	httpServer := &http.Server{
 		Addr:              cfg.ListenAddress,

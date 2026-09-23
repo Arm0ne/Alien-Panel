@@ -4,7 +4,7 @@
 
 中央使用 SQLite WAL，默认数据库路径为 `/var/lib/xpanel-central/panel.db`（Docker 中位于 `central-data` volume）。外键和 busy timeout 已在 `backend/internal/db/db.go` 打开。服务启动时读取嵌入的迁移文件并按文件名顺序执行，每个文件只记录一次。
 
-当前迁移到 `024_client_lifecycle.sql`，空库和已有库都必须通过迁移测试。生产包不携带任何真实 `panel.db`、WAL/SHM 文件或备份。
+当前迁移到 `025_traffic_hourly_rollups.sql`，空库和已有库都必须通过迁移测试。生产包不携带任何真实 `panel.db`、WAL/SHM 文件或备份。
 
 ## 2. 核心表关系
 
@@ -18,7 +18,7 @@ nodes
 users ── user_paths ── user_path_exit_ips ── exit_ips
 users ── user_billing_records
 users ── user_renewal_candidates ── node_events
-nodes ── sync_runs ── traffic_snapshots
+nodes ── sync_runs ── traffic_snapshots ── traffic_hourly_rollups
 ```
 
 关键约束：
@@ -51,7 +51,7 @@ sudo docker compose -p alien-panel -f /opt/alien-panel/deploy/docker-compose.yml
 
 ## 4. 升级迁移
 
-Docker 升级重新执行一键脚本即可；它不会覆盖 `/opt/alien-panel/.env` 或 `central-data` volume。服务启动时会自动执行尚未应用的 SQLite 迁移，包括性能索引迁移和客户生命周期迁移 `024_client_lifecycle.sql`。手动 systemd 部署时先备份，再执行：
+Docker 升级重新执行一键脚本即可；它不会覆盖 `/opt/alien-panel/.env` 或 `central-data` volume。服务启动时会自动执行尚未应用的 SQLite 迁移，包括客户生命周期迁移 `024_client_lifecycle.sql` 和流量小时汇总迁移 `025_traffic_hourly_rollups.sql`。现有分钟快照不会删除；中央服务启动后会在后台分批回填汇总，并在日志中输出处理进度和完成标记。回填期间服务保持可用，7/30 天仍走原始数据查询；出现 `traffic hourly rollups ready` 后才切换到汇总查询。手动 systemd 部署时先备份，再执行：
 
 ```bash
 XPANEL_DATABASE=/var/lib/xpanel-central/panel.db \
@@ -61,6 +61,13 @@ bash deploy/migrate.sh
 ```
 
 迁移失败时保留迁移前快照。不要手工编辑 `schema_migrations`，也不要跳过迁移文件。
+
+也可以在维护窗口手动重建汇总（例如怀疑汇总不一致时）：
+
+```bash
+XPANEL_DATABASE=/var/lib/xpanel-central/panel.db \
+/usr/local/bin/xpanel-db-maintenance traffic-rollup
+```
 
 ## 5. 管理页面备份与恢复
 
