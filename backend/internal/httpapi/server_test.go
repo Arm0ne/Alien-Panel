@@ -1606,8 +1606,7 @@ func TestExitIPCRUDAndBindingProtection(t *testing.T) {
 		t.Fatalf("delete bound exit IP status=%d response=%#v", conflictStatus, conflict)
 	}
 
-	// Historical paths remain protected and produce a readable conflict instead
-	// of leaking a SQLite foreign-key error as HTTP 500.
+	// Historical paths are intentionally disposable after a user path has ended.
 	if _, err := database.Exec(`INSERT INTO users (id, display_name, status, created_at, updated_at) VALUES ('historical-exit-user', '历史出口用户', 'expired', ?, ?)`, nowText, nowText); err != nil {
 		t.Fatalf("seed historical user: %v", err)
 	}
@@ -1618,8 +1617,15 @@ func TestExitIPCRUDAndBindingProtection(t *testing.T) {
 		t.Fatalf("remove test route binding: %v", err)
 	}
 	historicalDeleteStatus, historicalDeleted := doJSONWithStatus(t, ts.Client(), http.MethodDelete, ts.URL+"/api/exit-ips/"+exitIPID, token, nil)
-	if historicalDeleteStatus != http.StatusConflict || historicalDeleted["code"] != validationCode {
+	if historicalDeleteStatus != http.StatusOK || historicalDeleted["code"] != successCode {
 		t.Fatalf("delete historically referenced exit IP status=%d response=%#v", historicalDeleteStatus, historicalDeleted)
+	}
+	var remaining int
+	if err := database.QueryRow(`SELECT COUNT(*) FROM exit_ips WHERE id = ?`, exitIPID).Scan(&remaining); err != nil || remaining != 0 {
+		t.Fatalf("deleted exit IP count=%d err=%v", remaining, err)
+	}
+	if err := database.QueryRow(`SELECT COUNT(*) FROM user_paths WHERE id = 'historical-exit-path'`).Scan(&remaining); err != nil || remaining != 0 {
+		t.Fatalf("historical path count=%d err=%v", remaining, err)
 	}
 }
 

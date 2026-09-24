@@ -422,7 +422,7 @@ func pathDateActive(fromValue, toValue string, now time.Time) bool {
 
 func (s *Server) userPathHistory(userID string) ([]map[string]any, error) {
 	rows, err := s.db.Query(`SELECT p.id, p.user_id, p.relay_node_id, COALESCE(relay.name, ''), COALESCE(p.landing_node_id, ''), COALESCE(landing.name, ''),
-	COALESCE(p.landing_inbound_id, ''), COALESCE(li.tag, ''), COALESCE(p.exit_ip_id, ''), COALESCE(e.ip, p.exit_ip_address_snapshot, ''), COALESCE(e.source_type, 'node'), COALESCE(owner.id, ''), COALESCE(owner.name, ''),
+	COALESCE(p.landing_inbound_id, ''), COALESCE(li.tag, ''), COALESCE(p.exit_ip_id, ''), COALESCE(e.ip, ''), COALESCE(e.source_type, 'node'), COALESCE(owner.id, ''), COALESCE(owner.name, ''),
 p.mode, COALESCE(p.notes, ''), p.active_from, COALESCE(p.active_to, '')
 FROM user_paths p JOIN nodes relay ON relay.id = p.relay_node_id
 LEFT JOIN nodes landing ON landing.id = p.landing_node_id LEFT JOIN inbounds li ON li.id = p.landing_inbound_id

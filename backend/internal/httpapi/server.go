@@ -2773,7 +2773,7 @@ func (s *Server) deleteExitIP(w http.ResponseWriter, r *http.Request) {
 		writeFailure(w, http.StatusInternalServerError, internalErrorCode, "could not read exit IP")
 		return
 	}
-	var bindingCount, pathCount, historicalPathCount int
+	var bindingCount, pathCount int
 	if err := s.db.QueryRow(`SELECT COUNT(*) FROM route_exit_ips WHERE exit_ip_id = ?`, id).Scan(&bindingCount); err != nil {
 		writeFailure(w, http.StatusInternalServerError, internalErrorCode, "could not check exit IP bindings")
 		return
@@ -2782,25 +2782,34 @@ func (s *Server) deleteExitIP(w http.ResponseWriter, r *http.Request) {
 		writeFailure(w, http.StatusInternalServerError, internalErrorCode, "could not check user path assignments")
 		return
 	}
-	if err := s.db.QueryRow(`SELECT COUNT(*) FROM user_paths p WHERE p.exit_ip_id = ?`, id).Scan(&historicalPathCount); err != nil {
-		writeFailure(w, http.StatusInternalServerError, internalErrorCode, "could not check exit IP history")
-		return
-	}
 	if bindingCount > 0 || pathCount > 0 {
 		writeFailure(w, http.StatusConflict, validationCode, "exit IP has active assignments; disable it or change the users first")
 		return
 	}
-	if historicalPathCount > 0 {
-		writeFailure(w, http.StatusConflict, validationCode, "exit IP is referenced by path history; keep it disabled or remove the historical path first")
+	transaction, err := s.db.Begin()
+	if err != nil {
+		writeFailure(w, http.StatusInternalServerError, internalErrorCode, "could not begin exit IP deletion")
 		return
 	}
-	if _, err := s.db.Exec(`DELETE FROM user_path_exit_ips WHERE exit_ip_id = ?`, id); err != nil {
+	defer transaction.Rollback()
+	// Historical paths have no business value after an inbound is archived.
+	// Remove their ordered exit references and path rows before deleting the
+	// mutable exit asset. Active paths were rejected above.
+	if _, err := transaction.Exec(`DELETE FROM user_path_exit_ips WHERE user_path_id IN (SELECT id FROM user_paths WHERE active_to IS NOT NULL) AND exit_ip_id = ?`, id); err != nil {
 		writeFailure(w, http.StatusInternalServerError, internalErrorCode, "could not release exit IP history")
 		return
 	}
-	if _, err := s.db.Exec(`DELETE FROM exit_ips WHERE id = ?`, id); err != nil {
+	if _, err := transaction.Exec(`DELETE FROM user_paths WHERE active_to IS NOT NULL AND exit_ip_id = ?`, id); err != nil {
+		writeFailure(w, http.StatusInternalServerError, internalErrorCode, "could not remove exit IP history")
+		return
+	}
+	if _, err := transaction.Exec(`DELETE FROM exit_ips WHERE id = ?`, id); err != nil {
 		s.logger.Error("delete exit IP", "exit_ip_id", id, "error", err)
 		writeFailure(w, http.StatusInternalServerError, internalErrorCode, "could not delete exit IP")
+		return
+	}
+	if err := transaction.Commit(); err != nil {
+		writeFailure(w, http.StatusInternalServerError, internalErrorCode, "could not commit exit IP deletion")
 		return
 	}
 	s.writeAuditLog(r, "exit_ip.delete", "exit_ip", id, exitIPRecordData(record), map[string]any{"deleted": true})
