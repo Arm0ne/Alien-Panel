@@ -1605,6 +1605,22 @@ func TestExitIPCRUDAndBindingProtection(t *testing.T) {
 	if conflictStatus != http.StatusConflict || conflict["code"] != validationCode {
 		t.Fatalf("delete bound exit IP status=%d response=%#v", conflictStatus, conflict)
 	}
+
+	// Historical paths remain protected and produce a readable conflict instead
+	// of leaking a SQLite foreign-key error as HTTP 500.
+	if _, err := database.Exec(`INSERT INTO users (id, display_name, status, created_at, updated_at) VALUES ('historical-exit-user', '历史出口用户', 'expired', ?, ?)`, nowText, nowText); err != nil {
+		t.Fatalf("seed historical user: %v", err)
+	}
+	if _, err := database.Exec(`INSERT INTO user_paths (id, user_id, relay_node_id, exit_ip_id, mode, active_from, active_to, created_at, updated_at) VALUES ('historical-exit-path', 'historical-exit-user', 'exit-relay', ?, 'external', ?, ?, ?, ?)`, exitIPID, nowText, nowText, nowText, nowText); err != nil {
+		t.Fatalf("seed historical path: %v", err)
+	}
+	if _, err := database.Exec(`DELETE FROM route_exit_ips WHERE exit_ip_id = ?`, exitIPID); err != nil {
+		t.Fatalf("remove test route binding: %v", err)
+	}
+	historicalDeleteStatus, historicalDeleted := doJSONWithStatus(t, ts.Client(), http.MethodDelete, ts.URL+"/api/exit-ips/"+exitIPID, token, nil)
+	if historicalDeleteStatus != http.StatusConflict || historicalDeleted["code"] != validationCode {
+		t.Fatalf("delete historically referenced exit IP status=%d response=%#v", historicalDeleteStatus, historicalDeleted)
+	}
 }
 
 func TestRouteExitIPBindingCRUD(t *testing.T) {

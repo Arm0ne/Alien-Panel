@@ -2773,7 +2773,7 @@ func (s *Server) deleteExitIP(w http.ResponseWriter, r *http.Request) {
 		writeFailure(w, http.StatusInternalServerError, internalErrorCode, "could not read exit IP")
 		return
 	}
-	var bindingCount, pathCount int
+	var bindingCount, pathCount, historicalPathCount int
 	if err := s.db.QueryRow(`SELECT COUNT(*) FROM route_exit_ips WHERE exit_ip_id = ?`, id).Scan(&bindingCount); err != nil {
 		writeFailure(w, http.StatusInternalServerError, internalErrorCode, "could not check exit IP bindings")
 		return
@@ -2782,8 +2782,20 @@ func (s *Server) deleteExitIP(w http.ResponseWriter, r *http.Request) {
 		writeFailure(w, http.StatusInternalServerError, internalErrorCode, "could not check user path assignments")
 		return
 	}
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM user_paths p WHERE p.exit_ip_id = ?`, id).Scan(&historicalPathCount); err != nil {
+		writeFailure(w, http.StatusInternalServerError, internalErrorCode, "could not check exit IP history")
+		return
+	}
 	if bindingCount > 0 || pathCount > 0 {
 		writeFailure(w, http.StatusConflict, validationCode, "exit IP has active assignments; disable it or change the users first")
+		return
+	}
+	if historicalPathCount > 0 {
+		writeFailure(w, http.StatusConflict, validationCode, "exit IP is referenced by path history; keep it disabled or remove the historical path first")
+		return
+	}
+	if _, err := s.db.Exec(`DELETE FROM user_path_exit_ips WHERE exit_ip_id = ?`, id); err != nil {
+		writeFailure(w, http.StatusInternalServerError, internalErrorCode, "could not release exit IP history")
 		return
 	}
 	if _, err := s.db.Exec(`DELETE FROM exit_ips WHERE id = ?`, id); err != nil {
