@@ -1,10 +1,20 @@
 <script setup lang="ts">
 import { computed, h, onMounted, reactive, ref, watch } from 'vue';
 import { useElementSize } from '@vueuse/core';
+import { useRouter } from 'vue-router';
 import { NButton, NSpace, NTag } from 'naive-ui';
 import type { DataTableColumns } from 'naive-ui';
-import { createExitIp, deleteExitIp, fetchExitIpDetail, fetchExitIps, fetchNodes, updateExitIp } from '@/service/api';
+import {
+  createExitIp,
+  deleteExitIp,
+  fetchExitIpDetail,
+  fetchExitIps,
+  fetchExitIpUsers,
+  fetchNodes,
+  updateExitIp
+} from '@/service/api';
 import ModulePage from '@/components/project/module-page.vue';
+import UserStatusTag from '@/components/project/user-status-tag.vue';
 
 defineOptions({ name: 'ExitIpManagement' });
 
@@ -40,7 +50,9 @@ const exitIpForm = reactive({
 
 const statusOptions = [
   { label: '全部状态', value: 'all' },
-  { label: '启用', value: 'active' },
+  { label: '正常', value: 'normal' },
+  { label: '即将到期', value: 'expiring' },
+  { label: '已到期', value: 'expired' },
   { label: '停用', value: 'disabled' }
 ];
 const familyOptions = [
@@ -67,6 +79,30 @@ function familyLabel(family: number) {
   return family === 6 ? 'IPv6' : 'IPv4';
 }
 
+function formatDateOnly(value?: string | null) {
+  return value ? value.slice(0, 10) : '未设置';
+}
+
+function daysUntilExpiry(value?: string | null) {
+  if (!value) return null;
+  const match = /^(\d{4})-(\d{2})-(\d{2})/.exec(value);
+  if (!match) return null;
+  const [, year, month, day] = match;
+  const expiry = Date.UTC(Number(year), Number(month) - 1, Number(day));
+  const now = new Date();
+  const today = Date.UTC(now.getFullYear(), now.getMonth(), now.getDate());
+  return Math.floor((expiry - today) / 86_400_000);
+}
+
+function exitIpDisplayStatus(row: Api.Central.ExitIpSummary) {
+  if (row.status === 'disabled') return { label: '停用', type: 'default' as const };
+  if (row.status === 'unknown') return { label: '未知', type: 'default' as const };
+  const days = daysUntilExpiry(row.validTo);
+  if (days !== null && days < 0) return { label: '已到期', type: 'error' as const };
+  if (days !== null && days <= 7) return { label: '即将到期', type: 'warning' as const };
+  return { label: '正常', type: 'success' as const };
+}
+
 const ownerNodeOptions = computed(() =>
   nodes.value
     .filter(node => node.type === 'landing' || node.type === 'relay')
@@ -82,6 +118,17 @@ const countryDistribution = computed(() => stats.value?.countries || []);
 const countriesExpanded = ref(false);
 const countryStrip = ref<HTMLElement | null>(null);
 const { width: countryStripWidth } = useElementSize(countryStrip);
+const router = useRouter();
+const allocatedUsersVisible = ref(false);
+const selectedExitIp = ref<Api.Central.ExitIpSummary | null>(null);
+const allocatedUsers = ref<Api.Central.ExitIpAllocatedUser[]>([]);
+const allocatedUsersLoading = ref(false);
+const allocatedUsersError = ref('');
+const allocatedUsersTotal = ref(0);
+const allocatedUsersPage = ref(1);
+const allocatedUsersPageSize = ref(20);
+const allocatedUsersKeyword = ref('');
+let allocatedUsersRequestID = 0;
 // Match the 140px cards, 10px gaps and 100px expand control below.
 const countryRowCapacity = computed(() => Math.max(1, Math.floor((countryStripWidth.value + 10) / 150)));
 const countriesOverflow = computed(() => countryDistribution.value.length > countryRowCapacity.value);
@@ -244,6 +291,107 @@ function confirmDelete(row: Api.Central.ExitIpSummary) {
   });
 }
 
+function openAllocatedUsers(row: Api.Central.ExitIpSummary) {
+  selectedExitIp.value = row;
+  allocatedUsersPage.value = 1;
+  allocatedUsersKeyword.value = '';
+  allocatedUsersVisible.value = true;
+  void loadAllocatedUsers();
+}
+
+async function loadAllocatedUsers() {
+  const exitIp = selectedExitIp.value;
+  if (!exitIp) return;
+  const requestID = ++allocatedUsersRequestID;
+  allocatedUsersLoading.value = true;
+  allocatedUsersError.value = '';
+  const { data, error } = await fetchExitIpUsers(exitIp.id, {
+    page: allocatedUsersPage.value,
+    page_size: allocatedUsersPageSize.value,
+    keyword: allocatedUsersKeyword.value.trim() || undefined
+  });
+  if (requestID !== allocatedUsersRequestID) return;
+  allocatedUsersLoading.value = false;
+  if (error || !data) {
+    allocatedUsersError.value = '无法读取该 IP 的用户列表，请重试。';
+    allocatedUsers.value = [];
+    allocatedUsersTotal.value = 0;
+    return;
+  }
+  allocatedUsers.value = data.items;
+  allocatedUsersTotal.value = data.total;
+}
+
+watch(allocatedUsersVisible, visible => {
+  if (!visible) allocatedUsersRequestID += 1;
+});
+
+function submitAllocatedUserSearch() {
+  allocatedUsersPage.value = 1;
+  void loadAllocatedUsers();
+}
+
+function openUserDetail(user: Api.Central.ExitIpAllocatedUser) {
+  allocatedUsersVisible.value = false;
+  void router.push({ path: '/users', query: { userId: user.id } });
+}
+
+function pathModeLabel(mode: Api.Central.ExitIpAllocatedUser['pathMode']) {
+  if (mode === 'relay') return '线路机直出';
+  if (mode === 'landing') return '经落地机';
+  if (mode === 'external') return '独立 S5';
+  return '--';
+}
+
+const allocatedUsersColumns: DataTableColumns<Api.Central.ExitIpAllocatedUser> = [
+  {
+    title: '用户',
+    key: 'name',
+    minWidth: 140,
+    render: row =>
+      h(
+        NButton,
+        { size: 'small', type: 'primary', text: true, onClick: () => openUserDetail(row) },
+        { default: () => row.name }
+      )
+  },
+  {
+    title: '线路机 / Inbound',
+    key: 'nodeName',
+    minWidth: 170,
+    render: row =>
+      h('div', { class: 'flex flex-col' }, [
+        h('span', { class: 'font-medium' }, row.nodeName || '--'),
+        h('span', { class: 'text-12px text-gray-500' }, row.inboundTag || 'Inbound 未命名')
+      ])
+  },
+  { title: '路径', key: 'pathMode', width: 110, render: row => pathModeLabel(row.pathMode) },
+  {
+    title: '用户状态',
+    key: 'status',
+    width: 110,
+    render: row => h(UserStatusTag, { status: row.status, expiresAt: row.expiresAt })
+  },
+  { title: '用户到期', key: 'expiresAt', minWidth: 145, render: row => formatDate(row.expiresAt) }
+];
+
+const allocatedUsersPagination = computed(() => ({
+  page: allocatedUsersPage.value,
+  pageSize: allocatedUsersPageSize.value,
+  itemCount: allocatedUsersTotal.value,
+  showSizePicker: true,
+  pageSizes: [10, 20, 50],
+  onChange: (page: number) => {
+    allocatedUsersPage.value = page;
+    void loadAllocatedUsers();
+  },
+  onUpdatePageSize: (pageSize: number) => {
+    allocatedUsersPageSize.value = pageSize;
+    allocatedUsersPage.value = 1;
+    void loadAllocatedUsers();
+  }
+}));
+
 const columns: DataTableColumns<Api.Central.ExitIpSummary> = [
   { title: '出口 IP', key: 'address', minWidth: 170, render: row => h('span', { class: 'font-medium' }, row.address) },
   {
@@ -261,16 +409,31 @@ const columns: DataTableColumns<Api.Central.ExitIpSummary> = [
   {
     title: '状态',
     key: 'status',
-    width: 90,
+    width: 110,
+    render: row => {
+      const status = exitIpDisplayStatus(row);
+      return h(NTag, { size: 'small', type: status.type }, { default: () => status.label });
+    }
+  },
+  { title: '失效日期', key: 'validTo', width: 120, render: row => formatDateOnly(row.validTo) },
+  { title: '月成本', key: 'monthlyCost', minWidth: 110, render: row => formatMoney(row.monthlyCost, row.currency) },
+  {
+    title: '配置归属用户数',
+    key: 'allocatedUserCount',
+    width: 150,
     render: row =>
       h(
-        NTag,
-        { size: 'small', type: row.status === 'active' ? 'success' : 'default' },
-        { default: () => (row.status === 'active' ? '启用' : row.status === 'disabled' ? '停用' : '未知') }
+        NButton,
+        {
+          size: 'small',
+          type: row.allocatedUserCount > 0 ? 'primary' : 'default',
+          text: true,
+          'aria-label': `${row.address} 的配置归属用户：${row.allocatedUserCount} 人`,
+          onClick: () => openAllocatedUsers(row)
+        },
+        { default: () => String(row.allocatedUserCount) }
       )
   },
-  { title: '月成本', key: 'monthlyCost', minWidth: 110, render: row => formatMoney(row.monthlyCost, row.currency) },
-  { title: '配置归属用户数', key: 'allocatedUserCount', width: 150 },
   { title: '最近检查', key: 'checkedAt', minWidth: 170, render: row => formatDate(row.checkedAt) },
   {
     title: '操作',
@@ -419,7 +582,8 @@ onMounted(() => {
                   {{ item.name }}
                 </div>
                 <div class="exit-ip-country-count">
-                  {{ item.count }}<span class="ml-4px text-12px text-gray-500 dark:text-gray-400">个</span>
+                  {{ item.count }}
+                  <span class="ml-4px text-12px text-gray-500 dark:text-gray-400">个</span>
                 </div>
               </NCard>
               <NButton
@@ -571,6 +735,44 @@ onMounted(() => {
         </NSpace>
       </template>
     </NModal>
+
+    <NDrawer v-model:show="allocatedUsersVisible" :width="680" placement="right">
+      <NDrawerContent :title="`使用 ${selectedExitIp?.address || ''} 的用户`" closable>
+        <div class="flex flex-col gap-12px">
+          <NSpace wrap>
+            <NInput
+              v-model:value="allocatedUsersKeyword"
+              clearable
+              class="w-240px"
+              placeholder="搜索用户、线路机或 Inbound"
+              @keyup.enter="submitAllocatedUserSearch"
+            />
+            <NButton type="primary" @click="submitAllocatedUserSearch">
+              <template #icon><icon-mdi-magnify /></template>
+              查询
+            </NButton>
+          </NSpace>
+          <NAlert v-if="allocatedUsersError" type="error" :show-icon="true">
+            {{ allocatedUsersError }}
+            <NButton size="small" class="ml-8px" @click="loadAllocatedUsers">重试</NButton>
+          </NAlert>
+          <div class="text-13px text-gray-500 dark:text-gray-400">
+            当前符合归属统计的有效用户：{{ allocatedUsersTotal }} 人
+          </div>
+          <NDataTable
+            :columns="allocatedUsersColumns"
+            :data="allocatedUsers"
+            :loading="allocatedUsersLoading"
+            :pagination="allocatedUsersPagination"
+            :bordered="false"
+            :single-line="false"
+            :row-key="row => row.id"
+            size="small"
+            :scroll-x="680"
+          />
+        </div>
+      </NDrawerContent>
+    </NDrawer>
   </div>
 </template>
 

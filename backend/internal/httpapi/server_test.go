@@ -1761,9 +1761,56 @@ func TestAllocationCountsOnlyEffectiveUsersAndUsableBindings(t *testing.T) {
 	if exitDetail["code"] != successCode || exitDetail["data"].(map[string]any)["allocatedUserCount"] != float64(2) {
 		t.Fatalf("allocation exit IP detail = %#v, want users=2", exitDetail)
 	}
+	firstUsersPage := doJSON(t, ts.Client(), http.MethodGet, ts.URL+"/api/exit-ips/allocation-exit/users?page=1&page_size=1", token, nil)
+	firstUsersData := firstUsersPage["data"].(map[string]any)
+	firstUsers := firstUsersData["items"].([]any)
+	if firstUsersPage["code"] != successCode || firstUsersData["total"] != float64(2) || len(firstUsers) != 1 {
+		t.Fatalf("first exit IP users page = %#v, want one of two users", firstUsersPage)
+	}
+	if firstUsers[0].(map[string]any)["name"] != "有效用户" {
+		t.Fatalf("first exit IP user = %#v, want 有效用户", firstUsers[0])
+	}
+	secondUsersPage := doJSON(t, ts.Client(), http.MethodGet, ts.URL+"/api/exit-ips/allocation-exit/users?page=2&page_size=1", token, nil)
+	secondUsers := secondUsersPage["data"].(map[string]any)["items"].([]any)
+	if secondUsersPage["code"] != successCode || len(secondUsers) != 1 || secondUsers[0].(map[string]any)["name"] != "长期用户" {
+		t.Fatalf("second exit IP users page = %#v, want 长期用户", secondUsersPage)
+	}
 	disabledExit := doJSON(t, ts.Client(), http.MethodGet, ts.URL+"/api/exit-ips/allocation-disabled-exit", token, nil)
 	if disabledExit["code"] != successCode || disabledExit["data"].(map[string]any)["allocatedUserCount"] != float64(0) {
 		t.Fatalf("disabled exit IP allocation = %#v, want users=0", disabledExit)
+	}
+
+	expiringDate := now.Add(7 * 24 * time.Hour).Format("2006-01-02")
+	expiredDate := now.Add(-24 * time.Hour).Format("2006-01-02")
+	normalDate := now.Add(8 * 24 * time.Hour).Format("2006-01-02")
+	if _, err := database.Exec(`UPDATE exit_ips SET valid_to = ? WHERE id = 'allocation-exit'`, expiringDate); err != nil {
+		t.Fatalf("set expiring exit IP date: %v", err)
+	}
+	for _, item := range []struct {
+		id, ip, validTo string
+	}{
+		{"allocation-expired-exit", "198.51.100.62", expiredDate},
+		{"allocation-normal-exit", "198.51.100.63", normalDate},
+	} {
+		if _, err := database.Exec(`INSERT INTO exit_ips (id, source_type, ip, family, enabled, valid_to, created_at, updated_at)
+VALUES (?, 's5', ?, 4, 1, ?, ?, ?)`, item.id, item.ip, item.validTo, nowText, nowText); err != nil {
+			t.Fatalf("seed exit IP status %s: %v", item.id, err)
+		}
+	}
+	expiringList := doJSON(t, ts.Client(), http.MethodGet, ts.URL+"/api/exit-ips?status=expiring", token, nil)
+	expiringItems := expiringList["data"].(map[string]any)["items"].([]any)
+	if len(expiringItems) != 1 || expiringItems[0].(map[string]any)["validTo"] != expiringDate {
+		t.Fatalf("expiring exit IP list = %#v, want allocation-exit through %s", expiringList, expiringDate)
+	}
+	expiredList := doJSON(t, ts.Client(), http.MethodGet, ts.URL+"/api/exit-ips?status=expired", token, nil)
+	expiredItems := expiredList["data"].(map[string]any)["items"].([]any)
+	if len(expiredItems) != 1 || expiredItems[0].(map[string]any)["id"] != "allocation-expired-exit" {
+		t.Fatalf("expired exit IP list = %#v", expiredList)
+	}
+	normalList := doJSON(t, ts.Client(), http.MethodGet, ts.URL+"/api/exit-ips?status=normal", token, nil)
+	normalItems := normalList["data"].(map[string]any)["items"].([]any)
+	if len(normalItems) != 1 || normalItems[0].(map[string]any)["id"] != "allocation-normal-exit" {
+		t.Fatalf("normal exit IP list = %#v", normalList)
 	}
 }
 

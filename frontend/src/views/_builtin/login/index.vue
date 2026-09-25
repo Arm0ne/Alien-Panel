@@ -45,25 +45,29 @@ const bgColor = computed(() => {
 <template>
   <div class="relative size-full flex-center overflow-hidden" :style="{ backgroundColor: bgColor }">
     <WaveBg :theme-color="bgThemeColor" />
+    <div class="absolute right-24px top-24px z-10 flex-y-center gap-12px lt-sm:right-16px lt-sm:top-16px">
+      <ThemeSchemaSwitch
+        :theme-schema="themeStore.themeScheme"
+        :show-tooltip="false"
+        class="text-20px lt-sm:text-18px"
+        @switch="themeStore.toggleThemeScheme"
+      />
+      <LangSwitch
+        v-if="themeStore.header.multilingual.visible"
+        :lang="appStore.locale"
+        :lang-options="appStore.localeOptions"
+        :show-tooltip="false"
+        @change-lang="appStore.changeLocale"
+      />
+    </div>
     <NCard :bordered="false" class="relative z-4 w-auto rd-12px">
       <div class="w-400px lt-sm:w-300px">
-        <header class="flex-y-center justify-between">
-          <SystemLogo class="size-64px lt-sm:size-48px" />
-          <h3 class="text-28px text-primary font-500 lt-sm:text-22px">{{ $t('system.title') }}</h3>
-          <div class="i-flex-col">
-            <ThemeSchemaSwitch
-              :theme-schema="themeStore.themeScheme"
-              :show-tooltip="false"
-              class="text-20px lt-sm:text-18px"
-              @switch="themeStore.toggleThemeScheme"
-            />
-            <LangSwitch
-              v-if="themeStore.header.multilingual.visible"
-              :lang="appStore.locale"
-              :lang-options="appStore.localeOptions"
-              :show-tooltip="false"
-              @change-lang="appStore.changeLocale"
-            />
+        <header class="flex-center">
+          <div class="flex-y-center justify-center gap-8px">
+            <SystemLogo class="size-48px lt-sm:size-32px" />
+            <h3 class="whitespace-nowrap text-22px text-primary font-500 lt-sm:text-16px">
+              {{ $t('system.title') }}
+            </h3>
           </div>
         </header>
         <main class="pt-24px">

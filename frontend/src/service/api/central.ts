@@ -2,7 +2,10 @@ import { request } from '../request';
 import { getAuthorization } from '../request/shared';
 import { getServiceBaseURL } from '@/utils/service';
 
-const { baseURL: centralBaseURL } = getServiceBaseURL(import.meta.env, import.meta.env.DEV && import.meta.env.VITE_HTTP_PROXY === 'Y');
+const { baseURL: centralBaseURL } = getServiceBaseURL(
+  import.meta.env,
+  import.meta.env.DEV && import.meta.env.VITE_HTTP_PROXY === 'Y'
+);
 
 /** Fetch the business traffic and operations summary for the selected period. */
 export function fetchDashboard(params: Api.Central.DashboardQuery = {}) {
@@ -27,7 +30,9 @@ export async function downloadSystemBackup() {
   const blob = await response.blob();
   const disposition = response.headers.get('Content-Disposition') || '';
   const encoded = disposition.match(/filename="?([^";]+)"?/i)?.[1];
-  const filename = encoded ? decodeURIComponent(encoded) : `alien-panel-${new Date().toISOString().slice(0, 10)}.sqlite3`;
+  const filename = encoded
+    ? decodeURIComponent(encoded)
+    : `alien-panel-${new Date().toISOString().slice(0, 10)}.sqlite3`;
   const url = URL.createObjectURL(blob);
   const anchor = document.createElement('a');
   anchor.href = url;
@@ -337,6 +342,13 @@ export function fetchExitIps(params: Api.Central.PageParams = {}) {
 
 export function fetchExitIpDetail(id: string) {
   return request<Api.Central.ExitIpDetail>({ url: `/exit-ips/${encodeURIComponent(id)}` });
+}
+
+export function fetchExitIpUsers(id: string, params: Api.Central.PageParams = {}) {
+  return request<Api.Central.ExitIpAllocatedUserListResult>({
+    url: `/exit-ips/${encodeURIComponent(id)}/users`,
+    params
+  });
 }
 
 export function createExitIp(data: Api.Central.ExitIpUpsertPayload) {

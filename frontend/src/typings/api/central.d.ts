@@ -649,6 +649,7 @@ declare namespace Api {
       currency?: string;
       allocatedUserCount: number;
       checkedAt?: string | null;
+      validTo?: string | null;
     }
 
     interface ExitIpCountryStat {
@@ -667,6 +668,20 @@ declare namespace Api {
     interface ExitIpListResult extends PageResult<ExitIpSummary> {
       stats: ExitIpListStats;
     }
+
+    interface ExitIpAllocatedUser {
+      id: string;
+      name: string;
+      nodeId: string;
+      nodeName: string;
+      inboundTag: string | null;
+      pathMode: 'relay' | 'landing' | 'external' | null;
+      status: UserStatus;
+      billingType: BillingType;
+      expiresAt: string | null;
+    }
+
+    type ExitIpAllocatedUserListResult = PageResult<ExitIpAllocatedUser>;
 
     interface ExitIpDetail {
       id: string;

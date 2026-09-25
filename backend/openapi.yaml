@@ -881,6 +881,27 @@ paths:
         '200': { description: Exit IP deleted }
         '404': { description: Exit IP not found }
         '409': { description: Exit IP has route bindings }
+  /exit-ips/{id}/users:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema: { type: string }
+    get:
+      summary: List effective users assigned to an exit IP
+      description: Uses the same active path, user status, creation time, and expiry rules as allocatedUserCount.
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+        - $ref: '#/components/parameters/Keyword'
+      responses:
+        '200':
+          description: Paginated assigned users
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EnvelopeExitIPAllocatedUsers'
+        '404': { description: Exit IP not found }
   /costs/summary:
     get:
       summary: Monthly finance summary
@@ -1556,6 +1577,36 @@ components:
         code: { type: string, example: '0000' }
         msg: { type: string, example: ok }
         data: { $ref: '#/components/schemas/ExitIPDetail' }
+    EnvelopeExitIPAllocatedUsers:
+      type: object
+      required: [code, msg, data]
+      properties:
+        code: { type: string, example: '0000' }
+        msg: { type: string, example: ok }
+        data:
+          type: object
+          required: [items, total, page, pageSize, dataAt]
+          properties:
+            items:
+              type: array
+              items: { $ref: '#/components/schemas/ExitIPAllocatedUser' }
+            total: { type: integer }
+            page: { type: integer }
+            pageSize: { type: integer }
+            dataAt: { type: [string, 'null'], format: date-time }
+    ExitIPAllocatedUser:
+      type: object
+      required: [id, name, nodeId, nodeName, inboundTag, pathMode, status, billingType, expiresAt]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        nodeId: { type: string }
+        nodeName: { type: string }
+        inboundTag: { type: [string, 'null'] }
+        pathMode: { type: [string, 'null'], enum: [relay, landing, external, null] }
+        status: { type: string, enum: [active, expiring, expired, disabled, unknown] }
+        billingType: { type: string, enum: [paid, free] }
+        expiresAt: { type: [string, 'null'], format: date-time }
     ExitIPDetail:
       type: object
       required: [id, address, sourceType, ownerNodeId, family, monthlyCost, currency, enabled, allocatedUserCount, status]

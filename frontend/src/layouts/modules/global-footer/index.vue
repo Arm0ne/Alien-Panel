@@ -6,7 +6,7 @@ defineOptions({
 
 <template>
   <DarkModeContainer class="h-full flex-center">
-    <span>Alien-Panel - 运营管理</span>
+    <span>Alien Panel - 运营管理系统</span>
   </DarkModeContainer>
 </template>
 

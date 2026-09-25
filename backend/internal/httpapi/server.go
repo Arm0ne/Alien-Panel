@@ -146,6 +146,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("PATCH /api/routes/{id}", s.requireAuth(http.HandlerFunc(s.updateRoute)))
 	mux.Handle("DELETE /api/routes/{id}", s.requireAuth(http.HandlerFunc(s.deleteRoute)))
 	mux.Handle("GET /api/exit-ips", s.requireAuth(http.HandlerFunc(s.exitIPs)))
+	mux.Handle("GET /api/exit-ips/{id}/users", s.requireAuth(http.HandlerFunc(s.exitIPUsers)))
 	mux.Handle("GET /api/exit-ips/{id}", s.requireAuth(http.HandlerFunc(s.exitIPDetail)))
 	mux.Handle("POST /api/exit-ips", s.requireAuth(http.HandlerFunc(s.createExitIP)))
 	mux.Handle("PATCH /api/exit-ips/{id}", s.requireAuth(http.HandlerFunc(s.updateExitIP)))
@@ -2379,9 +2380,7 @@ LEFT JOIN nodes landing ON landing.id = e.landing_node_id
 	record.Enabled = enabled == 1
 	if err := s.db.QueryRow(`SELECT COUNT(DISTINCT p.user_id) FROM user_paths p
 JOIN users u ON u.id = p.user_id
-WHERE (p.exit_ip_id = ? OR EXISTS (SELECT 1 FROM user_path_exit_ips upi WHERE upi.user_path_id = p.id AND upi.exit_ip_id = ?)) AND p.active_to IS NULL
-AND u.deleted_at IS NULL AND u.status <> 'disabled' AND datetime(u.created_at) <= datetime('now')
-AND (u.expiry_time IS NULL OR datetime(u.expiry_time) >= datetime('now'))`, id, id).Scan(&record.AllocatedUserCount); err != nil {
+WHERE `+exitIPAllocatedUserPredicate("?"), id, id).Scan(&record.AllocatedUserCount); err != nil {
 		return exitIPRecord{}, err
 	}
 	return record, nil
@@ -2825,12 +2824,17 @@ func (s *Server) exitIPs(w http.ResponseWriter, r *http.Request) {
 		like := "%" + query.keyword + "%"
 		args = append(args, like, like, like, like, like)
 	}
-	if query.status != "" {
-		if query.status == "active" {
-			where = append(where, "e.enabled = 1")
-		} else if query.status == "disabled" {
-			where = append(where, "e.enabled = 0")
-		}
+	switch query.status {
+	case "active":
+		where = append(where, "e.enabled = 1")
+	case "normal":
+		where = append(where, "e.enabled = 1 AND (e.valid_to IS NULL OR date(e.valid_to) > date('now', '+7 days'))")
+	case "expiring":
+		where = append(where, "e.enabled = 1 AND e.valid_to IS NOT NULL AND date(e.valid_to) >= date('now') AND date(e.valid_to) <= date('now', '+7 days')")
+	case "expired":
+		where = append(where, "e.enabled = 1 AND e.valid_to IS NOT NULL AND date(e.valid_to) < date('now')")
+	case "disabled":
+		where = append(where, "e.enabled = 0")
 	}
 	base := `FROM exit_ips e
 LEFT JOIN nodes owner ON owner.id = COALESCE(e.owner_node_id, e.landing_node_id)
@@ -2851,9 +2855,7 @@ WHERE ` + strings.Join(where, " AND ")
 	COALESCE(e.landing_node_id, ''), COALESCE(landing.name, ''), e.family, COALESCE(CASE WHEN COALESCE(e.source_type, 'node') = 's5' THEN e.region ELSE owner.region END, ''), COALESCE(e.provider, ''), e.enabled, e.monthly_cost, e.currency,
 (SELECT COUNT(DISTINCT p.user_id) FROM user_paths p
 JOIN users u ON u.id = p.user_id
-WHERE (p.exit_ip_id = e.id OR EXISTS (SELECT 1 FROM user_path_exit_ips upi WHERE upi.user_path_id = p.id AND upi.exit_ip_id = e.id)) AND p.active_to IS NULL
-AND u.deleted_at IS NULL AND u.status <> 'disabled' AND datetime(u.created_at) <= datetime('now')
-AND (u.expiry_time IS NULL OR datetime(u.expiry_time) >= datetime('now'))), e.updated_at
+WHERE `+exitIPAllocatedUserPredicate("e.id")+`), e.updated_at, COALESCE(e.valid_to, '')
 `+base+` ORDER BY e.ip ASC LIMIT ? OFFSET ?`, append(args, query.pageSize, query.offset)...)
 	if err != nil {
 		writeFailure(w, http.StatusInternalServerError, internalErrorCode, "could not read exit IPs")
@@ -2862,10 +2864,10 @@ AND (u.expiry_time IS NULL OR datetime(u.expiry_time) >= datetime('now'))), e.up
 	defer rows.Close()
 	items := make([]map[string]any, 0)
 	for rows.Next() {
-		var id, ip, sourceType, ownerNodeID, ownerNodeName, ownerNodeType, landingNodeID, landing, region, provider, currency, checkedAt string
+		var id, ip, sourceType, ownerNodeID, ownerNodeName, ownerNodeType, landingNodeID, landing, region, provider, currency, checkedAt, validTo string
 		var family, enabled, allocated int
 		var monthlyCost float64
-		if err := rows.Scan(&id, &ip, &sourceType, &ownerNodeID, &ownerNodeName, &ownerNodeType, &landingNodeID, &landing, &family, &region, &provider, &enabled, &monthlyCost, &currency, &allocated, &checkedAt); err != nil {
+		if err := rows.Scan(&id, &ip, &sourceType, &ownerNodeID, &ownerNodeName, &ownerNodeType, &landingNodeID, &landing, &family, &region, &provider, &enabled, &monthlyCost, &currency, &allocated, &checkedAt, &validTo); err != nil {
 			writeFailure(w, http.StatusInternalServerError, internalErrorCode, "could not decode exit IPs")
 			return
 		}
@@ -2877,7 +2879,7 @@ AND (u.expiry_time IS NULL OR datetime(u.expiry_time) >= datetime('now'))), e.up
 			"id": id, "address": ip, "sourceType": sourceType, "ownerNodeId": nullableString(ownerNodeID), "ownerNodeName": nullableString(ownerNodeName), "ownerNodeType": nullableString(ownerNodeType),
 			"landingNodeId": nullableString(landingNodeID), "landingNodeName": nullableString(landing), "region": nullableString(region), "family": family, "provider": nullableString(provider),
 			"status": status, "monthlyCost": monthlyCost, "currency": currency,
-			"allocatedUserCount": allocated, "checkedAt": nullableString(checkedAt),
+			"allocatedUserCount": allocated, "checkedAt": nullableString(checkedAt), "validTo": nullableString(validTo),
 		})
 	}
 	response := s.pageResponse(items, total, query)
