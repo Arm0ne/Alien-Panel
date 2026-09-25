@@ -1,0 +1,1 @@
+import{ka as e,oa as t,ra as n,va as r}from"./router-BPt_aGUh.js";var i={class:`inline-block`,viewBox:`0 0 24 24`,width:`1em`,height:`1em`};function a(e,a){return r(),t(`svg`,i,[...a[0]||=[n(`path`,{fill:`currentColor`,d:`M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6z`},null,-1)]])}var o=e({name:`mdi-plus`,render:a});export{o as t};

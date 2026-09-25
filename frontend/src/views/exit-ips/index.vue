@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, h, onMounted, reactive, ref, watch } from 'vue';
-import { useElementSize } from '@vueuse/core';
+import dayjs from 'dayjs';
+import { useElementSize, useWindowSize } from '@vueuse/core';
 import { useRouter } from 'vue-router';
 import { NButton, NSpace, NTag } from 'naive-ui';
 import type { DataTableColumns } from 'naive-ui';
@@ -71,8 +72,8 @@ function formatMoney(value?: number, currency = 'CNY') {
 
 function formatDate(value?: string | null) {
   if (!value) return '--';
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? value : date.toLocaleString('zh-CN', { hour12: false });
+  const date = dayjs(value);
+  return date.isValid() ? date.format('YYYY-MM-DD HH:mm:ss') : '时间未知';
 }
 
 function familyLabel(family: number) {
@@ -119,6 +120,11 @@ const countriesExpanded = ref(false);
 const countryStrip = ref<HTMLElement | null>(null);
 const { width: countryStripWidth } = useElementSize(countryStrip);
 const router = useRouter();
+const { width: viewportWidth } = useWindowSize();
+const compactAllocatedUsers = computed(() => viewportWidth.value < 900);
+const allocatedUsersDrawerWidth = computed(() =>
+  compactAllocatedUsers.value ? '100vw' : Math.min(1000, Math.round(viewportWidth.value * 0.9))
+);
 const allocatedUsersVisible = ref(false);
 const selectedExitIp = ref<Api.Central.ExitIpSummary | null>(null);
 const allocatedUsers = ref<Api.Central.ExitIpAllocatedUser[]>([]);
@@ -347,7 +353,7 @@ const allocatedUsersColumns: DataTableColumns<Api.Central.ExitIpAllocatedUser> =
   {
     title: '用户',
     key: 'name',
-    minWidth: 140,
+    width: 120,
     render: row =>
       h(
         NButton,
@@ -358,21 +364,26 @@ const allocatedUsersColumns: DataTableColumns<Api.Central.ExitIpAllocatedUser> =
   {
     title: '线路机 / Inbound',
     key: 'nodeName',
-    minWidth: 170,
+    width: 190,
     render: row =>
       h('div', { class: 'flex flex-col' }, [
         h('span', { class: 'font-medium' }, row.nodeName || '--'),
         h('span', { class: 'text-12px text-gray-500' }, row.inboundTag || 'Inbound 未命名')
       ])
   },
-  { title: '路径', key: 'pathMode', width: 110, render: row => pathModeLabel(row.pathMode) },
+  { title: '路径', key: 'pathMode', width: 90, render: row => pathModeLabel(row.pathMode) },
   {
     title: '用户状态',
     key: 'status',
-    width: 110,
+    width: 100,
     render: row => h(UserStatusTag, { status: row.status, expiresAt: row.expiresAt })
   },
-  { title: '用户到期', key: 'expiresAt', minWidth: 145, render: row => formatDate(row.expiresAt) }
+  {
+    title: '用户到期',
+    key: 'expiresAt',
+    width: 190,
+    render: row => h('span', { class: 'whitespace-nowrap' }, formatDate(row.expiresAt))
+  }
 ];
 
 const allocatedUsersPagination = computed(() => ({
@@ -736,7 +747,7 @@ onMounted(() => {
       </template>
     </NModal>
 
-    <NDrawer v-model:show="allocatedUsersVisible" :width="680" placement="right">
+    <NDrawer v-model:show="allocatedUsersVisible" :width="allocatedUsersDrawerWidth" placement="right">
       <NDrawerContent :title="`使用 ${selectedExitIp?.address || ''} 的用户`" closable>
         <div class="flex flex-col gap-12px">
           <NSpace wrap>
@@ -760,6 +771,7 @@ onMounted(() => {
             当前符合归属统计的有效用户：{{ allocatedUsersTotal }} 人
           </div>
           <NDataTable
+            v-if="!compactAllocatedUsers"
             :columns="allocatedUsersColumns"
             :data="allocatedUsers"
             :loading="allocatedUsersLoading"
@@ -768,8 +780,35 @@ onMounted(() => {
             :single-line="false"
             :row-key="row => row.id"
             size="small"
-            :scroll-x="680"
           />
+          <NSpin v-else :show="allocatedUsersLoading" class="min-h-120px">
+            <div v-if="allocatedUsers.length" class="flex flex-col">
+              <div
+                v-for="user in allocatedUsers"
+                :key="user.id"
+                class="grid grid-cols-[88px_minmax(0,1fr)] items-start gap-x-8px gap-y-8px border-b border-gray-200 py-12px last:border-b-0 dark:border-gray-700"
+              >
+                <span class="text-12px text-gray-500 dark:text-gray-400">用户</span>
+                <NButton size="small" type="primary" text class="justify-self-start" @click="openUserDetail(user)">
+                  {{ user.name }}
+                </NButton>
+                <span class="text-12px text-gray-500 dark:text-gray-400">线路机 / Inbound</span>
+                <div class="flex min-w-0 flex-col">
+                  <span class="truncate font-medium">{{ user.nodeName || '--' }}</span>
+                  <span class="truncate text-12px text-gray-500 dark:text-gray-400">
+                    {{ user.inboundTag || 'Inbound 未命名' }}
+                  </span>
+                </div>
+                <span class="text-12px text-gray-500 dark:text-gray-400">路径</span>
+                <span>{{ pathModeLabel(user.pathMode) }}</span>
+                <span class="text-12px text-gray-500 dark:text-gray-400">用户状态</span>
+                <UserStatusTag :status="user.status" :expires-at="user.expiresAt" />
+                <span class="text-12px text-gray-500 dark:text-gray-400">用户到期</span>
+                <span class="whitespace-nowrap text-12px">{{ formatDate(user.expiresAt) }}</span>
+              </div>
+            </div>
+            <div v-else class="py-32px text-center text-13px text-gray-500 dark:text-gray-400">暂无符合条件的用户</div>
+          </NSpin>
         </div>
       </NDrawerContent>
     </NDrawer>

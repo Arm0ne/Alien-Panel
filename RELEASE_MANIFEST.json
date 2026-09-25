@@ -3,7 +3,7 @@
   "productVersion": "v1.0.0",
   "releaseType": "first-production-deployable",
   "sourceRepository": "https://github.com/Arm0ne/Alien-Panel",
-  "sourceCommit": "d9fdaef963269440ea7fa6a5e4de01f76a132716",
+  "sourceCommit": "3bfd414c86fba8f8ce8509adac55a4b0dcd4b4ad",
   "agentVersion": "v1.0.3",
   "target": "linux/amd64",
   "databaseMigration": "025_traffic_hourly_rollups.sql",
@@ -23,7 +23,7 @@
     "frontendBuild": "pnpm.cmd build",
     "bundleBuild": "deploy/build-bundle.ps1"
   },
-  "frontendCommit": "d9fdaef963269440ea7fa6a5e4de01f76a132716",
+  "frontendCommit": "3bfd414c86fba8f8ce8509adac55a4b0dcd4b4ad",
   "checksums": {
     "release": "checksums/release.sha256",
     "source": "checksums/source-files.sha256"

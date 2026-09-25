@@ -1,1 +1,0 @@
-import{_a as e,ca as t,ra as n}from"./router-CZSFYymG.js";import{t as r}from"./exception-base-oRIr2AHo.js";var i=t({name:`403`,__name:`index`,setup(t){return(t,i)=>{let a=r;return e(),n(a,{type:`403`})}}});export{i as default};

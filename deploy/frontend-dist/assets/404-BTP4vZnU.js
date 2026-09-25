@@ -1,0 +1,1 @@
+import{ia as e,la as t,va as n}from"./router-BPt_aGUh.js";import{t as r}from"./exception-base-CKehNgSX.js";var i=t({name:`404`,__name:`index`,setup(t){return(t,i)=>{let a=r;return n(),e(a,{type:`404`})}}});export{i as default};

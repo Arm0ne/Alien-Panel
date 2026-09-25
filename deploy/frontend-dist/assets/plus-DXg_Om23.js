@@ -1,1 +1,0 @@
-import{Oa as e,_a as t,aa as n,na as r}from"./router-CZSFYymG.js";var i={class:`inline-block`,viewBox:`0 0 24 24`,width:`1em`,height:`1em`};function a(e,a){return t(),n(`svg`,i,[...a[0]||=[r(`path`,{fill:`currentColor`,d:`M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6z`},null,-1)]])}var o=e({name:`mdi-plus`,render:a});export{o as t};
