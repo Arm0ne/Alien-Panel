@@ -1241,6 +1241,26 @@ func TestUserListAggregatesOneRowPerInbound(t *testing.T) {
 	if filteredStats["active"] != float64(2) || filteredStats["paid"] != float64(1) || filteredStats["free"] != float64(1) {
 		t.Fatalf("node-filtered user stats changed with filter = %#v", filteredStats)
 	}
+
+	if _, err := database.Exec(`UPDATE users SET status = 'expiring' WHERE id = 'aggregate-user-1'`); err != nil {
+		t.Fatalf("mark user as expiring: %v", err)
+	}
+	expiringList := doJSON(t, ts.Client(), http.MethodGet, ts.URL+"/api/users?status=expiring&page_size=20", token, nil)
+	if expiringList["code"] != successCode {
+		t.Fatalf("expiring user list response = %#v", expiringList)
+	}
+	expiringData := expiringList["data"].(map[string]any)
+	if expiringData["total"] != float64(1) {
+		t.Fatalf("expiring user total = %v, want 1", expiringData["total"])
+	}
+	expiringStats := expiringData["stats"].(map[string]any)
+	if expiringStats["expiring"] != float64(1) {
+		t.Fatalf("expiring user stats = %#v, want expiring=1", expiringStats)
+	}
+	expiringItems := expiringData["items"].([]any)
+	if len(expiringItems) != 1 || expiringItems[0].(map[string]any)["nodeName"] != "线路机 A" {
+		t.Fatalf("expiring user node mapping = %#v", expiringItems)
+	}
 }
 
 func TestNodeDetailAndManualSyncRequest(t *testing.T) {

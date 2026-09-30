@@ -576,12 +576,13 @@ ORDER BY CASE WHEN n.id IS NULL THEN 1 ELSE 0 END, COALESCE(n.name, '') ASC LIMI
 
 // userListStats returns the current operational user breakdown for the user
 // management page. It uses the same relay-primary-Inbound scope as the
-// dashboard's effective-user count, and counts only users whose operational
-// status is active so the paid and free values remain subsets of active users.
+// dashboard's effective-user count. Paid and free values remain subsets of
+// active users; expiring is reported separately for the global shortcut.
 func (s *Server) userListStats() (map[string]int, error) {
-	var active, paid, free int
+	var active, expiring, paid, free int
 	err := s.db.QueryRow(`SELECT
 	COALESCE(SUM(CASE WHEN u.status = 'active' THEN 1 ELSE 0 END), 0),
+	COALESCE(SUM(CASE WHEN u.status = 'expiring' THEN 1 ELSE 0 END), 0),
 	COALESCE(SUM(CASE WHEN u.status = 'active' AND COALESCE(u.billing_type, 'paid') = 'paid' THEN 1 ELSE 0 END), 0),
 	COALESCE(SUM(CASE WHEN u.status = 'active' AND COALESCE(u.billing_type, 'paid') = 'free' THEN 1 ELSE 0 END), 0)
 FROM users u
@@ -597,11 +598,11 @@ WHERE u.deleted_at IS NULL
 	  AND i.deleted_at IS NULL
 	  AND n.type = 'relay'
 	  AND n.deleted_at IS NULL
-	)`).Scan(&active, &paid, &free)
+	)`).Scan(&active, &expiring, &paid, &free)
 	if err != nil {
 		return nil, err
 	}
-	return map[string]int{"active": active, "paid": paid, "free": free}, nil
+	return map[string]int{"active": active, "expiring": expiring, "paid": paid, "free": free}, nil
 }
 
 type updateUserRequest struct {

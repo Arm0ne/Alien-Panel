@@ -53,6 +53,7 @@ declare namespace Api {
 
     interface UserListStats {
       active: number;
+      expiring: number;
       paid: number;
       free: number;
     }

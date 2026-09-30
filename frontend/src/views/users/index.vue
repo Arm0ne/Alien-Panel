@@ -32,6 +32,10 @@ const errorMessage = ref('');
 const groups = ref<Api.Central.UserGroupSummary[]>([]);
 const groupTotal = ref(0);
 const stats = ref<Api.Central.UserListStats | null>(null);
+const expiringUsers = ref<Api.Central.UserSummary[]>([]);
+const expiringUsersTotal = ref(0);
+const expiringUsersLoading = ref(false);
+const expiringUsersError = ref('');
 const dataAt = ref('');
 const expandedGroups = ref(new Set<string>());
 interface GroupUsersState {
@@ -102,7 +106,16 @@ const pathNotes = ref('');
 const route = useRoute();
 let pathAssetsRequestID = 0;
 
-const filters = reactive({ page: 1, page_size: 20, keyword: '', status: 'all', billingType: 'all', nodeID: '' });
+const defaultGroupPageSize = 20;
+const expiringListPageSize = 200;
+const filters = reactive({
+  page: 1,
+  page_size: defaultGroupPageSize,
+  keyword: '',
+  status: 'all',
+  billingType: 'all',
+  nodeID: ''
+});
 
 const statusOptions = [
   { label: '全部状态', value: 'all' },
@@ -698,6 +711,12 @@ const columns: DataTableColumns<Api.Central.UserSummary> = [
       ])
   },
   {
+    title: '线路机',
+    key: 'nodeName',
+    minWidth: 150,
+    render: row => row.nodeName || '未关联线路机'
+  },
+  {
     title: '计费类型',
     key: 'billingType',
     width: 100,
@@ -853,6 +872,28 @@ async function loadGroupUsers(nodeID: string, requestedPage?: number) {
   state.loading = false;
 }
 
+async function loadExpiringUsers() {
+  expiringUsersLoading.value = true;
+  expiringUsersError.value = '';
+  const { data, error } = await fetchUsers({
+    page: filters.page,
+    page_size: expiringListPageSize,
+    keyword: filters.keyword || undefined,
+    status: 'expiring',
+    billing_type: filters.billingType === 'all' ? undefined : (filters.billingType as Api.Central.BillingType),
+    node_id: filters.nodeID || undefined
+  });
+  if (error || !data) {
+    expiringUsers.value = [];
+    expiringUsersTotal.value = 0;
+    expiringUsersError.value = '无法读取即将到期用户';
+  } else {
+    expiringUsers.value = data.items;
+    expiringUsersTotal.value = data.total;
+  }
+  expiringUsersLoading.value = false;
+}
+
 async function loadGroups() {
   loading.value = true;
   errorMessage.value = '';
@@ -870,12 +911,21 @@ async function loadGroups() {
     groups.value = [];
     groupTotal.value = 0;
     stats.value = null;
+    expiringUsers.value = [];
+    expiringUsersTotal.value = 0;
+    expiringUsersError.value = '';
     dataAt.value = '';
   } else {
     groups.value = data.items;
     groupTotal.value = data.total;
     stats.value = data.stats;
     dataAt.value = data.dataAt || '';
+    if (filters.status === 'expiring') {
+      await loadExpiringUsers();
+      expandedGroups.value = new Set();
+      loading.value = false;
+      return;
+    }
     const available = new Set(groups.value.map(group => group.nodeId));
     expandedGroups.value = new Set([...expandedGroups.value].filter(nodeID => available.has(nodeID)));
     for (const nodeID of Object.keys(groupUsers)) {
@@ -894,15 +944,28 @@ async function loadGroups() {
 }
 
 function submitFilters() {
+  filters.page_size = filters.status === 'expiring' ? expiringListPageSize : defaultGroupPageSize;
   filters.page = 1;
   expandedGroups.value = new Set();
   for (const state of Object.values(groupUsers)) {
     state.page = 1;
+    state.pageSize = defaultGroupPageSize;
     state.rows = [];
     state.total = 0;
     state.error = '';
   }
+  expiringUsers.value = [];
+  expiringUsersTotal.value = 0;
+  expiringUsersError.value = '';
   loadGroups();
+}
+
+function showExpiringUsers() {
+  filters.keyword = '';
+  filters.status = 'expiring';
+  filters.billingType = 'all';
+  filters.nodeID = '';
+  submitFilters();
 }
 
 function resetFilters() {
@@ -910,6 +973,7 @@ function resetFilters() {
   filters.status = 'all';
   filters.billingType = 'all';
   filters.nodeID = '';
+  filters.page_size = defaultGroupPageSize;
   submitFilters();
 }
 
@@ -927,7 +991,7 @@ onMounted(() => {
       description="按线路机查看业务用户；一个 Inbound 对应一个业务用户，Client / Email 仅作为设备凭证。"
       :loading="loading"
       :error="errorMessage"
-      :empty="groups.length === 0"
+      :empty="groups.length === 0 && filters.status !== 'expiring'"
       empty-description="暂无用户同步数据"
       :data-at="dataAt"
       @refresh="loadGroups"
@@ -954,6 +1018,16 @@ onMounted(() => {
               <span>免费用户</span>
               <strong class="users-value--free">{{ stats.free }}</strong>
             </div>
+            <button
+              type="button"
+              class="users-kpi users-kpi--clickable"
+              aria-label="查看全部即将到期用户"
+              title="点击查看全部即将到期用户"
+              @click="showExpiringUsers"
+            >
+              <span>即将到期</span>
+              <strong class="users-value--expiring">{{ stats.expiring }}</strong>
+            </button>
           </div>
           <div class="border-b border-gray-200 p-16px dark:border-gray-700">
             <NSpace wrap>
@@ -971,14 +1045,39 @@ onMounted(() => {
                 <template #icon><icon-mdi-magnify /></template>
                 查询
               </NButton>
-              <NButton @click="resetFilters">重置</NButton>
+              <NButton @click="resetFilters">{{ filters.status === 'expiring' ? '查看全部用户' : '重置' }}</NButton>
               <NButton secondary :disabled="groups.length === 0" @click="expandAllGroups">全部展开</NButton>
               <NButton secondary :disabled="groups.length === 0" @click="collapseAllGroups">全部收起</NButton>
             </NSpace>
           </div>
         </div>
       </template>
-      <div v-if="groups.length" class="user-groups-grid p-16px pt-0">
+      <div v-if="filters.status === 'expiring'" class="user-expiring-list p-16px pt-0">
+        <NSpin :show="expiringUsersLoading">
+          <NAlert v-if="expiringUsersError" type="warning" :show-icon="false" class="mb-12px">
+            {{ expiringUsersError }}
+            <NButton size="small" class="ml-8px" @click="loadExpiringUsers">重试</NButton>
+          </NAlert>
+          <NDataTable
+            v-else
+            :columns="columns"
+            :data="expiringUsers"
+            :pagination="false"
+            :bordered="false"
+            :single-line="true"
+            size="small"
+            :scroll-x="1170"
+          />
+        </NSpin>
+        <div v-if="expiringUsersTotal > filters.page_size" class="flex justify-end pt-12px">
+          <NPagination
+            v-model:page="filters.page"
+            :page-count="Math.ceil(expiringUsersTotal / filters.page_size)"
+            @update:page="loadExpiringUsers"
+          />
+        </div>
+      </div>
+      <div v-else-if="groups.length" class="user-groups-grid p-16px pt-0">
         <div
           v-for="group in groups"
           :key="group.nodeId"
@@ -1074,7 +1173,7 @@ onMounted(() => {
           </div>
         </div>
       </div>
-      <div v-if="groups.length && groupTotal > filters.page_size" class="flex justify-end px-16px pt-2px">
+      <div v-if="filters.status !== 'expiring' && groups.length && groupTotal > filters.page_size" class="flex justify-end px-16px pt-2px">
         <NPagination
           v-model:page="filters.page"
           :page-count="Math.ceil(groupTotal / filters.page_size)"
@@ -1559,6 +1658,22 @@ onMounted(() => {
 }
 
 .users-page {
+  --users-canvas: #f8fafc;
+  --users-surface: #ffffff;
+  --users-elevated: #f8fafc;
+  --users-border: rgb(15 23 42 / 10%);
+  --users-border-soft: rgb(15 23 42 / 7%);
+  --users-text: #1f2937;
+  --users-muted: #64748b;
+  --users-faint: #94a3b8;
+  --users-primary: #4f46e5;
+  --users-active: #15803d;
+  --users-paid: #2563eb;
+  --users-free: #b45309;
+  --users-expiring: #b45309;
+}
+
+html.dark .users-page {
   --users-canvas: #121212;
   --users-surface: #1c1c1c;
   --users-elevated: #202124;
@@ -1591,6 +1706,26 @@ onMounted(() => {
   border: 1px solid var(--users-border);
   border-radius: 8px;
   background: var(--users-surface);
+}
+
+.users-kpi--clickable {
+  appearance: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 0.2s ease, background 0.2s ease, box-shadow 0.2s ease;
+}
+
+.users-kpi--clickable:hover {
+  border-color: color-mix(in srgb, var(--users-expiring) 65%, var(--users-border));
+  background: color-mix(in srgb, var(--users-expiring) 7%, var(--users-surface));
+  box-shadow: 0 2px 8px rgb(0 0 0 / 16%);
+}
+
+.users-kpi--clickable:focus-visible {
+  outline: 2px solid var(--users-expiring);
+  outline-offset: 2px;
 }
 
 .users-kpi > span {
