@@ -797,6 +797,13 @@ VALUES (?, ?, ?, ?, ?, ?)`, userID, inboundDisplayName(inbound, remoteInboundID)
 			Scan(&oldExpiry, &billingCycle, &billingAmount, &monthlyFee); err != nil {
 			return fmt.Errorf("read previous user billing state: %w", err)
 		}
+		// A disabled snapshot has no effective Client expiry. Keep the last
+		// known expiry so reactivation can still detect an extension, while
+		// retaining the disabled status. An enabled unlimited user and a new
+		// customer must not inherit that historical deadline.
+		if state.Status == "disabled" && !suppressRenewalCandidate {
+			expiry = nullableDBString(oldExpiry)
+		}
 		if !suppressRenewalCandidate && oldExpiry != "" && state.ExpiryText != "" {
 			oldTime, oldErr := time.Parse(time.RFC3339Nano, oldExpiry)
 			newTime, newErr := time.Parse(time.RFC3339Nano, state.ExpiryText)

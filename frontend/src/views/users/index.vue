@@ -24,6 +24,7 @@ import UserStatusTag from '@/components/project/user-status-tag.vue';
 import DeviceTable from '@/components/project/device-table.vue';
 import TrafficTrendChart from '@/components/project/traffic-trend-chart.vue';
 import TrafficValue from '@/components/project/traffic-value.vue';
+import { billingServiceInterval, billingTimestampISO } from '@/utils/billing';
 
 defineOptions({ name: 'UserManagement' });
 
@@ -75,8 +76,8 @@ const orderSaving = ref(false);
 const orderForm = reactive({
   billingCycle: 'monthly' as Api.Central.BillingCycle,
   amount: null as number | null,
-  serviceFrom: null as string | null,
-  serviceTo: null as string | null,
+  serviceFrom: null as number | null,
+  serviceTo: null as number | null,
   paidAt: new Date().toISOString().slice(0, 10),
   orderType: 'renewal' as 'initial' | 'renewal' | 'recovery',
   notes: ''
@@ -267,10 +268,8 @@ async function createInitialOrder() {
 function resetOrderForm() {
   orderForm.billingCycle = detail.value?.billingCycle || 'monthly';
   orderForm.amount = detail.value?.billingAmount ?? detail.value?.monthlyFee ?? 0;
-  const records = detail.value?.billingRecords || [];
-  const latest = records.reduce<string | null>((value, record) => (value && value > record.serviceTo ? value : record.serviceTo), null);
-  orderForm.serviceFrom = latest ? toDateInputValue(latest) : null;
-  orderForm.serviceTo = detail.value?.expiresAt ? toDateInputValue(detail.value.expiresAt) : null;
+  const records = (detail.value?.billingRecords || []).filter(record => record.status !== 'cancelled');
+  Object.assign(orderForm, billingServiceInterval(records, detail.value?.expiresAt));
   orderForm.paidAt = new Date().toISOString().slice(0, 10);
   orderForm.orderType = records.length === 0 ? 'initial' : 'renewal';
   orderForm.notes = '';
@@ -287,8 +286,8 @@ async function createAdditionalOrder() {
     window.$message?.warning('请填写有效的订单金额');
     return;
   }
-  const serviceFrom = dayToRFC3339(orderForm.serviceFrom);
-  const serviceTo = dayToRFC3339(orderForm.serviceTo);
+  const serviceFrom = billingTimestampISO(orderForm.serviceFrom);
+  const serviceTo = billingTimestampISO(orderForm.serviceTo);
   if (!serviceFrom || !serviceTo || new Date(serviceTo) <= new Date(serviceFrom)) {
     window.$message?.warning('请填写正确的服务区间');
     return;
@@ -1240,13 +1239,16 @@ onMounted(() => {
           <NFormItem label="实际收款日期" required>
             <NDatePicker v-model:formatted-value="orderForm.paidAt" type="date" value-format="yyyy-MM-dd" class="w-full" />
           </NFormItem>
-          <NFormItem label="服务开始日期" required>
-            <NDatePicker v-model:formatted-value="orderForm.serviceFrom" type="date" value-format="yyyy-MM-dd" class="w-full" />
+          <NFormItem label="服务开始时间" required>
+            <NDatePicker v-model:value="orderForm.serviceFrom" type="datetime" format="yyyy-MM-dd HH:mm:ss" class="w-full" />
           </NFormItem>
-          <NFormItem label="服务结束日期" required>
-            <NDatePicker v-model:formatted-value="orderForm.serviceTo" type="date" value-format="yyyy-MM-dd" class="w-full" />
+          <NFormItem label="服务结束时间" required>
+            <NDatePicker v-model:value="orderForm.serviceTo" type="datetime" format="yyyy-MM-dd HH:mm:ss" class="w-full" />
           </NFormItem>
         </div>
+        <p class="mb-12px text-12px text-gray-500">
+          服务时间按本地时区显示。开始时间默认接续上一笔未取消订单的结束时间，结束时间默认使用已同步的用户到期时间。
+        </p>
         <NFormItem label="订单备注"><NInput v-model:value="orderForm.notes" maxlength="2000" /></NFormItem>
       </NForm>
       <template #footer>
