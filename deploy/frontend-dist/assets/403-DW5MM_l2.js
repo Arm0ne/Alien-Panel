@@ -1,0 +1,1 @@
+import{ia as e,la as t,va as n}from"./router-CNu-dGsj.js";import{t as r}from"./exception-base-DDgdGf3k.js";var i=t({name:`403`,__name:`index`,setup(t){return(t,i)=>{let a=r;return n(),e(a,{type:`403`})}}});export{i as default};
