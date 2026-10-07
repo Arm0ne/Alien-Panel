@@ -25,8 +25,8 @@ func TestMigrateIsIdempotent(t *testing.T) {
 	if err := database.QueryRow(`SELECT COUNT(*) FROM schema_migrations`).Scan(&count); err != nil {
 		t.Fatalf("count migrations: %v", err)
 	}
-	if count != 25 {
-		t.Fatalf("migration count = %d, want 25", count)
+	if count != 26 {
+		t.Fatalf("migration count = %d, want 26", count)
 	}
 	var duplicateIndexCount int
 	if err := database.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name = 'idx_traffic_snapshots_inbound_collected'`).Scan(&duplicateIndexCount); err != nil {
@@ -148,15 +148,15 @@ func TestAutoDeleteOrphanedUsersMigrationPreservesBillingHistory(t *testing.T) {
 		t.Fatalf("retained billing records=%d audit records=%d", billingRecords, auditRecords)
 	}
 	var candidateStatus, eventStatus string
-	var requiresAction int
+	var requiresAction, acknowledged int
 	if err := database.QueryRow(`SELECT status FROM user_renewal_candidates WHERE id = 'orphan-candidate'`).Scan(&candidateStatus); err != nil {
 		t.Fatalf("read migrated renewal candidate: %v", err)
 	}
-	if err := database.QueryRow(`SELECT event_status, requires_action FROM node_events WHERE id = 'orphan-event'`).Scan(&eventStatus, &requiresAction); err != nil {
+	if err := database.QueryRow(`SELECT event_status, requires_action, acknowledged FROM node_events WHERE id = 'orphan-event'`).Scan(&eventStatus, &requiresAction, &acknowledged); err != nil {
 		t.Fatalf("read migrated renewal event: %v", err)
 	}
-	if candidateStatus != "rejected" || eventStatus != "resolved" || requiresAction != 0 {
-		t.Fatalf("migrated renewal candidate=%q event=%q requires_action=%d", candidateStatus, eventStatus, requiresAction)
+	if candidateStatus != "rejected" || eventStatus != "resolved" || requiresAction != 0 || acknowledged != 1 {
+		t.Fatalf("migrated renewal candidate=%q event=%q requires_action=%d acknowledged=%d", candidateStatus, eventStatus, requiresAction, acknowledged)
 	}
 }
 

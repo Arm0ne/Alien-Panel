@@ -70,6 +70,10 @@ function isPendingEvent(row: Api.Central.EventSummary) {
   return row.status !== 'resolved' && row.status !== 'dismissed' && (row.requiresAction || Boolean(row.actionType?.trim()));
 }
 
+function canMarkRead(row: Api.Central.EventSummary) {
+  return row.status !== 'resolved' && row.status !== 'dismissed' && !isPendingEvent(row);
+}
+
 function eventStatusLabel(row: Api.Central.EventSummary) {
   if (row.status === 'resolved' || row.status === 'dismissed') return '已处理';
   if (isPendingEvent(row)) return '待处理';
@@ -86,13 +90,6 @@ function openUser(row: Api.Central.EventSummary) {
 }
 
 async function completeNewUserProfile(row: Api.Central.EventSummary) {
-  if (!row.acknowledged) {
-    const { error } = await markEventRead(row.id);
-    if (!error) {
-      row.acknowledged = true;
-      notifyEventChanged();
-    }
-  }
   openUser(row);
 }
 
@@ -138,7 +135,7 @@ function resetFilters() {
 }
 
 async function readEvent(row: Api.Central.EventSummary) {
-  if (row.acknowledged) return;
+  if (row.acknowledged || !canMarkRead(row)) return;
   actionLoading.value = `read:${row.id}`;
   const { error } = await markEventRead(row.id);
   actionLoading.value = '';
@@ -248,7 +245,7 @@ async function readAll() {
     return;
   }
   rows.value.forEach(row => {
-    row.acknowledged = true;
+    if (canMarkRead(row)) row.acknowledged = true;
   });
   notifyEventChanged();
 }
@@ -357,7 +354,7 @@ const columns: DataTableColumns<Api.Central.EventSummary> = [
           )
         );
       }
-      if (!row.acknowledged) {
+      if (!row.acknowledged && canMarkRead(row)) {
         buttons.push(
           h(
             NButton,
@@ -367,7 +364,7 @@ const columns: DataTableColumns<Api.Central.EventSummary> = [
               loading: actionLoading.value === `read:${row.id}`,
               onClick: () => readEvent(row)
             },
-            { default: () => '已读' }
+            { default: () => '标记已读' }
           )
         );
       }

@@ -127,6 +127,14 @@ func insertNodeEventTx(tx *sql.Tx, event nodeEventSpec) error {
 	if event.OccurredAt.IsZero() {
 		event.OccurredAt = time.Now().UTC()
 	}
+	acknowledged := false
+	readAt := ""
+	if event.EventStatus == "resolved" || event.EventStatus == "dismissed" {
+		// A completed event is a history record, not a new notification.
+		event.RequiresAction = false
+		acknowledged = true
+		readAt = event.OccurredAt.UTC().Format(time.RFC3339Nano)
+	}
 	var payloadJSON any
 	if event.Payload != nil {
 		payload, err := json.Marshal(event.Payload)
@@ -137,12 +145,13 @@ func insertNodeEventTx(tx *sql.Tx, event nodeEventSpec) error {
 	}
 	_, err := tx.Exec(`INSERT OR IGNORE INTO node_events
 (id, node_id, event_type, severity, message, created_at, event_category, title, visibility, requires_action, event_status,
- resource_type, resource_id, action_type, payload_json, dedupe_key, source, correlation_id)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+ resource_type, resource_id, action_type, payload_json, dedupe_key, source, correlation_id, acknowledged, read_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		event.ID, nullableDBString(event.NodeID), event.EventType, event.Severity, event.Message,
 		event.OccurredAt.UTC().Format(time.RFC3339Nano), event.Category, event.Title, event.Visibility,
 		boolInt(event.RequiresAction), event.EventStatus, nullableDBString(event.ResourceType), nullableDBString(event.ResourceID),
-		nullableDBString(event.ActionType), payloadJSON, nullableDBString(event.DedupeKey), event.Source, nullableDBString(event.CorrelationID))
+		nullableDBString(event.ActionType), payloadJSON, nullableDBString(event.DedupeKey), event.Source, nullableDBString(event.CorrelationID),
+		boolInt(acknowledged), nullableDBString(readAt))
 	return err
 }
 
@@ -238,7 +247,9 @@ WHERE id = ? AND visibility = 'public'`, now, id)
 func (s *Server) markAllEventsRead(w http.ResponseWriter, r *http.Request) {
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	if _, err := s.db.Exec(`UPDATE node_events SET acknowledged = 1, read_at = COALESCE(read_at, ?)
-WHERE visibility = 'public' AND acknowledged = 0`, now); err != nil {
+WHERE visibility = 'public' AND acknowledged = 0
+  AND event_status NOT IN ('resolved', 'dismissed')
+  AND requires_action = 0 AND NULLIF(TRIM(action_type), '') IS NULL`, now); err != nil {
 		writeFailure(w, http.StatusInternalServerError, internalErrorCode, "could not mark events as read")
 		return
 	}
@@ -290,7 +301,8 @@ func (s *Server) eventSummary(w http.ResponseWriter, _ *http.Request) {
 		return
 	}
 	if err := s.db.QueryRow(`SELECT COUNT(*) FROM node_events
-WHERE visibility = 'public' AND acknowledged = 0 AND event_status NOT IN ('resolved', 'dismissed')`).Scan(&unread); err != nil {
+WHERE visibility = 'public' AND acknowledged = 0 AND event_status NOT IN ('resolved', 'dismissed')
+  AND requires_action = 0 AND NULLIF(TRIM(action_type), '') IS NULL`).Scan(&unread); err != nil {
 		writeFailure(w, http.StatusInternalServerError, internalErrorCode, "could not count unread events")
 		return
 	}

@@ -42,12 +42,27 @@ func TestEventCenterHidesInternalSyncRequests(t *testing.T) {
 		t.Fatalf("non-required actionable event triggered strong reminder = %#v", required)
 	}
 	counts := doJSON(t, ts.Client(), http.MethodGet, ts.URL+"/api/events/summary", token, nil)
-	if counts["code"] != successCode || counts["data"].(map[string]any)["pendingCount"] != float64(1) {
+	if counts["code"] != successCode || counts["data"].(map[string]any)["pendingCount"] != float64(1) || counts["data"].(map[string]any)["unreadCount"] != float64(1) {
 		t.Fatalf("pending event summary = %#v", counts)
 	}
 	dashboardEvents, err := server.dashboardEvents()
 	if err != nil || dashboardEvents.PendingCount != 1 || len(dashboardEvents.Items) != 1 {
 		t.Fatalf("dashboard pending events = %#v, err=%v", dashboardEvents, err)
+	}
+
+	readAll := doJSON(t, ts.Client(), http.MethodPost, ts.URL+"/api/events/read-all", token, nil)
+	if readAll["code"] != successCode {
+		t.Fatalf("mark all read response = %#v", readAll)
+	}
+	var actionableAcknowledged, informationalAcknowledged int
+	if err := database.QueryRow(`SELECT acknowledged FROM node_events WHERE id = 'public-error'`).Scan(&actionableAcknowledged); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.QueryRow(`SELECT acknowledged FROM node_events WHERE id = 'public-info'`).Scan(&informationalAcknowledged); err != nil {
+		t.Fatal(err)
+	}
+	if actionableAcknowledged != 0 || informationalAcknowledged != 1 {
+		t.Fatalf("bulk read acknowledged actionable=%d informational=%d", actionableAcknowledged, informationalAcknowledged)
 	}
 
 	read := doJSON(t, ts.Client(), http.MethodPost, ts.URL+"/api/events/public-error/read", token, nil)

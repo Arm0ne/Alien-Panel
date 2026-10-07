@@ -71,15 +71,18 @@ func TestAgentExpiryExtensionCreatesConfirmableRenewal(t *testing.T) {
 	if confirmed["code"] != successCode {
 		t.Fatalf("renewal confirmation = %#v", confirmed)
 	}
-	var records, pending int
+	var records, pending, unreadResolved int
 	if err := database.QueryRow(`SELECT COUNT(*) FROM user_billing_records WHERE user_id = 'billing-user' AND status = 'confirmed'`).Scan(&records); err != nil {
 		t.Fatal(err)
 	}
 	if err := database.QueryRow(`SELECT COUNT(*) FROM user_renewal_candidates WHERE user_id = 'billing-user' AND status = 'pending'`).Scan(&pending); err != nil {
 		t.Fatal(err)
 	}
-	if records != 1 || pending != 0 {
-		t.Fatalf("billing records=%d pending=%d", records, pending)
+	if err := database.QueryRow(`SELECT COUNT(*) FROM node_events WHERE event_status = 'resolved' AND acknowledged = 0`).Scan(&unreadResolved); err != nil {
+		t.Fatal(err)
+	}
+	if records != 1 || pending != 0 || unreadResolved != 0 {
+		t.Fatalf("billing records=%d pending=%d unread resolved events=%d", records, pending, unreadResolved)
 	}
 	counts := doJSON(t, ts.Client(), http.MethodGet, ts.URL+"/api/events/summary", token, nil)
 	if counts["code"] != successCode || counts["data"].(map[string]any)["pendingCount"] != float64(0) {
