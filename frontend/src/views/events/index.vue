@@ -436,6 +436,7 @@ onMounted(loadEvents);
     <NDataTable
       :columns="columns"
       :data="rows"
+      remote
       :pagination="pagination"
       :bordered="false"
       :single-line="false"
