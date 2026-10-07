@@ -17,7 +17,7 @@ import ModulePage from '@/components/project/module-page.vue';
 
 defineOptions({ name: 'EventManagement' });
 
-type EventTab = 'pending' | 'alerts' | 'all';
+type EventTab = 'pending' | 'all';
 
 const loading = ref(false);
 const actionLoading = ref('');
@@ -96,7 +96,7 @@ async function completeNewUserProfile(row: Api.Central.EventSummary) {
 async function loadEvents() {
   loading.value = true;
   errorMessage.value = '';
-  const status = filters.tab === 'pending' ? 'pending' : filters.tab === 'alerts' ? 'alerts' : undefined;
+  const status = filters.tab === 'pending' ? 'pending' : undefined;
   const { data, error } = await fetchEvents({
     page: filters.page,
     page_size: filters.page_size,
@@ -360,7 +360,8 @@ const columns: DataTableColumns<Api.Central.EventSummary> = [
             NButton,
             {
               size: 'small',
-              quaternary: true,
+              type: 'info',
+              secondary: true,
               loading: actionLoading.value === `read:${row.id}`,
               onClick: () => readEvent(row)
             },
@@ -410,7 +411,6 @@ onMounted(loadEvents);
       <div class="border-b border-gray-200 p-16px dark:border-gray-700">
         <NTabs :value="filters.tab" type="line" @update:value="selectTab">
           <NTabPane name="pending" tab="待处理" />
-          <NTabPane name="alerts" tab="告警" />
           <NTabPane name="all" tab="全部" />
         </NTabs>
         <NSpace wrap class="mt-12px">
