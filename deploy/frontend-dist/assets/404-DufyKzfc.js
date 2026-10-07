@@ -1,1 +1,0 @@
-import{ia as e,la as t,va as n}from"./router-mI1qylyf.js";import{t as r}from"./exception-base-DCu5EM8O.js";var i=t({name:`404`,__name:`index`,setup(t){return(t,i)=>{let a=r;return n(),e(a,{type:`404`})}}});export{i as default};
