@@ -288,10 +288,14 @@ declare namespace Api {
         ownerNodeId: string | null;
         ownerNodeName: string | null;
         enabled?: boolean;
+        validFrom?: string | null;
+        validTo?: string | null;
       }>;
       exitIpSourceType: 'node' | 's5';
       exitIpOwnerNodeId: string | null;
       exitIpOwnerNodeName: string | null;
+      exitIpValidFrom?: string | null;
+      exitIpValidTo?: string | null;
       mode: 'relay' | 'landing' | 'external';
       notes: string | null;
       activeFrom: string | null;
@@ -646,10 +650,12 @@ declare namespace Api {
       family?: 4 | 6;
       provider?: string | null;
       status: 'active' | 'disabled' | 'unknown';
+      enabled?: boolean;
       monthlyCost?: number;
       currency?: string;
       allocatedUserCount: number;
       checkedAt?: string | null;
+      validFrom?: string | null;
       validTo?: string | null;
     }
 

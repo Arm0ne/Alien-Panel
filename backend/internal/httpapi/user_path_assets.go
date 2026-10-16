@@ -40,7 +40,8 @@ FROM user_inbounds ui
 JOIN inbounds i ON i.id = ui.inbound_id
 JOIN nodes n ON n.id = i.node_id
 WHERE ui.user_id = ? AND ui.is_primary = 1 AND ui.active_to IS NULL
-  AND i.deleted_at IS NULL AND i.enable = 1 AND i.kind = 'user'
+  AND i.deleted_at IS NULL AND i.kind = 'user'
+  AND (i.enable = 1 OR EXISTS (SELECT 1 FROM user_paths p WHERE p.user_id = ui.user_id AND p.active_to IS NULL))
   AND n.type = 'relay' AND n.deleted_at IS NULL`, userID).Scan(
 		&relayID, &relayName, &relayType, &relayStatus, &relayEnabled, &relayManagementURL, &relayHost, &relayLastSeen, &relayLastSync,
 	)
@@ -61,19 +62,19 @@ WHERE ui.user_id = ? AND ui.is_primary = 1 AND ui.active_to IS NULL
 		relayStatus = "unknown"
 	}
 
-	landingNodes, err := s.readLandingPathAssets()
+	landingNodes, err := s.readLandingPathAssets(userID)
 	if err != nil {
 		s.logger.Error("read landing path assets", "user_id", userID, "error", err)
 		writeFailure(w, http.StatusInternalServerError, internalErrorCode, "could not read landing path assets")
 		return
 	}
-	relayExitIPs, err := s.readSelectablePathExitIPs(relayID)
+	relayExitIPs, err := s.readSelectablePathExitIPs(relayID, userID)
 	if err != nil {
 		s.logger.Error("read relay path exit IPs", "user_id", userID, "error", err)
 		writeFailure(w, http.StatusInternalServerError, internalErrorCode, "could not read relay exit IP assets")
 		return
 	}
-	externalExitIPs, err := s.readSelectablePathExitIPs("")
+	externalExitIPs, err := s.readSelectablePathExitIPs("", userID)
 	if err != nil {
 		s.logger.Error("read external path exit IPs", "user_id", userID, "error", err)
 		writeFailure(w, http.StatusInternalServerError, internalErrorCode, "could not read external exit IP assets")
@@ -97,7 +98,7 @@ WHERE ui.user_id = ? AND ui.is_primary = 1 AND ui.active_to IS NULL
 	})
 }
 
-func (s *Server) readLandingPathAssets() ([]map[string]any, error) {
+func (s *Server) readLandingPathAssets(userID string) ([]map[string]any, error) {
 	rows, err := s.db.Query(`SELECT n.id, n.name, n.type, n.health_status, n.enabled,
 COALESCE(n.management_url, ''), COALESCE(NULLIF(n.management_url, ''), NULLIF(n.public_ip, ''), n.hostname, ''), COALESCE(n.last_seen_at, ''),
 COALESCE((SELECT COALESCE(sr.finished_at, sr.started_at) FROM sync_runs sr
@@ -140,7 +141,7 @@ FROM nodes n WHERE n.type = 'landing' AND n.deleted_at IS NULL ORDER BY n.name A
 		if err != nil {
 			return nil, err
 		}
-		exitIPs, err := s.readSelectablePathExitIPs(id)
+		exitIPs, err := s.readSelectablePathExitIPs(id, userID)
 		if err != nil {
 			return nil, err
 		}
@@ -218,11 +219,23 @@ func inboundPurpose(nodeType string) string {
 	return "business"
 }
 
-func (s *Server) readSelectablePathExitIPs(ownerNodeID string) ([]map[string]any, error) {
-	args := []any{}
-	where := `e.enabled = 1
+func (s *Server) readSelectablePathExitIPs(ownerNodeID, userID string) ([]map[string]any, error) {
+	args := []any{userID}
+	// Keep a user's current path assets visible for repair even after they
+	// expire or are disabled; the eligibility branch still governs new choices.
+	where := `(
+  (e.enabled = 1
 AND (e.valid_from IS NULL OR date(e.valid_from) <= date('now'))
-AND (e.valid_to IS NULL OR date(e.valid_to) >= date('now'))`
+AND (e.valid_to IS NULL OR date(e.valid_to) >= date('now')))
+  OR EXISTS (
+    SELECT 1 FROM user_paths current_path
+    WHERE current_path.user_id = ? AND current_path.active_to IS NULL
+      AND (current_path.exit_ip_id = e.id OR EXISTS (
+        SELECT 1 FROM user_path_exit_ips current_path_exit
+        WHERE current_path_exit.user_path_id = current_path.id AND current_path_exit.exit_ip_id = e.id
+      ))
+  )
+)`
 	if ownerNodeID == "" {
 		where += ` AND e.source_type = 's5'`
 	} else {
@@ -234,8 +247,8 @@ COALESCE(e.owner_node_id, e.landing_node_id, ''), COALESCE(owner.name, ''), COAL
 COALESCE(e.landing_node_id, ''), COALESCE(landing.name, ''), e.family, COALESCE(e.provider, ''),
 e.enabled, e.monthly_cost, e.currency, COALESCE(e.valid_from, ''), COALESCE(e.valid_to, ''), e.updated_at,
 (SELECT COUNT(DISTINCT p.user_id) FROM user_paths p JOIN users u ON u.id = p.user_id
- WHERE (p.exit_ip_id = e.id OR EXISTS (SELECT 1 FROM user_path_exit_ips upi WHERE upi.user_path_id = p.id AND upi.exit_ip_id = e.id)) AND p.active_to IS NULL AND u.deleted_at IS NULL AND u.status <> 'disabled'
- AND (u.expiry_time IS NULL OR datetime(u.expiry_time) >= datetime('now')))
+ WHERE (p.exit_ip_id = e.id OR EXISTS (SELECT 1 FROM user_path_exit_ips upi WHERE upi.user_path_id = p.id AND upi.exit_ip_id = e.id)) AND p.active_to IS NULL AND u.deleted_at IS NULL
+ AND datetime(u.created_at) <= datetime('now'))
 FROM exit_ips e
 LEFT JOIN nodes owner ON owner.id = COALESCE(e.owner_node_id, e.landing_node_id)
 LEFT JOIN nodes landing ON landing.id = e.landing_node_id
@@ -253,11 +266,15 @@ WHERE `+where+` ORDER BY e.ip ASC`, args...)
 			&family, &provider, &enabled, &monthlyCost, &currency, &validFrom, &validTo, &checkedAt, &allocated); err != nil {
 			return nil, err
 		}
+		status := "disabled"
+		if enabled == 1 {
+			status = "active"
+		}
 		items = append(items, map[string]any{
 			"id": id, "address": address, "sourceType": sourceType, "ownerNodeId": nullableString(ownerID),
 			"ownerNodeName": nullableString(ownerName), "ownerNodeType": nullableString(ownerType),
 			"landingNodeId": nullableString(landingID), "landingNodeName": nullableString(landingName),
-			"family": family, "provider": nullableString(provider), "status": "active", "monthlyCost": monthlyCost,
+			"family": family, "provider": nullableString(provider), "enabled": enabled == 1, "status": status, "monthlyCost": monthlyCost,
 			"currency": currency, "validFrom": nullableString(validFrom), "validTo": nullableString(validTo),
 			"checkedAt": nullableString(checkedAt), "allocatedUserCount": allocated,
 		})

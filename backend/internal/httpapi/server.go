@@ -2903,8 +2903,8 @@ WHERE e.enabled = 1 AND EXISTS (
   SELECT 1 FROM user_paths p
   JOIN users u ON u.id = p.user_id
   WHERE (p.exit_ip_id = e.id OR EXISTS (SELECT 1 FROM user_path_exit_ips upi WHERE upi.user_path_id = p.id AND upi.exit_ip_id = e.id))
-    AND p.active_to IS NULL AND u.deleted_at IS NULL AND u.status <> 'disabled'
-    AND (u.expiry_time IS NULL OR datetime(u.expiry_time) >= datetime('now'))
+    AND p.active_to IS NULL AND u.deleted_at IS NULL
+    AND datetime(u.created_at) <= datetime('now')
 )`},
 	} {
 		if err := s.db.QueryRow(item.query).Scan(item.target); err != nil {

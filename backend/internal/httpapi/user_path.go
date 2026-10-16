@@ -26,6 +26,8 @@ type userPathExitIPRecord struct {
 	OwnerNodeID   string
 	OwnerNodeName string
 	Enabled       bool
+	ValidFrom     string
+	ValidTo       string
 }
 
 type userPathRecord struct {
@@ -42,6 +44,9 @@ type userPathRecord struct {
 	ExitSourceType    string
 	ExitOwnerNodeID   string
 	ExitOwnerNodeName string
+	ExitIPValidFrom   string
+	ExitIPValidTo     string
+	ExitEnabled       bool
 	ExitIPs           []userPathExitIPRecord
 	Mode              string
 	Notes             string
@@ -77,6 +82,16 @@ func (s *Server) assignUserPath(w http.ResponseWriter, r *http.Request) {
 		}
 		writeFailure(w, http.StatusInternalServerError, internalErrorCode, "could not read user")
 		return
+	}
+	previousPath, _ := s.readUserPath(userID)
+	previousExitIPIDs := make(map[string]struct{})
+	if previousPath != nil {
+		if previousPath.ExitIPID != "" {
+			previousExitIPIDs[previousPath.ExitIPID] = struct{}{}
+		}
+		for _, exitIP := range previousPath.ExitIPs {
+			previousExitIPIDs[exitIP.ID] = struct{}{}
+		}
 	}
 
 	var relayNodeID, relayType string
@@ -164,11 +179,12 @@ WHERE e.id = ?`, exitIPID).Scan(&sourceType, &ownerNodeID, &enabled, &validFrom,
 			writeFailure(w, http.StatusInternalServerError, internalErrorCode, "could not read exit IP")
 			return
 		}
-		if enabled != 1 || ownerEnabled != 1 || ownerDeleted != "" {
+		_, preservingExistingPath := previousExitIPIDs[exitIPID]
+		if (enabled != 1 || ownerEnabled != 1 || ownerDeleted != "") && !preservingExistingPath {
 			writeFailure(w, http.StatusConflict, validationCode, "selected exit IP is disabled or its owner node is unavailable")
 			return
 		}
-		if !pathDateActive(validFrom, validTo, nowTime) {
+		if !pathDateActive(validFrom, validTo, nowTime) && !preservingExistingPath {
 			writeFailure(w, http.StatusConflict, validationCode, "selected exit IP is outside its validity period")
 			return
 		}
@@ -203,7 +219,7 @@ WHERE e.id = ?`, exitIPID).Scan(&sourceType, &ownerNodeID, &enabled, &validFrom,
 	}
 
 	now := time.Now().UTC().Format(time.RFC3339Nano)
-	before, _ := s.readUserPath(userID)
+	before := previousPath
 	tx, err := s.db.Begin()
 	if err != nil {
 		writeFailure(w, http.StatusInternalServerError, internalErrorCode, "could not begin user path assignment")
@@ -276,7 +292,7 @@ func (s *Server) readUserPath(userID string) (*userPathRecord, error) {
 	err := s.db.QueryRow(`SELECT p.id, p.user_id, p.relay_node_id, COALESCE(relay.name, ''),
 COALESCE(p.landing_node_id, ''), COALESCE(landing.name, ''), COALESCE(p.landing_inbound_id, ''), COALESCE(li.tag, ''),
 p.exit_ip_id, COALESCE(e.ip, ''), COALESCE(e.source_type, 'node'), COALESCE(e.owner_node_id, ''), COALESCE(owner.name, ''),
-p.mode, COALESCE(p.notes, ''), p.active_from, COALESCE(p.active_to, ''), e.enabled,
+COALESCE(e.valid_from, ''), COALESCE(e.valid_to, ''), p.mode, COALESCE(p.notes, ''), p.active_from, COALESCE(p.active_to, ''), COALESCE(e.enabled, 0),
 COALESCE(relay.deleted_at, ''), COALESCE(landing.deleted_at, '')
 FROM user_paths p
 JOIN nodes relay ON relay.id = p.relay_node_id
@@ -287,20 +303,21 @@ LEFT JOIN nodes owner ON owner.id = e.owner_node_id
 WHERE p.user_id = ? AND p.active_to IS NULL`, userID).Scan(&record.ID, &record.UserID, &record.RelayNodeID, &record.RelayNodeName,
 		&record.LandingNodeID, &record.LandingNodeName, &record.LandingInboundID, &record.LandingInboundTag,
 		&record.ExitIPID, &record.ExitIPAddress, &record.ExitSourceType, &record.ExitOwnerNodeID, &record.ExitOwnerNodeName,
-		&record.Mode, &record.Notes, &record.ActiveFrom, &record.ActiveTo, &exitEnabled, &relayDeleted, &landingDeleted)
+		&record.ExitIPValidFrom, &record.ExitIPValidTo, &record.Mode, &record.Notes, &record.ActiveFrom, &record.ActiveTo, &exitEnabled, &relayDeleted, &landingDeleted)
 	if err != nil {
 		return nil, err
 	}
-	record.ExitIPs, err = s.readUserPathExitIPs(record.ID, record.ExitIPID, record.ExitIPAddress, record.ExitSourceType, record.ExitOwnerNodeID, record.ExitOwnerNodeName, exitEnabled == 1)
+	record.ExitIPs, err = s.readUserPathExitIPs(record.ID, record.ExitIPID, record.ExitIPAddress, record.ExitSourceType, record.ExitOwnerNodeID, record.ExitOwnerNodeName, record.ExitIPValidFrom, record.ExitIPValidTo, exitEnabled == 1)
 	if err != nil {
 		return nil, err
 	}
-	record.Valid = relayDeleted == "" && landingDeleted == ""
+	record.ExitEnabled = exitEnabled == 1
+	record.Valid = relayDeleted == "" && landingDeleted == "" && pathDateActive(record.ExitIPValidFrom, record.ExitIPValidTo, time.Now().UTC())
 	if len(record.ExitIPs) == 0 {
 		record.Valid = false
 	} else {
 		for _, exitIP := range record.ExitIPs {
-			if !exitIP.Enabled {
+			if !exitIP.Enabled || !pathDateActive(exitIP.ValidFrom, exitIP.ValidTo, time.Now().UTC()) {
 				record.Valid = false
 				break
 			}
@@ -309,8 +326,9 @@ WHERE p.user_id = ? AND p.active_to IS NULL`, userID).Scan(&record.ID, &record.U
 	return &record, nil
 }
 
-func (s *Server) readUserPathExitIPs(pathID, fallbackID, fallbackAddress, fallbackSource, fallbackOwnerID, fallbackOwnerName string, fallbackEnabled bool) ([]userPathExitIPRecord, error) {
-	rows, err := s.db.Query(`SELECT e.id, COALESCE(e.ip, ''), COALESCE(e.source_type, 'node'), COALESCE(e.owner_node_id, e.landing_node_id, ''), COALESCE(owner.name, ''), e.enabled
+func (s *Server) readUserPathExitIPs(pathID, fallbackID, fallbackAddress, fallbackSource, fallbackOwnerID, fallbackOwnerName, fallbackValidFrom, fallbackValidTo string, fallbackEnabled bool) ([]userPathExitIPRecord, error) {
+	rows, err := s.db.Query(`SELECT e.id, COALESCE(e.ip, ''), COALESCE(e.source_type, 'node'), COALESCE(e.owner_node_id, e.landing_node_id, ''), COALESCE(owner.name, ''),
+COALESCE(e.valid_from, ''), COALESCE(e.valid_to, ''), e.enabled
 FROM user_path_exit_ips upi JOIN exit_ips e ON e.id = upi.exit_ip_id
 LEFT JOIN nodes owner ON owner.id = COALESCE(e.owner_node_id, e.landing_node_id)
 WHERE upi.user_path_id = ? ORDER BY upi.position ASC, upi.exit_ip_id ASC`, pathID)
@@ -322,7 +340,7 @@ WHERE upi.user_path_id = ? ORDER BY upi.position ASC, upi.exit_ip_id ASC`, pathI
 	for rows.Next() {
 		var item userPathExitIPRecord
 		var enabled int
-		if err := rows.Scan(&item.ID, &item.Address, &item.SourceType, &item.OwnerNodeID, &item.OwnerNodeName, &enabled); err != nil {
+		if err := rows.Scan(&item.ID, &item.Address, &item.SourceType, &item.OwnerNodeID, &item.OwnerNodeName, &item.ValidFrom, &item.ValidTo, &enabled); err != nil {
 			return nil, err
 		}
 		item.Enabled = enabled == 1
@@ -332,7 +350,7 @@ WHERE upi.user_path_id = ? ORDER BY upi.position ASC, upi.exit_ip_id ASC`, pathI
 		return nil, err
 	}
 	if len(items) == 0 && fallbackID != "" {
-		items = append(items, userPathExitIPRecord{ID: fallbackID, Address: fallbackAddress, SourceType: fallbackSource, OwnerNodeID: fallbackOwnerID, OwnerNodeName: fallbackOwnerName, Enabled: fallbackEnabled})
+		items = append(items, userPathExitIPRecord{ID: fallbackID, Address: fallbackAddress, SourceType: fallbackSource, OwnerNodeID: fallbackOwnerID, OwnerNodeName: fallbackOwnerName, ValidFrom: fallbackValidFrom, ValidTo: fallbackValidTo, Enabled: fallbackEnabled})
 	}
 	return items, nil
 }
@@ -345,11 +363,11 @@ func userPathData(record *userPathRecord) map[string]any {
 	exitItems := make([]map[string]any, 0, len(record.ExitIPs))
 	for _, exitIP := range record.ExitIPs {
 		exitIDs = append(exitIDs, exitIP.ID)
-		exitItems = append(exitItems, map[string]any{"id": exitIP.ID, "address": exitIP.Address, "sourceType": exitIP.SourceType, "ownerNodeId": nullableString(exitIP.OwnerNodeID), "ownerNodeName": nullableString(exitIP.OwnerNodeName), "enabled": exitIP.Enabled})
+		exitItems = append(exitItems, map[string]any{"id": exitIP.ID, "address": exitIP.Address, "sourceType": exitIP.SourceType, "ownerNodeId": nullableString(exitIP.OwnerNodeID), "ownerNodeName": nullableString(exitIP.OwnerNodeName), "enabled": exitIP.Enabled, "validFrom": nullableString(exitIP.ValidFrom), "validTo": nullableString(exitIP.ValidTo)})
 	}
 	if len(exitIDs) == 0 && record.ExitIPID != "" {
 		exitIDs = append(exitIDs, record.ExitIPID)
-		exitItems = append(exitItems, map[string]any{"id": record.ExitIPID, "address": record.ExitIPAddress, "sourceType": record.ExitSourceType, "ownerNodeId": nullableString(record.ExitOwnerNodeID), "ownerNodeName": nullableString(record.ExitOwnerNodeName), "enabled": true})
+		exitItems = append(exitItems, map[string]any{"id": record.ExitIPID, "address": record.ExitIPAddress, "sourceType": record.ExitSourceType, "ownerNodeId": nullableString(record.ExitOwnerNodeID), "ownerNodeName": nullableString(record.ExitOwnerNodeName), "enabled": record.ExitEnabled, "validFrom": nullableString(record.ExitIPValidFrom), "validTo": nullableString(record.ExitIPValidTo)})
 	}
 	return map[string]any{
 		"id": record.ID, "relayNodeId": record.RelayNodeID, "relayNodeName": nullableString(record.RelayNodeName),
@@ -357,6 +375,7 @@ func userPathData(record *userPathRecord) map[string]any {
 		"landingInboundId": nullableString(record.LandingInboundID), "landingInboundTag": nullableString(record.LandingInboundTag),
 		"exitIpId": record.ExitIPID, "exitIpAddress": nullableString(record.ExitIPAddress), "exitIpSourceType": record.ExitSourceType,
 		"exitIpOwnerNodeId": nullableString(record.ExitOwnerNodeID), "exitIpOwnerNodeName": nullableString(record.ExitOwnerNodeName),
+		"exitIpValidFrom": nullableString(record.ExitIPValidFrom), "exitIpValidTo": nullableString(record.ExitIPValidTo),
 		"exitIpIds": exitIDs, "exitIps": exitItems,
 		"mode": record.Mode, "notes": nullableString(record.Notes), "activeFrom": nullableString(record.ActiveFrom),
 		"activeTo": nullableString(record.ActiveTo), "valid": record.Valid,
@@ -423,7 +442,7 @@ func pathDateActive(fromValue, toValue string, now time.Time) bool {
 func (s *Server) userPathHistory(userID string) ([]map[string]any, error) {
 	rows, err := s.db.Query(`SELECT p.id, p.user_id, p.relay_node_id, COALESCE(relay.name, ''), COALESCE(p.landing_node_id, ''), COALESCE(landing.name, ''),
 	COALESCE(p.landing_inbound_id, ''), COALESCE(li.tag, ''), COALESCE(p.exit_ip_id, ''), COALESCE(e.ip, ''), COALESCE(e.source_type, 'node'), COALESCE(owner.id, ''), COALESCE(owner.name, ''),
-p.mode, COALESCE(p.notes, ''), p.active_from, COALESCE(p.active_to, '')
+	COALESCE(e.valid_from, ''), COALESCE(e.valid_to, ''), p.mode, COALESCE(p.notes, ''), p.active_from, COALESCE(p.active_to, ''), COALESCE(e.enabled, 0)
 FROM user_paths p JOIN nodes relay ON relay.id = p.relay_node_id
 LEFT JOIN nodes landing ON landing.id = p.landing_node_id LEFT JOIN inbounds li ON li.id = p.landing_inbound_id
 LEFT JOIN exit_ips e ON e.id = p.exit_ip_id LEFT JOIN nodes owner ON owner.id = e.owner_node_id
@@ -434,11 +453,13 @@ WHERE p.user_id = ? ORDER BY p.active_from DESC`, userID)
 	items := make([]*userPathRecord, 0)
 	for rows.Next() {
 		record := &userPathRecord{}
+		var exitEnabled int
 		if err := rows.Scan(&record.ID, &record.UserID, &record.RelayNodeID, &record.RelayNodeName, &record.LandingNodeID, &record.LandingNodeName,
 			&record.LandingInboundID, &record.LandingInboundTag, &record.ExitIPID, &record.ExitIPAddress, &record.ExitSourceType, &record.ExitOwnerNodeID, &record.ExitOwnerNodeName,
-			&record.Mode, &record.Notes, &record.ActiveFrom, &record.ActiveTo); err != nil {
+			&record.ExitIPValidFrom, &record.ExitIPValidTo, &record.Mode, &record.Notes, &record.ActiveFrom, &record.ActiveTo, &exitEnabled); err != nil {
 			return nil, err
 		}
+		record.ExitEnabled = exitEnabled == 1
 		items = append(items, record)
 	}
 	if err := rows.Err(); err != nil {
@@ -450,7 +471,7 @@ WHERE p.user_id = ? ORDER BY p.active_from DESC`, userID)
 	}
 	result := make([]map[string]any, 0, len(items))
 	for _, record := range items {
-		record.ExitIPs, err = s.readUserPathExitIPs(record.ID, record.ExitIPID, record.ExitIPAddress, record.ExitSourceType, record.ExitOwnerNodeID, record.ExitOwnerNodeName, true)
+		record.ExitIPs, err = s.readUserPathExitIPs(record.ID, record.ExitIPID, record.ExitIPAddress, record.ExitSourceType, record.ExitOwnerNodeID, record.ExitOwnerNodeName, record.ExitIPValidFrom, record.ExitIPValidTo, record.ExitEnabled)
 		if err != nil {
 			return nil, err
 		}

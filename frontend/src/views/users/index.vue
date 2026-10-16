@@ -167,11 +167,63 @@ const pathExitIpOptions = computed(() => {
   } else {
     assets = pathAssets.value?.externalExitIps || [];
   }
-  return assets.map(item => ({
-    label: `${item.address} · ${item.sourceType === 's5' ? '独立 S5' : item.ownerNodeName || '节点出口'}${item.provider ? ` · ${item.provider}` : ''}`,
-    value: item.id
+  const options = assets.map(item => ({
+    label: pathExitIpOptionLabel(item),
+    value: item.id,
+    disabled: pathExitIpIsUnavailable(item)
   }));
+  const currentPath = detail.value?.path;
+  const samePathContext =
+    currentPath?.mode === pathMode.value &&
+    (pathMode.value !== 'landing' || currentPath.landingNodeId === pathLandingNodeID.value);
+  if (samePathContext) {
+    const optionIDs = new Set(options.map(option => option.value));
+    for (const item of currentPath?.exitIps || []) {
+      if (optionIDs.has(item.id)) continue;
+      options.unshift({
+        label: pathExitIpOptionLabel(item),
+        value: item.id,
+        disabled: pathExitIpIsUnavailable(item)
+      });
+      optionIDs.add(item.id);
+    }
+  }
+  return options;
 });
+
+function exitIpExpired(value?: string | null) {
+  if (!value) return false;
+  const expiry = value.slice(0, 10);
+  const now = new Date();
+  const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+  return expiry < today;
+}
+
+function pathExitIpIsUnavailable(item: { enabled?: boolean; validTo?: string | null }) {
+  return item.enabled === false || exitIpExpired(item.validTo);
+}
+
+function pathExitIpStatusLabel(item: { enabled?: boolean; validTo?: string | null }) {
+  if (item.enabled === false) return '已停用';
+  if (exitIpExpired(item.validTo)) return '已到期';
+  return '';
+}
+
+function pathExitIpOptionLabel(item: {
+  id: string;
+  address: string;
+  sourceType: 'node' | 's5';
+  ownerNodeName?: string | null;
+  provider?: string | null;
+  enabled?: boolean;
+  validTo?: string | null;
+}) {
+  const address = item.address || item.id;
+  const source = item.sourceType === 's5' ? '独立 S5' : item.ownerNodeName || '节点出口';
+  const provider = item.provider ? ` · ${item.provider}` : '';
+  const status = pathExitIpStatusLabel(item);
+  return `${address} · ${source}${provider}${status ? ` · ${status}` : ''}`;
+}
 
 function formatDate(value?: string | null) {
   if (!value) return '--';

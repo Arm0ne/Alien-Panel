@@ -1839,9 +1839,13 @@ components:
               ownerNodeId: { type: [string, 'null'] }
               ownerNodeName: { type: [string, 'null'] }
               enabled: { type: boolean }
+              validFrom: { type: [string, 'null'], format: date }
+              validTo: { type: [string, 'null'], format: date }
         exitIpSourceType: { type: string, enum: [node, s5] }
         exitIpOwnerNodeId: { type: [string, 'null'] }
         exitIpOwnerNodeName: { type: [string, 'null'] }
+        exitIpValidFrom: { type: [string, 'null'], format: date }
+        exitIpValidTo: { type: [string, 'null'], format: date }
         mode: { type: string, enum: [relay, landing, external] }
         notes: { type: [string, 'null'] }
         activeFrom: { type: [string, 'null'], format: date-time }

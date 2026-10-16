@@ -11,7 +11,7 @@ import (
 func exitIPAllocatedUserPredicate(exitIPReference string) string {
 	return fmt.Sprintf(`(p.exit_ip_id = %s OR EXISTS (
   SELECT 1 FROM user_path_exit_ips upi WHERE upi.user_path_id = p.id AND upi.exit_ip_id = %s
-)) AND p.active_to IS NULL AND u.deleted_at IS NULL AND u.status <> 'disabled'
+)) AND p.active_to IS NULL AND u.deleted_at IS NULL
 AND datetime(u.created_at) <= datetime('now')
 `, exitIPReference, exitIPReference)
 }

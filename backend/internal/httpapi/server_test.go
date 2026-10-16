@@ -681,10 +681,42 @@ func TestUserPathAssignmentLifecycle(t *testing.T) {
 	if s5["code"] != successCode || s5["data"].(map[string]any)["path"].(map[string]any)["mode"] != "external" {
 		t.Fatalf("S5 path response = %#v", s5)
 	}
+	expiredExitDate := now.Add(-24 * time.Hour).Format("2006-01-02")
+	if _, err := database.Exec(`UPDATE exit_ips SET enabled = 0, valid_to = ? WHERE id = 'path-s5-ip'`, expiredExitDate); err != nil {
+		t.Fatalf("expire S5 exit IP: %v", err)
+	}
+	staleDetail := doJSON(t, ts.Client(), http.MethodGet, ts.URL+"/api/users/path-user", token, nil)
+	if staleDetail["code"] != successCode {
+		t.Fatalf("stale path detail response = %#v", staleDetail)
+	}
+	stalePath := staleDetail["data"].(map[string]any)["path"].(map[string]any)
+	staleExit := stalePath["exitIps"].([]any)[0].(map[string]any)
+	if stalePath["valid"] != false || staleExit["address"] != "198.51.100.74" || staleExit["enabled"] != false || staleExit["validTo"] != expiredExitDate {
+		t.Fatalf("stale exit IP detail = %#v", staleExit)
+	}
+	staleAssets := doJSON(t, ts.Client(), http.MethodGet, ts.URL+"/api/users/path-user/path-assets", token, nil)
+	if staleAssets["code"] != successCode {
+		t.Fatalf("stale path assets response = %#v", staleAssets)
+	}
+	var staleAsset map[string]any
+	for _, raw := range staleAssets["data"].(map[string]any)["externalExitIps"].([]any) {
+		item := raw.(map[string]any)
+		if item["id"] == "path-s5-ip" {
+			staleAsset = item
+			break
+		}
+	}
+	if staleAsset == nil || staleAsset["address"] != "198.51.100.74" || staleAsset["status"] != "disabled" || staleAsset["validTo"] != expiredExitDate {
+		t.Fatalf("stale exit IP asset = %#v", staleAssets)
+	}
+	preserve := doJSON(t, ts.Client(), http.MethodPut, ts.URL+"/api/users/path-user/path", token, map[string]any{"exitIpId": "path-s5-ip", "notes": "保留失效出口"})
+	if preserve["code"] != successCode {
+		t.Fatalf("preserve stale exit IP path response = %#v", preserve)
+	}
 
 	cleared := doJSON(t, ts.Client(), http.MethodDelete, ts.URL+"/api/users/path-user/path", token, nil)
 	clearedData := cleared["data"].(map[string]any)
-	if cleared["code"] != successCode || clearedData["path"] != nil || len(clearedData["pathHistory"].([]any)) != 4 {
+	if cleared["code"] != successCode || clearedData["path"] != nil || len(clearedData["pathHistory"].([]any)) != 5 {
 		t.Fatalf("cleared path response = %#v", cleared)
 	}
 }
@@ -1760,6 +1792,7 @@ func TestAllocationCountsOnlyEffectiveUsersAndUsableBindings(t *testing.T) {
 		{`INSERT INTO user_paths (id, user_id, relay_node_id, landing_node_id, exit_ip_id, mode, active_from, created_at, updated_at) VALUES ('allocation-path-valid', 'allocation-valid', 'allocation-relay', 'allocation-landing', 'allocation-exit', 'landing', ?, ?, ?)`, []any{nowText, nowText, nowText}},
 		{`INSERT INTO user_paths (id, user_id, relay_node_id, landing_node_id, exit_ip_id, mode, active_from, created_at, updated_at) VALUES ('allocation-path-unlimited', 'allocation-unlimited', 'allocation-relay', 'allocation-landing', 'allocation-exit', 'landing', ?, ?, ?)`, []any{nowText, nowText, nowText}},
 		{`INSERT INTO user_paths (id, user_id, relay_node_id, landing_node_id, exit_ip_id, mode, active_from, created_at, updated_at) VALUES ('allocation-path-expired', 'allocation-expired', 'allocation-relay', 'allocation-landing', 'allocation-exit', 'landing', ?, ?, ?)`, []any{nowText, nowText, nowText}},
+		{`INSERT INTO user_paths (id, user_id, relay_node_id, landing_node_id, exit_ip_id, mode, active_from, created_at, updated_at) VALUES ('allocation-path-disabled', 'allocation-disabled', 'allocation-relay', 'allocation-landing', 'allocation-exit', 'landing', ?, ?, ?)`, []any{nowText, nowText, nowText}},
 	}
 	for _, statement := range statements {
 		if _, err := database.Exec(statement.query, statement.args...); err != nil {
@@ -1779,8 +1812,8 @@ func TestAllocationCountsOnlyEffectiveUsersAndUsableBindings(t *testing.T) {
 	}
 
 	exitDetail := doJSON(t, ts.Client(), http.MethodGet, ts.URL+"/api/exit-ips/allocation-exit", token, nil)
-	if exitDetail["code"] != successCode || exitDetail["data"].(map[string]any)["allocatedUserCount"] != float64(3) {
-		t.Fatalf("allocation exit IP detail = %#v, want users=3 including expired user", exitDetail)
+	if exitDetail["code"] != successCode || exitDetail["data"].(map[string]any)["allocatedUserCount"] != float64(4) {
+		t.Fatalf("allocation exit IP detail = %#v, want users=4 including expired and disabled users", exitDetail)
 	}
 	exitList := doJSON(t, ts.Client(), http.MethodGet, ts.URL+"/api/exit-ips?page=1&page_size=50", token, nil)
 	exitItems := exitList["data"].(map[string]any)["items"].([]any)
@@ -1791,27 +1824,32 @@ func TestAllocationCountsOnlyEffectiveUsersAndUsableBindings(t *testing.T) {
 			break
 		}
 	}
-	if exitList["code"] != successCode || listedAllocation != float64(3) {
-		t.Fatalf("exit IP list allocation = %#v, want users=3 including expired user", exitList)
+	if exitList["code"] != successCode || listedAllocation != float64(4) {
+		t.Fatalf("exit IP list allocation = %#v, want users=4 including expired and disabled users", exitList)
 	}
 	firstUsersPage := doJSON(t, ts.Client(), http.MethodGet, ts.URL+"/api/exit-ips/allocation-exit/users?page=1&page_size=1", token, nil)
 	firstUsersData := firstUsersPage["data"].(map[string]any)
 	firstUsers := firstUsersData["items"].([]any)
-	if firstUsersPage["code"] != successCode || firstUsersData["total"] != float64(3) || len(firstUsers) != 1 {
-		t.Fatalf("first exit IP users page = %#v, want one of three users", firstUsersPage)
+	if firstUsersPage["code"] != successCode || firstUsersData["total"] != float64(4) || len(firstUsers) != 1 {
+		t.Fatalf("first exit IP users page = %#v, want one of four users", firstUsersPage)
 	}
 	if firstUsers[0].(map[string]any)["name"] != "过期用户" || firstUsers[0].(map[string]any)["status"] != "expired" {
 		t.Fatalf("first exit IP user = %#v, want expired user", firstUsers[0])
 	}
 	secondUsersPage := doJSON(t, ts.Client(), http.MethodGet, ts.URL+"/api/exit-ips/allocation-exit/users?page=2&page_size=1", token, nil)
 	secondUsers := secondUsersPage["data"].(map[string]any)["items"].([]any)
-	if secondUsersPage["code"] != successCode || len(secondUsers) != 1 || secondUsers[0].(map[string]any)["name"] != "有效用户" {
-		t.Fatalf("second exit IP users page = %#v, want 有效用户", secondUsersPage)
+	if secondUsersPage["code"] != successCode || len(secondUsers) != 1 || secondUsers[0].(map[string]any)["name"] != "停用用户" || secondUsers[0].(map[string]any)["status"] != "disabled" {
+		t.Fatalf("second exit IP users page = %#v, want 停用用户", secondUsersPage)
 	}
 	thirdUsersPage := doJSON(t, ts.Client(), http.MethodGet, ts.URL+"/api/exit-ips/allocation-exit/users?page=3&page_size=1", token, nil)
 	thirdUsers := thirdUsersPage["data"].(map[string]any)["items"].([]any)
-	if thirdUsersPage["code"] != successCode || len(thirdUsers) != 1 || thirdUsers[0].(map[string]any)["name"] != "长期用户" {
-		t.Fatalf("third exit IP users page = %#v, want 长期用户", thirdUsersPage)
+	if thirdUsersPage["code"] != successCode || len(thirdUsers) != 1 || thirdUsers[0].(map[string]any)["name"] != "有效用户" {
+		t.Fatalf("third exit IP users page = %#v, want 有效用户", thirdUsersPage)
+	}
+	fourthUsersPage := doJSON(t, ts.Client(), http.MethodGet, ts.URL+"/api/exit-ips/allocation-exit/users?page=4&page_size=1", token, nil)
+	fourthUsers := fourthUsersPage["data"].(map[string]any)["items"].([]any)
+	if fourthUsersPage["code"] != successCode || len(fourthUsers) != 1 || fourthUsers[0].(map[string]any)["name"] != "长期用户" {
+		t.Fatalf("fourth exit IP users page = %#v, want 长期用户", fourthUsersPage)
 	}
 	disabledExit := doJSON(t, ts.Client(), http.MethodGet, ts.URL+"/api/exit-ips/allocation-disabled-exit", token, nil)
 	if disabledExit["code"] != successCode || disabledExit["data"].(map[string]any)["allocatedUserCount"] != float64(0) {
