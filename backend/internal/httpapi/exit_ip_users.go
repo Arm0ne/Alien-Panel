@@ -13,7 +13,7 @@ func exitIPAllocatedUserPredicate(exitIPReference string) string {
   SELECT 1 FROM user_path_exit_ips upi WHERE upi.user_path_id = p.id AND upi.exit_ip_id = %s
 )) AND p.active_to IS NULL AND u.deleted_at IS NULL AND u.status <> 'disabled'
 AND datetime(u.created_at) <= datetime('now')
-AND (u.expiry_time IS NULL OR datetime(u.expiry_time) >= datetime('now'))`, exitIPReference, exitIPReference)
+`, exitIPReference, exitIPReference)
 }
 
 func (s *Server) exitIPUsers(w http.ResponseWriter, r *http.Request) {

@@ -429,7 +429,7 @@ const columns: DataTableColumns<Api.Central.ExitIpSummary> = [
   { title: '失效日期', key: 'validTo', width: 120, render: row => formatDateOnly(row.validTo) },
   { title: '月成本', key: 'monthlyCost', minWidth: 110, render: row => formatMoney(row.monthlyCost, row.currency) },
   {
-    title: '配置归属用户数',
+    title: '归属用户数',
     key: 'allocatedUserCount',
     width: 150,
     render: row =>
@@ -768,7 +768,7 @@ onMounted(() => {
             <NButton size="small" class="ml-8px" @click="loadAllocatedUsers">重试</NButton>
           </NAlert>
           <div class="text-13px text-gray-500 dark:text-gray-400">
-            当前符合归属统计的有效用户：{{ allocatedUsersTotal }} 人
+            当前归属用户：{{ allocatedUsersTotal }} 人（包含已到期用户）
           </div>
           <NDataTable
             v-if="!compactAllocatedUsers"
