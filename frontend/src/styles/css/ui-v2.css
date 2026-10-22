@@ -1,0 +1,124 @@
+/* ============================================================
+   Alien Panel · UI v2 全局样式
+   与 design-preview/assets/kit-v2.css 对齐：
+   深色实心面板、发丝描边、蓝 #4C6FFF 主色、次级文字最低 12px
+   ============================================================ */
+
+:root {
+  --ui2-bg: #0a0b0d;
+  --ui2-panel: #0f1013;
+  --ui2-card: #141519;
+  --ui2-card-hover: #191b20;
+  --ui2-line: #23262c;
+  --ui2-line-soft: #1c1f24;
+  --ui2-text-1: #f2f3f5;
+  --ui2-text-2: #bcc2cc;
+  --ui2-text-3: #9aa1ad;
+  --ui2-text-4: #868d99;
+  --ui2-brand: #4c6fff;
+  --ui2-radius: 14px;
+}
+
+html,
+body {
+  background: var(--ui2-bg);
+  color: var(--ui2-text-1);
+}
+
+body {
+  font-size: 13px;
+  line-height: 1.65;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/* 数字等宽，表格对齐更稳 */
+.n-data-table .n-data-table-td,
+.n-statistic-value,
+.n-number-animation {
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---------- 卡片：实心 + 发丝描边，去掉默认投影 ---------- */
+.n-card {
+  box-shadow: none !important;
+}
+
+.n-card > .n-card-header {
+  border-bottom: 1px solid var(--ui2-line-soft);
+  padding: 15px 18px;
+}
+
+.n-card > .n-card-header .n-card-header__main {
+  font-size: 14px;
+  font-weight: 600;
+}
+
+/* ---------- 数据表格：表头小字提亮、行高与 hover ---------- */
+.n-data-table .n-data-table-th {
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  color: var(--ui2-text-3);
+}
+
+.n-data-table .n-data-table-td {
+  font-size: 13px;
+  color: var(--ui2-text-2);
+}
+
+.n-data-table .n-data-table-tr:hover .n-data-table-td {
+  background-color: var(--ui2-card-hover) !important;
+}
+
+/* 表格内的次要信息（组件里用 .text-xs / .text-gray-500 时兜底提亮） */
+.n-data-table .n-data-table-td .text-xs,
+.n-data-table .n-data-table-td .text-12px {
+  font-size: 12px !important;
+  color: var(--ui2-text-3) !important;
+}
+
+/* ---------- 滚动条 ---------- */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(163, 177, 255, 0.16);
+  border: 3px solid transparent;
+  border-radius: 99px;
+  background-clip: padding-box;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(163, 177, 255, 0.28);
+  background-clip: padding-box;
+}
+
+/* ---------- 弹层统一圆角与描边 ---------- */
+.n-popover,
+.n-dropdown-menu,
+.n-select-menu {
+  border: 1px solid var(--ui2-line);
+}
+
+.n-drawer,
+.n-modal {
+  border: 1px solid var(--ui2-line);
+}
+
+/* ---------- 页面背景：纯色，无渐变 ---------- */
+.bg-layout {
+  background: var(--ui2-bg) !important;
+}
+
+/* 让全局小字不再小于 12px（设计规范下限） */
+.text-10px,
+.text-11px {
+  font-size: 12px !important;
+}
