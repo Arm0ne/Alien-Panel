@@ -86,15 +86,15 @@ async function handleSubmit() {
 
 /* 字段间距与标签样式，对齐视觉稿 */
 .pwd-login :deep(.n-form-item) {
-  margin-bottom: 20px;
+  margin-bottom: 18px;
 }
 
 .pwd-login :deep(.n-form-item:last-of-type) {
-  margin-bottom: 28px;
+  margin-bottom: 26px;
 }
 
 .pwd-login :deep(.n-form-item-label) {
-  margin-bottom: 9px;
+  margin-bottom: 8px;
   font-size: 13px;
   font-weight: 500;
   letter-spacing: 0.01em;

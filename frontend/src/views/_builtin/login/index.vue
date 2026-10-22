@@ -63,6 +63,7 @@ const activeModule = computed(() => moduleMap[props.module || 'pwd-login']);
                   <path d="M14 3.4 L25.4 24.6 H19.4 L14 13.6 L8.6 24.6 H2.6 Z" fill="currentColor" />
                 </svg>
               </span>
+              <p class="form-sub">中央管理面板</p>
             </header>
 
             <Transition name="fade-slide" mode="out-in" appear>
@@ -275,7 +276,7 @@ const activeModule = computed(() => moduleMap[props.module || 'pwd-login']);
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 48px 52px;
+  padding: 52px 56px;
   background:
     radial-gradient(140% 68% at 28% -10%, rgba(94, 87, 220, 0.12) 0%, transparent 62%),
     linear-gradient(180deg, #17182a 0%, #131525 58%, #0f111d 100%);
@@ -283,13 +284,15 @@ const activeModule = computed(() => moduleMap[props.module || 'pwd-login']);
 
 .form-inner {
   width: 100%;
-  max-width: 340px;
+  max-width: 348px;
 }
 
 .form-head {
   display: flex;
-  justify-content: center;
-  margin-bottom: 34px;
+  flex-direction: column;
+  align-items: center;
+  gap: 13px;
+  margin-bottom: 36px;
 }
 
 .form-mark {
@@ -299,12 +302,23 @@ const activeModule = computed(() => moduleMap[props.module || 'pwd-login']);
 
 .form-mark svg {
   display: block;
-  width: 44px;
-  height: 44px;
+  width: 40px;
+  height: 40px;
+}
+
+.form-sub {
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.5;
+  font-weight: 500;
+  letter-spacing: 0.16em;
+  /* letter-spacing 会在末尾多出一份空隙，左侧补等量缩进让视觉真正居中 */
+  text-indent: 0.16em;
+  color: #8b90a6;
 }
 
 .form-foot {
-  margin: 30px 0 0;
+  margin: 26px 0 0;
   font-size: 11px;
   letter-spacing: 0.05em;
   color: #50556f;
@@ -377,12 +391,13 @@ const activeModule = computed(() => moduleMap[props.module || 'pwd-login']);
   }
 
   .form-head {
-    margin-bottom: 28px;
+    gap: 12px;
+    margin-bottom: 30px;
   }
 
   .form-mark svg {
-    width: 40px;
-    height: 40px;
+    width: 38px;
+    height: 38px;
   }
 
   .form-foot {
@@ -400,8 +415,8 @@ const activeModule = computed(() => moduleMap[props.module || 'pwd-login']);
   }
 
   .form-mark svg {
-    width: 36px;
-    height: 36px;
+    width: 34px;
+    height: 34px;
   }
 }
 
