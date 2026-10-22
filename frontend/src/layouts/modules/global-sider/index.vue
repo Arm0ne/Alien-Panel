@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from 'vue';
 import { useRoute } from 'vue-router';
-import { fetchEventSummary } from '@/service/api';
+import { fetchEventSummary, fetchNodes } from '@/service/api';
 import { useAppStore } from '@/store/modules/app';
 
 defineOptions({
@@ -20,6 +20,9 @@ interface NavItem {
 }
 
 const pendingEventCount = ref(0);
+const nodesOnline = ref(0);
+const nodesTotal = ref(0);
+const lastSyncAt = ref<string | null>(null);
 
 const groups = computed<Array<{ title: string; items: NavItem[] }>>(() => [
   {
@@ -53,29 +56,56 @@ const groups = computed<Array<{ title: string; items: NavItem[] }>>(() => [
   }
 ]);
 
+const lastSyncText = computed(() => {
+  if (!lastSyncAt.value) return '--';
+  const timestamp = new Date(lastSyncAt.value).getTime();
+  if (!Number.isFinite(timestamp)) return '--';
+  const minutes = Math.max(0, Math.round((Date.now() - timestamp) / 60_000));
+  if (minutes < 1) return '刚刚';
+  if (minutes < 60) return `${minutes} 分钟前`;
+  const hours = Math.round(minutes / 60);
+  if (hours < 24) return `${hours} 小时前`;
+  return new Date(lastSyncAt.value).toLocaleString('zh-CN', { hour12: false });
+});
+
 function isActive(path: string) {
   if (path === '/dashboard') return route.path === '/' || route.path.startsWith('/dashboard');
   if (path === '/nodes') return route.path.startsWith('/nodes');
   return route.path === path || route.path.startsWith(`${path}/`);
 }
 
-async function loadEventCount() {
-  const { data } = await fetchEventSummary();
-  if (data) {
-    pendingEventCount.value = data.pendingCount;
+async function loadSiderStatus() {
+  const [{ data: eventData }, { data: nodeData }] = await Promise.all([
+    fetchEventSummary(),
+    fetchNodes({ page: 1, page_size: 100 })
+  ]);
+
+  if (eventData) {
+    pendingEventCount.value = eventData.pendingCount;
+  }
+
+  if (nodeData) {
+    nodesOnline.value = nodeData.stats?.online ?? 0;
+    nodesTotal.value = nodeData.stats?.total ?? 0;
+    const times = (nodeData.items || [])
+      .map(item => item.lastSyncAt)
+      .filter((value): value is string => Boolean(value))
+      .map(value => new Date(value).getTime())
+      .filter(value => Number.isFinite(value));
+    lastSyncAt.value = times.length ? new Date(Math.max(...times)).toISOString() : null;
   }
 }
 
 let pollTimer: ReturnType<typeof setInterval> | undefined;
 
 onMounted(() => {
-  loadEventCount();
-  window.addEventListener('xpanel-events-updated', loadEventCount);
-  pollTimer = setInterval(loadEventCount, 60_000);
+  loadSiderStatus();
+  window.addEventListener('xpanel-events-updated', loadSiderStatus);
+  pollTimer = setInterval(loadSiderStatus, 60_000);
 });
 
 onUnmounted(() => {
-  window.removeEventListener('xpanel-events-updated', loadEventCount);
+  window.removeEventListener('xpanel-events-updated', loadSiderStatus);
   if (pollTimer) clearInterval(pollTimer);
 });
 </script>
@@ -117,6 +147,25 @@ onUnmounted(() => {
         </RouterLink>
       </div>
     </nav>
+
+    <div v-show="!appStore.siderCollapse" class="v2-sider-status">
+      <div class="v2-sider-status-top">
+        <span>系统状态</span>
+        <i class="v2-status-dot" :class="{ 'is-off': nodesTotal > 0 && nodesOnline < nodesTotal }"></i>
+      </div>
+      <div class="v2-sider-status-row">
+        <span>在线节点</span>
+        <b>{{ nodesOnline }} / {{ nodesTotal }}</b>
+      </div>
+      <div class="v2-sider-status-row">
+        <span>最近同步</span>
+        <b>{{ lastSyncText }}</b>
+      </div>
+      <div class="v2-sider-status-row">
+        <span>待处理事件</span>
+        <b :class="{ 'is-danger': pendingEventCount > 0 }">{{ pendingEventCount }}</b>
+      </div>
+    </div>
   </div>
 </template>
 

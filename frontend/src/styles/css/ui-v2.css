@@ -278,6 +278,57 @@ body {
   color: #b0b6c1;
 }
 
+/* 侧栏底部系统状态 */
+.v2-sider-status {
+  margin: 0 10px 10px;
+  padding: 11px 12px;
+  border: 1px solid var(--ui2-line-soft);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.022);
+}
+
+.v2-sider-status-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+  font-size: 10.5px;
+  letter-spacing: 0.12em;
+  color: #7f8792;
+}
+
+.v2-status-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #2ed47a;
+  box-shadow: 0 0 8px rgba(46, 212, 122, 0.6);
+}
+
+.v2-status-dot.is-off {
+  background: #f5b93d;
+  box-shadow: 0 0 8px rgba(245, 185, 61, 0.6);
+}
+
+.v2-sider-status-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 2px 0;
+  font-size: 11.5px;
+  color: #9aa1ad;
+}
+
+.v2-sider-status-row b {
+  font-weight: 600;
+  color: #e6e8ec;
+  font-variant-numeric: tabular-nums;
+}
+
+.v2-sider-status-row b.is-danger {
+  color: #ff9ba2;
+}
+
 /* 折叠态 */
 .v2-nav-item.is-collapsed {
   justify-content: center;
