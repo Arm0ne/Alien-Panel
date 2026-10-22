@@ -158,6 +158,9 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/events/{id}/reset-user", s.requireAuth(http.HandlerFunc(s.resetUserFromReplacementEvent)))
 	mux.Handle("POST /api/events/{id}/resolve", s.requireAuth(http.HandlerFunc(s.resolveEvent)))
 	mux.Handle("GET /api/events", s.requireAuth(http.HandlerFunc(s.events)))
+	mux.Handle("GET /api/events/stats", s.requireAuth(http.HandlerFunc(s.eventsStats)))
+	mux.Handle("GET /api/costs/trend", s.requireAuth(http.HandlerFunc(s.costsTrend)))
+	mux.Handle("GET /api/renewal-candidates", s.requireAuth(http.HandlerFunc(s.renewalCandidates)))
 	mux.Handle("POST /api/inbounds/{id}/reset-user", s.requireAuth(http.HandlerFunc(s.resetInboundUser)))
 	mux.Handle("GET /api/system/backups/download", s.requireAuth(http.HandlerFunc(s.downloadBackup)))
 	mux.Handle("POST /api/system/restore", s.requireAuth(http.HandlerFunc(s.restoreBackup)))
@@ -3169,6 +3172,18 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 		where = append(where, "e.event_category = ?")
 		args = append(args, query.category)
 	}
+	if query.eventType != "" {
+		where = append(where, "e.event_type = ?")
+		args = append(args, query.eventType)
+	}
+	if query.from != "" {
+		where = append(where, "datetime(e.created_at) >= datetime(?)")
+		args = append(args, query.from)
+	}
+	if query.to != "" {
+		where = append(where, "datetime(e.created_at) < datetime(?)")
+		args = append(args, query.to)
+	}
 	switch query.status {
 	case "pending":
 		where = append(where, pendingEventFilter("e"))
@@ -3363,6 +3378,9 @@ type listQuery struct {
 	severity    string
 	category    string
 	region      string
+	eventType   string
+	from        string
+	to          string
 }
 
 func parseListQuery(r *http.Request) listQuery {
@@ -3378,6 +3396,9 @@ func parseListQuery(r *http.Request) listQuery {
 		nodeID:      strings.TrimSpace(r.URL.Query().Get("node_id")), nodeType: strings.TrimSpace(r.URL.Query().Get("node_type")),
 		severity: strings.TrimSpace(r.URL.Query().Get("severity")), category: strings.TrimSpace(r.URL.Query().Get("category")),
 		region: strings.TrimSpace(r.URL.Query().Get("region")),
+		eventType: strings.TrimSpace(r.URL.Query().Get("type")),
+		from:      strings.TrimSpace(r.URL.Query().Get("from")),
+		to:        strings.TrimSpace(r.URL.Query().Get("to")),
 	}
 }
 

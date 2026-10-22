@@ -4,6 +4,7 @@ import { useRouter } from 'vue-router';
 import { NPagination, NSelect } from 'naive-ui';
 import {
   confirmUserRenewal,
+  fetchEventStats,
   fetchEventSummary,
   fetchEvents,
   markAllEventsRead,
@@ -288,13 +289,6 @@ async function completeNewUserProfile(row: Api.Central.EventSummary) {
   openUser(row);
 }
 
-function withinRange(row: Api.Central.EventSummary) {
-  if (filters.timeRange === 'all') return true;
-  const occurred = new Date(row.occurredAt).getTime();
-  if (!Number.isFinite(occurred)) return false;
-  const days = filters.timeRange === '1d' ? 1 : filters.timeRange === '7d' ? 7 : 30;
-  return occurred >= Date.now() - days * 24 * 60 * 60 * 1000;
-}
 
 function isSameLocalDay(value: string | null | undefined) {
   if (!value) return false;
@@ -306,44 +300,36 @@ function isSameLocalDay(value: string | null | undefined) {
   );
 }
 
+function timeRangeBounds(range: TimeRange): { from?: string; to?: string } {
+  if (range === 'all') return {};
+  const days = range === '1d' ? 1 : range === '7d' ? 7 : 30;
+  return { from: new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString() };
+}
+
 async function loadEvents() {
   loading.value = true;
   errorMessage.value = '';
   const status = filters.tab === 'pending' ? 'pending' : undefined;
-  const baseParams = {
+  const range = timeRangeBounds(filters.timeRange);
+  const { data, error } = await fetchEvents({
     keyword: filters.keyword || undefined,
     severity: filters.severity === 'all' ? undefined : (filters.severity as Api.Central.EventSeverity),
     category: filters.category === 'all' ? undefined : (filters.category as Api.Central.EventCategory),
-    status
-  };
-  // 时间范围在后端无对应参数：选中时间范围时取最近 200 条再在本地切片，
-  // 「全部时间」仍走服务端 remote 分页，行为与重写前完全一致。
-  if (filters.timeRange !== 'all') {
-    const { data, error } = await fetchEvents({ ...baseParams, page: 1, page_size: 200 });
-    if (error || !data) {
-      errorMessage.value = '中央后端暂不可用，无法读取事件';
-      rows.value = [];
-      total.value = 0;
-      dataAt.value = '';
-    } else {
-      const filtered = data.items.filter(withinRange);
-      const start = (filters.page - 1) * filters.page_size;
-      rows.value = filtered.slice(start, start + filters.page_size);
-      total.value = filtered.length;
-      dataAt.value = data.dataAt || '';
-    }
+    status,
+    from: range.from,
+    to: range.to,
+    page: filters.page,
+    page_size: filters.page_size
+  });
+  if (error || !data) {
+    errorMessage.value = '中央后端暂不可用，无法读取事件';
+    rows.value = [];
+    total.value = 0;
+    dataAt.value = '';
   } else {
-    const { data, error } = await fetchEvents({ ...baseParams, page: filters.page, page_size: filters.page_size });
-    if (error || !data) {
-      errorMessage.value = '中央后端暂不可用，无法读取事件';
-      rows.value = [];
-      total.value = 0;
-      dataAt.value = '';
-    } else {
-      rows.value = data.items;
-      total.value = data.total;
-      dataAt.value = data.dataAt || '';
-    }
+    rows.value = data.items;
+    total.value = data.total;
+    dataAt.value = data.dataAt || '';
   }
   // 处理完最后一条后当前页可能已越界，回退到最后一页避免空白表格
   if (!rows.value.length && total.value > 0 && filters.page > 1) {
@@ -356,81 +342,45 @@ async function loadEvents() {
 }
 
 async function loadStats() {
-  const [summaryResult, listResult] = await Promise.all([
-    fetchEventSummary(),
-    fetchEvents({ page: 1, page_size: 200 })
-  ]);
-  if (listResult.error || !listResult.data) {
+  const { data, error } = await fetchEventStats({ window: '7d' });
+  if (error || !data) {
     return;
   }
-  const items = listResult.data.items;
-  allCount.value = listResult.data.total;
-  statsCapped.value = listResult.data.total > items.length;
 
-  const pending = items.filter(item => isPendingEvent(item));
-  const pendingFromList = pending.length;
-  const summaryCount = summaryResult.error ? null : summaryResult.data?.pendingCount;
-  pendingCount.value = typeof summaryCount === 'number' ? summaryCount : pendingFromList;
+  allCount.value = data.totalCount;
+  pendingCount.value = data.pendingCount;
+  statsCapped.value = false;
 
-  const attentionItems = pending.filter(
-    item => item.severity === 'error' || item.type === 'client_set_replacement_detected'
-  );
-  const resolvedTodayItems = items.filter(item => item.status === 'resolved' && isSameLocalDay(item.resolvedAt));
-  const resolved7dItems = items.filter(item => {
-    if (item.status !== 'resolved' || !item.resolvedAt) return false;
-    const resolvedAt = new Date(item.resolvedAt).getTime();
-    return Number.isFinite(resolvedAt) && resolvedAt >= Date.now() - 7 * 24 * 60 * 60 * 1000;
-  });
-  const durations = resolved7dItems
-    .map(item => {
-      const occurredAt = new Date(item.occurredAt).getTime();
-      const resolvedAt = new Date(item.resolvedAt || '').getTime();
-      if (!Number.isFinite(occurredAt) || !Number.isFinite(resolvedAt)) return null;
-      const hours = (resolvedAt - occurredAt) / 3_600_000;
-      return hours >= 0 ? hours : null;
-    })
-    .filter((hours): hours is number => hours !== null);
-  const average = durations.length
-    ? durations.reduce((sum, hours) => sum + hours, 0) / durations.length
-    : null;
-  const sorted = [...durations].sort((left, right) => left - right);
-  const median = sorted.length
-    ? sorted.length % 2 === 1
-      ? sorted[Math.floor(sorted.length / 2)]
-      : (sorted[sorted.length / 2 - 1] + sorted[sorted.length / 2]) / 2
-    : null;
+  const typeCount = (type: string) => data.byType.find(item => item.type === type)?.count ?? 0;
+  const severityCount = (severity: string) => data.bySeverity.find(item => item.severity === severity)?.count ?? 0;
 
-  stats.pending = pendingCount.value ?? 0;
-  stats.attention = attentionItems.length;
-  stats.attentionError = attentionItems.filter(item => item.severity === 'error').length;
-  stats.attentionReplacement = attentionItems.filter(item => item.type === 'client_set_replacement_detected').length;
-  stats.resolvedToday = resolvedTodayItems.length;
-  stats.autoRecoveredToday = resolvedTodayItems.filter(
-    item => item.type === 'xpanel_sync_recovered' || item.type === 'node_recovered'
-  ).length;
-  stats.resolved7d = resolved7dItems.length;
-  stats.avgHours = average;
-  stats.medianHours = median;
+  stats.pending = data.pendingCount;
+  stats.attention = data.attentionCount;
+  stats.attentionError = severityCount('error');
+  stats.attentionReplacement = typeCount('client_set_replacement_detected');
+  stats.resolvedToday = data.processedToday;
+  stats.autoRecoveredToday = data.autoRecoveredToday;
+  stats.resolved7d = data.resolvedInWindow;
+  stats.avgHours = data.avgHandleMinutes > 0 ? data.avgHandleMinutes / 60 : null;
+  stats.medianHours = data.medianHandleMinutes > 0 ? data.medianHandleMinutes / 60 : null;
 
-  const windowStart = Date.now() - 7 * 24 * 60 * 60 * 1000;
-  const recent = items.filter(item => {
-    const occurred = new Date(item.occurredAt).getTime();
-    return Number.isFinite(occurred) && occurred >= windowStart;
-  });
-  distributionTotal.value = recent.length;
+  const totalInWindow = data.byType.reduce((sum, item) => sum + item.count, 0);
+  distributionTotal.value = totalInWindow;
   const grouped = typeGroups.map(group => ({
     label: group.label,
     tone: group.tone,
     count: group.types.length
-      ? recent.filter(item => group.types.includes(item.type)).length
-      : recent.filter(item => !typeGroups.some(other => other.types.includes(item.type))).length
+      ? group.types.reduce((sum, type) => sum + typeCount(type), 0)
+      : data.byType
+          .filter(item => !typeGroups.some(other => other.types.includes(item.type)))
+          .reduce((sum, item) => sum + item.count, 0)
   }));
   distribution.value = grouped
     .filter(group => group.count > 0)
     .sort((left, right) => right.count - left.count)
     .map(group => ({
       ...group,
-      width: `${Math.max(4, Math.round((group.count / Math.max(1, recent.length)) * 100))}%`
+      width: `${Math.max(4, Math.round((group.count / Math.max(1, totalInWindow)) * 100))}%`
     }));
   statsReady.value = true;
 }

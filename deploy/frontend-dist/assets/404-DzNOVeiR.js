@@ -1,0 +1,1 @@
+import{Fi as e,Vi as t,Zi as n}from"./router-P--YcraN.js";import{t as r}from"./exception-base-mVJXjgoc.js";var i=t({name:`404`,__name:`index`,setup(t){return(t,i)=>{let a=r;return n(),e(a,{type:`404`})}}});export{i as default};

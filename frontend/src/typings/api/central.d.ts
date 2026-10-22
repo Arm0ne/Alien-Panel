@@ -21,6 +21,12 @@ declare namespace Api {
       billing_type?: BillingType;
           /** Optional region/country filter for exit IP inventory */
       region?: string;
+      /** Optional event type filter */
+      type?: string;
+      /** Optional inclusive lower bound (RFC3339) for event time filters */
+      from?: string;
+      /** Optional exclusive upper bound (RFC3339) for event time filters */
+      to?: string;
 }
 
     interface PageResult<T> {
@@ -813,6 +819,46 @@ declare namespace Api {
       resolvedBy?: string | null;
       source?: string | null;
       correlationId?: string | null;
+    }
+
+    interface EventStats {
+      windowDays: number;
+      pendingCount: number;
+      unreadCount: number;
+      attentionCount: number;
+      processedToday: number;
+      resolvedInWindow: number;
+      avgHandleMinutes: number;
+      medianHandleMinutes: number;
+      totalCount: number;
+      autoRecoveredToday: number;
+      byCategory: Array<{ category: string; count: number }>;
+      bySeverity: Array<{ severity: string; count: number }>;
+      byType: Array<{ type: string; count: number }>;
+    }
+
+    interface CostsTrendPoint {
+      period: string;
+      income: number;
+      cost: number;
+      cashIncome: number;
+      renewalRate: number;
+      dueUsers: number;
+      renewedUsers: number;
+    }
+
+    interface RenewalCandidate {
+      id: string;
+      userId: string;
+      userName: string;
+      inboundId: string | null;
+      oldExpiryAt: string;
+      newExpiryAt: string;
+      detectedAt: string;
+      billingCycle: BillingCycle;
+      amount: number;
+      currency: string;
+      notes?: string | null;
     }
 
     interface EventSummaryCounts {

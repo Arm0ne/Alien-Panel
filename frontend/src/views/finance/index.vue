@@ -4,9 +4,10 @@ import {
   cancelUserBillingRecord,
   confirmUserRenewal,
   createNodeCost,
-  fetchEvents,
+  fetchCostsTrend,
   fetchFinanceSummary,
   fetchNodes,
+  fetchRenewalCandidates,
   verifyUserBillingRecord
 } from '@/service/api';
 import DataFreshness from '@/components/project/data-freshness.vue';
@@ -196,16 +197,6 @@ function monthLabel(value: string) {
   return Number.isFinite(month) ? `${month}月` : value;
 }
 
-function monthRange(endPeriod: string, count: number) {
-  const year = Number(endPeriod.slice(0, 4));
-  const month = Number(endPeriod.slice(5, 7));
-  const periods: string[] = [];
-  for (let index = count - 1; index >= 0; index -= 1) {
-    const date = new Date(Date.UTC(year, month - 1 - index, 1));
-    periods.push(`${date.getUTCFullYear()}-${pad2(date.getUTCMonth() + 1)}`);
-  }
-  return periods;
-}
 
 const orders = computed<FinanceOrder[]>(() => summary.value?.orders ?? []);
 const costs = computed<FinanceCost[]>(() => summary.value?.costDetails ?? []);
@@ -320,75 +311,48 @@ async function loadFinance() {
 
 async function loadTrend(force = false) {
   const requestId = ++trendRequestId;
-  const periods = monthRange(period.value || currentMonth(), 12);
-  if (force) {
-    periods.forEach(item => trendCache.delete(item));
-  }
-  const missing = periods.filter(item => !trendCache.has(item));
+  if (force) trendCache.clear();
   trendLoading.value = true;
   trendError.value = '';
-  if (missing.length) {
-    const results = await Promise.all(
-      missing.map(async item => {
-        const { data, error } = await fetchFinanceSummary({ period: item });
-        if (error || !data) return null;
-        const point: MonthPoint = {
-          period: item,
-          label: monthLabel(item),
-          income: data.monthIncome ?? 0,
-          cost: data.monthCost ?? 0,
-          renewalRate: data.renewal?.renewalRate ?? 0,
-          dueUsers: data.renewal?.dueUsers ?? 0,
-          renewedUsers: data.renewal?.renewedUsers ?? 0
-        };
-        return point;
-      })
-    );
-    if (requestId !== trendRequestId) return;
-    results.forEach(item => {
-      if (item) trendCache.set(item.period, item);
-    });
-    if (results.every(item => item === null)) {
-      trendError.value = '近 12 个月财务趋势暂不可用';
-    }
-  }
+  const { data, error } = await fetchCostsTrend({ months: 12 });
   if (requestId !== trendRequestId) return;
-  trend.value = periods
-    .map(item => trendCache.get(item))
-    .filter((item): item is MonthPoint => Boolean(item));
+  if (error || !data) {
+    trendError.value = '近 12 个月财务趋势暂不可用';
+    trendLoading.value = false;
+    return;
+  }
+  trend.value = data.items.map(item => ({
+    period: item.period,
+    label: monthLabel(item.period),
+    income: item.income ?? 0,
+    cost: item.cost ?? 0,
+    renewalRate: item.renewalRate ?? 0,
+    dueUsers: item.dueUsers ?? 0,
+    renewedUsers: item.renewedUsers ?? 0
+  }));
   trendLoading.value = false;
 }
 
 async function loadRenewalCandidates() {
   candidateLoading.value = true;
   candidateError.value = '';
-  const { data, error } = await fetchEvents({ page: 1, page_size: 100, status: 'pending' });
+  const { data, error } = await fetchRenewalCandidates({ period: period.value });
   if (error || !data) {
     candidateError.value = '待确认续费候选读取失败';
     candidates.value = [];
   } else {
-    candidates.value = data.items
-      .filter(
-        item =>
-          item.type === 'renewal_candidate_detected' &&
-          item.status !== 'resolved' &&
-          item.status !== 'dismissed'
-      )
-      .map(item => ({
-        eventId: item.id,
-        candidateId: payloadText(item, 'candidateId') || item.resourceId || '',
-        userId: payloadText(item, 'userId'),
-        userName: payloadText(item, 'userName') || '未知用户',
-        oldExpiryAt: payloadText(item, 'oldExpiryAt'),
-        newExpiryAt: payloadText(item, 'newExpiryAt'),
-        billingCycle: (payloadText(item, 'billingCycle') === 'annual'
-          ? 'annual'
-          : 'monthly') as Api.Central.BillingCycle,
-        amount: Number(item.payload?.suggestedAmount ?? 0),
-        currency: payloadText(item, 'currency') || 'CNY',
-        detectedAt: item.occurredAt
-      }))
-      .filter(item => Boolean(item.userId && item.candidateId));
+    candidates.value = data.items.map(item => ({
+      eventId: item.id,
+      candidateId: item.id,
+      userId: item.userId,
+      userName: item.userName || '未知用户',
+      oldExpiryAt: item.oldExpiryAt,
+      newExpiryAt: item.newExpiryAt,
+      billingCycle: (item.billingCycle === 'annual' ? 'annual' : 'monthly') as Api.Central.BillingCycle,
+      amount: Number(item.amount ?? 0),
+      currency: item.currency || 'CNY',
+      detectedAt: item.detectedAt
+    }));
   }
   candidateLoading.value = false;
 }

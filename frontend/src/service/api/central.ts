@@ -374,6 +374,24 @@ export function fetchFinanceSummary(params: { period?: string } = {}) {
   return request<Api.Central.FinanceSummary>({ url: '/costs/summary', params });
 }
 
+/** Aggregated event counters for the events page (server-side). */
+export function fetchEventStats(params: { window?: string } = {}) {
+  return request<Api.Central.EventStats>({ url: '/events/stats', params });
+}
+
+/** Monthly finance series computed server-side. */
+export function fetchCostsTrend(params: { months?: number } = {}) {
+  return request<{ items: Api.Central.CostsTrendPoint[] }>({ url: '/costs/trend', params });
+}
+
+/** Pending Agent-detected renewals across all users. */
+export function fetchRenewalCandidates(params: { period?: string } = {}) {
+  return request<{ items: Api.Central.RenewalCandidate[]; total: number }>({
+    url: '/renewal-candidates',
+    params
+  });
+}
+
 export function fetchEvents(params: Api.Central.PageParams = {}) {
   return request<Api.Central.PageResult<Api.Central.EventSummary>>({ url: '/events', params });
 }
