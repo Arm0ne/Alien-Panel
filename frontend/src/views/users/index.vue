@@ -1198,14 +1198,6 @@ function resetFilters() {
   submitFilters();
 }
 
-function openOrderFromPage() {
-  if (drawerVisible.value && detail.value) {
-    openOrderModal();
-    return;
-  }
-  window.$message?.info('请先在列表中选择用户，再在详情抽屉中新增订单');
-}
-
 async function openOrderForUser(userID: string) {
   await openDetail(userID);
   if (detail.value) openOrderModal();
@@ -1294,9 +1286,6 @@ onMounted(() => {
         <DataFreshness :data-at="dataAt" />
         <button class="u-btn" type="button" :disabled="loading || userLoading" @click="reloadAll">
           <SvgIcon icon="mdi:refresh" class="u-btn-ico" />刷新
-        </button>
-        <button class="u-btn is-primary" type="button" @click="openOrderFromPage">
-          <SvgIcon icon="mdi:plus" class="u-btn-ico" />新增订单
         </button>
       </div>
     </header>
