@@ -98,5 +98,27 @@ export const themeSettings: App.Theme.ThemeSetting = {
  * Override theme settings
  *
  * If publish new version, use `overrideThemeSettings` to override certain theme settings
+ *
+ * UI v2 起强制深色：老用户 localStorage 里可能缓存了浅色设置，
+ * 这里在版本升级（BUILD_TIME 变化）时覆盖一次。
  */
-export const overrideThemeSettings: Partial<App.Theme.ThemeSetting> = {};
+export const overrideThemeSettings: Partial<App.Theme.ThemeSetting> = {
+  themeScheme: 'dark',
+  themeColor: '#4c6fff',
+  themeRadius: 10,
+  header: {
+    multilingual: {
+      visible: false
+    },
+    globalSearch: {
+      visible: true
+    }
+  } as App.Theme.ThemeSetting['header'],
+  sider: {
+    width: 246,
+    collapsedWidth: 68
+  } as App.Theme.ThemeSetting['sider'],
+  footer: {
+    visible: false
+  } as App.Theme.ThemeSetting['footer']
+};
