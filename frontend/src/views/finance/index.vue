@@ -1,11 +1,13 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, reactive, ref, watch } from 'vue';
 import {
+  cancelUserBillingRecord,
   confirmUserRenewal,
   createNodeCost,
   fetchEvents,
   fetchFinanceSummary,
-  fetchNodes
+  fetchNodes,
+  verifyUserBillingRecord
 } from '@/service/api';
 import DataFreshness from '@/components/project/data-freshness.vue';
 import { useEcharts, type ECOption } from '@/hooks/common/echarts';
@@ -476,6 +478,62 @@ async function submitCost() {
   void loadTrend();
 }
 
+const verifyingOrderId = ref('');
+const cancellingOrderId = ref('');
+
+function orderStatusLabel(order: FinanceOrder) {
+  if (order.status === 'pending') return '待核验';
+  if (order.verificationStatus === 'unverified') return '未核验';
+  return '已确认';
+}
+
+function orderStatusBadge(order: FinanceOrder) {
+  if (order.status === 'pending' || order.verificationStatus === 'unverified') return 'is-warn';
+  return 'is-ok';
+}
+
+async function verifyOrder(order: FinanceOrder) {
+  if (verifyingOrderId.value) return;
+  verifyingOrderId.value = order.id;
+  const { error } = await verifyUserBillingRecord(order.userId, order.id, {});
+  verifyingOrderId.value = '';
+  if (error) {
+    window.$message?.error('核验订单失败，请稍后重试');
+    return;
+  }
+  window.$message?.success('订单已核验，计入现金收款');
+  void loadFinance();
+  void loadTrend(true);
+  void loadRenewalCandidates();
+}
+
+function cancelOrder(order: FinanceOrder) {
+  if (cancellingOrderId.value) return;
+  window.$dialog?.warning({
+    title: '取消订单',
+    content: `确认取消订单 ${order.orderNo || order.id.slice(0, 12)}（${formatMoney(
+      order.amount,
+      order.currency
+    )}）？取消后不计入收入与现金收款，且不可恢复。`,
+    positiveText: '确认取消',
+    negativeText: '返回',
+    maskClosable: false,
+    onPositiveClick: async () => {
+      cancellingOrderId.value = order.id;
+      const { error } = await cancelUserBillingRecord(order.userId, order.id, {});
+      cancellingOrderId.value = '';
+      if (error) {
+        window.$message?.error('取消订单失败，请稍后重试');
+        return;
+      }
+      window.$message?.success('订单已取消');
+      void loadFinance();
+      void loadTrend(true);
+      void loadRenewalCandidates();
+    }
+  });
+}
+
 function csvCell(value: string | number) {
   return `"${String(value).replace(/"/g, '""')}"`;
 }
@@ -513,7 +571,7 @@ function exportCsv() {
   } else {
     const source = activeTab.value === 'orders' ? filteredOrders.value : orders.value;
     rows = [
-      ['用户', 'Inbound', '节点', '订单号', '类型', '周期', '金额', '服务期起', '服务期止', '收款时间', '来源'],
+      ['用户', 'Inbound', '节点', '订单号', '类型', '周期', '金额', '服务期起', '服务期止', '收款时间', '来源', '状态'],
       ...source.map(item => [
         item.userName,
         item.inboundTag || '',
@@ -525,7 +583,8 @@ function exportCsv() {
         formatDay(item.serviceFrom),
         formatDay(item.serviceTo),
         formatDateTime(item.paidAt),
-        sourceLabel(item.source)
+        sourceLabel(item.source),
+        orderStatusLabel(item)
       ])
     ];
     filename = `finance-${period.value}-orders.csv`;
@@ -989,7 +1048,7 @@ onMounted(() => {
                     </tr>
                   </tbody>
                 </table>
-                <div v-if="!orders.length" class="fin-empty-small">本月暂无已确认收款订单</div>
+                <div v-if="!orders.length" class="fin-empty-small">本月暂无收款订单</div>
               </div>
             </section>
           </div>
@@ -1030,7 +1089,7 @@ onMounted(() => {
               <span class="fin-spacer"></span>
               <span class="fin-dim fin-hint">
                 合计 {{ formatMoney(filteredOrdersTotal, summary.currency) }} · {{ filteredOrders.length }} 笔 ·
-                全部为已确认且已核验
+                待核验订单不计入现金收款
               </span>
             </div>
             <div class="fin-table-wrap">
@@ -1045,6 +1104,8 @@ onMounted(() => {
                     <th>收款时间</th>
                     <th>服务期</th>
                     <th>来源</th>
+                    <th>状态</th>
+                    <th class="is-num">操作</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -1068,13 +1129,35 @@ onMounted(() => {
                         {{ sourceLabel(order.source) }}
                       </span>
                     </td>
+                    <td>
+                      <span class="fin-badge" :class="orderStatusBadge(order)">{{ orderStatusLabel(order) }}</span>
+                    </td>
+                    <td class="is-num">
+                      <button
+                        v-if="order.status === 'pending'"
+                        class="fin-btn is-ghost fin-btn-xs"
+                        type="button"
+                        :disabled="verifyingOrderId === order.id"
+                        @click="verifyOrder(order)"
+                      >
+                        核验
+                      </button>
+                      <button
+                        class="fin-btn is-ghost fin-btn-xs"
+                        type="button"
+                        :disabled="cancellingOrderId === order.id"
+                        @click="cancelOrder(order)"
+                      >
+                        取消
+                      </button>
+                    </td>
                   </tr>
                 </tbody>
                 <tfoot v-if="filteredOrders.length">
                   <tr>
                     <td class="is-strong" colspan="4">合计 {{ filteredOrders.length }} 笔</td>
                     <td class="is-num is-strong">{{ formatMoney(filteredOrdersTotal, summary.currency) }}</td>
-                    <td colspan="3" class="fin-dim">
+                    <td colspan="5" class="fin-dim">
                       首购 {{ formatMoney(typeTotal('initial'), summary.currency) }} · 续费
                       {{ formatMoney(typeTotal('renewal'), summary.currency) }} · 逾期恢复
                       {{ formatMoney(typeTotal('recovery'), summary.currency) }}

@@ -329,6 +329,16 @@ function pathModeLabel(mode?: Api.Central.UserSummary['pathMode']) {
 }
 
 /** 状态文案统一（有效 → 启用中） */
+function billingHint(row: Api.Central.UserSummary) {
+  if (row.billingType === 'free') {
+    return row.billingAmount ? `免费 · 参考 ¥${Number(row.billingAmount).toFixed(2)}` : '免费用户';
+  }
+  const amount = Number(row.billingAmount || 0);
+  if (!amount) return '金额未设置';
+  const cycle = row.billingCycle === 'annual' ? '年' : '月';
+  return `¥${amount.toFixed(2)} / ${cycle}`;
+}
+
 function statusLabel(status: Api.Central.UserStatus) {
   if (status === 'active') return '启用中';
   if (status === 'expiring') return '即将到期';
@@ -1492,7 +1502,7 @@ onMounted(() => {
                 <td class="is-num">
                   <span v-if="row.billingType === 'free'" class="u-badge is-neutral">免费</span>
                   <span v-else class="u-strong">收费</span>
-                  <span class="u-sub">金额 --</span>
+                  <span class="u-sub">{{ billingHint(row) }}</span>
                 </td>
                 <td class="u-td-actions" @click.stop>
                   <button
@@ -1635,9 +1645,8 @@ onMounted(() => {
     </div>
 
     <p class="u-footnote">
-      * 「用量 / 配额」与「计费」两列需要后端补充套餐配额、金额与周期字段；当前仅返回
-      <span class="u-mono">trafficBytes</span> 与 <span class="u-mono">billingType</span>，
-      因此用量只显示累计流量（相对流量基线的增量）、计费只显示收费 / 免费，其余以 <span class="u-mono">--</span> 占位。
+      * 「计费」列展示中央维护的月费与周期（<span class="u-mono">billingAmount</span> /
+      <span class="u-mono">billingCycle</span>）；「用量 / 配额」的配额字段仍需后端补充套餐能力，当前只显示累计流量（相对流量基线的增量），配额以 <span class="u-mono">--</span> 占位。
     </p>
 
     <!-- ===================== 详情抽屉 ===================== -->

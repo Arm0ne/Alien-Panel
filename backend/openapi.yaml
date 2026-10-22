@@ -821,6 +821,7 @@ paths:
         - $ref: '#/components/parameters/PageSize'
         - $ref: '#/components/parameters/Keyword'
         - $ref: '#/components/parameters/Status'
+        - $ref: '#/components/parameters/Region'
       responses:
         '200': { description: Paginated exit IPs }
     post:
@@ -1032,6 +1033,11 @@ components:
       name: status
       in: query
       description: For events, use pending, alerts, open, unread, or resolved.
+      schema: { type: string }
+    Region:
+      name: region
+      in: query
+      description: Filter exit IP assets by country/region label (exact match on the effective region).
       schema: { type: string }
     NodeId:
       name: node_id

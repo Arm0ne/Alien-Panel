@@ -19,7 +19,9 @@ declare namespace Api {
       node_id?: string;
       node_type?: NodeType;
       billing_type?: BillingType;
-    }
+          /** Optional region/country filter for exit IP inventory */
+      region?: string;
+}
 
     interface PageResult<T> {
       items: T[];
@@ -44,6 +46,8 @@ declare namespace Api {
       pathConfigured?: boolean;
       status: UserStatus;
       billingType: BillingType;
+      billingCycle?: string;
+      billingAmount?: number;
       expiresAt?: string;
       clientCount: number;
       trafficBytes: number;
@@ -657,6 +661,7 @@ declare namespace Api {
       checkedAt?: string | null;
       validFrom?: string | null;
       validTo?: string | null;
+      notes?: string | null;
     }
 
     interface ExitIpCountryStat {
@@ -763,6 +768,8 @@ declare namespace Api {
         source: string;
         inboundTag: string | null;
         nodeName: string | null;
+        status?: string;
+        verificationStatus?: string;
       }>;
       costDetails?: Array<{
         id: string;

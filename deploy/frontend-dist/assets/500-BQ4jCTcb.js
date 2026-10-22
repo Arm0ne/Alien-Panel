@@ -1,0 +1,1 @@
+import{Ni as e,Yi as t,zi as n}from"./router-CTymuOix.js";import{t as r}from"./exception-base-DbmZsJ-p.js";var i=n({name:`500`,__name:`index`,setup(n){return(n,i)=>{let a=r;return t(),e(a,{type:`500`})}}});export{i as default};

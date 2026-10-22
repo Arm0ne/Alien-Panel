@@ -30,7 +30,7 @@ import DataFreshness from '@/components/project/data-freshness.vue';
 defineOptions({ name: 'ExitIpManagement' });
 
 type Tone = 'ok' | 'warn' | 'danger' | 'neutral' | 'brand';
-/** 列表接口暂未返回 notes；保留可选字段，拿到就展示，拿不到用派生说明兜底。 */
+/** 列表接口已返回 notes；为空时用派生说明兜底。 */
 type ExitIpRow = Api.Central.ExitIpSummary & { notes?: string | null };
 
 const loading = ref(false);
@@ -259,17 +259,15 @@ const ownerRegionSummary = computed(() => {
     .join(' · ');
 });
 
-const displayRows = computed(() => {
-  if (filters.country === 'all') return rows.value;
-  return rows.value.filter(row => countryOf(row) === filters.country);
-});
+// 国家/地区筛选已下沉到服务端（region 参数），列表本身就是过滤结果
+const displayRows = computed(() => rows.value);
 
 const pageCount = computed(() => Math.max(1, Math.ceil(total.value / filters.page_size)));
 const rangeStart = computed(() => (total.value === 0 ? 0 : (filters.page - 1) * filters.page_size + 1));
 const rangeEnd = computed(() => Math.min(filters.page * filters.page_size, total.value));
 const filterHint = computed(() => {
   const parts = [`第 ${filters.page} / ${pageCount.value} 页`];
-  if (filters.country !== 'all') parts.push(`国家筛选：当前页 ${displayRows.value.length} 条`);
+  if (filters.country !== 'all') parts.push(`国家/地区：${filters.country}`);
   return parts.join(' · ');
 });
 
@@ -532,7 +530,8 @@ async function loadExitIps() {
     page: filters.page,
     page_size: filters.page_size,
     keyword: filters.keyword || undefined,
-    status: filters.status === 'all' ? undefined : filters.status
+    status: filters.status === 'all' ? undefined : filters.status,
+    region: filters.country === 'all' ? undefined : filters.country
   });
   if (error || !data) {
     errorMessage.value = '中央后端暂不可用，无法读取出口 IP 数据';
@@ -704,7 +703,7 @@ onMounted(() => {
           :options="countryOptions"
           size="small"
           class="e-country-select"
-          :title="'国家 / 地区筛选作用于当前页数据'"
+          :title="'按国家 / 地区筛选（服务端过滤）'"
           @update:value="setCountryFilter"
         />
         <div class="e-seg">
