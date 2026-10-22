@@ -53,7 +53,7 @@ const tabs: Array<{ label: string; value: TabKey }> = [
 const loading = ref(false);
 const errorMessage = ref('');
 const summary = ref<Api.Central.FinanceSummary | null>(null);
-const period = ref<string>(new Date().toISOString().slice(0, 7));
+const period = ref<string>(currentMonth());
 const activeTab = ref<TabKey>('overview');
 
 const trend = ref<MonthPoint[]>([]);
@@ -189,7 +189,8 @@ function payloadText(row: Api.Central.EventSummary, key: string) {
 }
 
 function currentMonth() {
-  return new Date().toISOString().slice(0, 7);
+  const now = new Date();
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
 }
 
 function monthLabel(value: string) {
@@ -753,7 +754,7 @@ onMounted(() => {
     <header class="fin-head">
       <div class="fin-head-main">
         <div class="fin-eyebrow">
-          财务 · 成本与收入 <span class="fin-dim">·</span> 财务月份按 UTC 统计
+          财务 · 成本与收入 <span class="fin-dim">·</span> 财务月份按北京时间（UTC+8）统计
         </div>
         <h1 class="fin-title">成本与收入</h1>
         <p class="fin-desc">
@@ -792,10 +793,9 @@ onMounted(() => {
           <div class="fin-callout is-info">
             <SvgIcon icon="mdi:information-outline" class="fin-callout-ico" />
             <div class="fin-callout-text">
-              <b>服务期收入 = 按服务期与月份交集按秒分摊；现金收款 = paid_at 在本月的已确认记录；两者不可互相抵扣。</b>
-              毛利 = 服务期收入 − 本月成本；现金余额 = 现金收款 − 本月成本；续费率分母只取本期到期的收费用户。
+              <b>服务期收入 = 服务期与月份交集按秒分摊；现金收款 = paid_at 归属月份；两者不可互相抵扣。</b>
+              毛利 = 服务期收入 − 本月成本；现金余额 = 现金收款 − 本月成本。
             </div>
-            <span class="fin-badge is-warn fin-callout-badge">每月 1 日 00:00–08:00 财务月与业务日不同步</span>
           </div>
 
           <!-- 7 KPI -->
@@ -1022,7 +1022,7 @@ onMounted(() => {
             <div class="fin-card-head">
               <div class="fin-card-title">
                 <h3>收款订单台账</h3>
-                <span>按 paid_at 归属 {{ period }} · UTC</span>
+                <span>按 paid_at 归属 {{ period }} · 北京时间</span>
               </div>
               <span class="fin-badge is-ok">
                 {{ filteredOrders.length }} 笔 · {{ formatMoney(filteredOrdersTotal, summary.currency) }}

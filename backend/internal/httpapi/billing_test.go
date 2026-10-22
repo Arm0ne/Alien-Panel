@@ -100,7 +100,7 @@ func TestAnnualBillingIsAllocatedAcrossServiceMonths(t *testing.T) {
 	if _, err := database.Exec(`INSERT INTO users (id, display_name, status, monthly_fee, billing_cycle, billing_amount, expiry_time, created_at, updated_at) VALUES ('annual-finance-user', '年费用户', 'active', 100, 'annual', 1200, ?, ?, ?)`, expiry, created, created); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := database.Exec(`INSERT INTO user_billing_records (id, user_id, billing_cycle, amount, currency, service_from, service_to, paid_at, status, source, created_at) VALUES ('annual-finance-record', 'annual-finance-user', 'annual', 1200, 'CNY', '2026-09-15T00:00:00Z', '2026-10-15T00:00:00Z', '2026-09-15T00:00:00Z', 'confirmed', 'manual', ?)`, created); err != nil {
+	if _, err := database.Exec(`INSERT INTO user_billing_records (id, user_id, billing_cycle, amount, currency, service_from, service_to, paid_at, status, source, created_at) VALUES ('annual-finance-record', 'annual-finance-user', 'annual', 1200, 'CNY', '2026-09-15T00:00:00+08:00', '2026-10-15T00:00:00+08:00', '2026-09-15T00:00:00+08:00', 'confirmed', 'manual', ?)`, created); err != nil {
 		t.Fatal(err)
 	}
 	login := doJSON(t, ts.Client(), http.MethodPost, ts.URL+"/api/auth/login", "", map[string]string{"userName": "admin", "password": "test-password"})

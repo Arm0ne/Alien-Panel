@@ -2222,12 +2222,12 @@ func TestFinanceUsesHistoricalEffectiveUsers(t *testing.T) {
 		args  []any
 	}{
 		{`INSERT INTO users (id, display_name, status, monthly_fee, currency, expiry_time, created_at, updated_at) VALUES ('revenue-history', '历史用户', 'active', 100, 'CNY', '2026-02-01T00:00:00Z', '2025-12-15T00:00:00Z', '2025-12-15T00:00:00Z')`, nil},
-		{`INSERT INTO users (id, display_name, status, monthly_fee, currency, expiry_time, created_at, updated_at) VALUES ('revenue-before', '此前已过期', 'expired', 80, 'CNY', '2025-12-31T23:59:59Z', '2025-01-01T00:00:00Z', '2026-01-01T00:00:00Z')`, nil},
+		{`INSERT INTO users (id, display_name, status, monthly_fee, currency, expiry_time, created_at, updated_at) VALUES ('revenue-before', '此前已过期', 'expired', 80, 'CNY', '2025-12-31T15:59:59Z', '2025-01-01T00:00:00Z', '2026-01-01T00:00:00Z')`, nil},
 		{`INSERT INTO users (id, display_name, status, monthly_fee, currency, created_at, updated_at) VALUES ('revenue-unlimited', '长期用户', 'active', 40, 'CNY', '2026-01-15T00:00:00Z', '2026-01-15T00:00:00Z')`, nil},
 		{`INSERT INTO users (id, display_name, status, monthly_fee, currency, created_at, updated_at) VALUES ('revenue-created-later', '后来创建', 'active', 70, 'CNY', '2026-02-01T00:00:00Z', '2026-02-01T00:00:00Z')`, nil},
 		{`INSERT INTO users (id, display_name, status, monthly_fee, currency, expiry_time, created_at, updated_at) VALUES ('revenue-disabled', '停用用户', 'disabled', 90, 'CNY', '2026-12-31T00:00:00Z', '2025-12-01T00:00:00Z', '2025-12-01T00:00:00Z')`, nil},
 		{`INSERT INTO users (id, display_name, status, monthly_fee, currency, expiry_time, created_at, updated_at) VALUES ('revenue-usd', '非人民币用户', 'active', 60, 'USD', '2026-12-31T00:00:00Z', '2025-12-01T00:00:00Z', '2025-12-01T00:00:00Z')`, nil},
-		{`INSERT INTO users (id, display_name, status, monthly_fee, currency, expiry_time, created_at, updated_at) VALUES ('revenue-start-boundary', '起始日到期', 'active', 5, 'CNY', '2026-01-01T00:00:00Z', '2025-01-01T00:00:00Z', '2025-01-01T00:00:00Z')`, nil},
+		{`INSERT INTO users (id, display_name, status, monthly_fee, currency, expiry_time, created_at, updated_at) VALUES ('revenue-start-boundary', '起始日到期', 'active', 5, 'CNY', '2025-12-31T16:00:00Z', '2025-01-01T00:00:00Z', '2025-01-01T00:00:00Z')`, nil},
 	}
 	for _, statement := range statements {
 		if _, err := database.Exec(statement.query, statement.args...); err != nil {

@@ -22,8 +22,8 @@ func TestHistoricalBillingImportPreviewAndVerification(t *testing.T) {
 	login := doJSON(t, ts.Client(), http.MethodPost, ts.URL+"/api/auth/login", "", map[string]string{"userName": "admin", "password": "test-password"})
 	token := login["data"].(map[string]any)["token"].(string)
 	rows := []any{
-		map[string]any{"userId": "history-user", "billingCycle": "monthly", "amount": 100, "serviceFrom": "2026-03-01", "serviceTo": "2026-04-01", "paidAt": "2026-03-01", "orderType": "initial", "verified": true},
-		map[string]any{"userId": "history-user", "billingCycle": "monthly", "amount": 100, "serviceFrom": "2026-04-01", "serviceTo": "2026-05-01", "orderType": "renewal", "verified": false},
+		map[string]any{"userId": "history-user", "billingCycle": "monthly", "amount": 100, "serviceFrom": "2026-03-01T00:00:00+08:00", "serviceTo": "2026-04-01T00:00:00+08:00", "paidAt": "2026-03-01T00:00:00+08:00", "orderType": "initial", "verified": true},
+		map[string]any{"userId": "history-user", "billingCycle": "monthly", "amount": 100, "serviceFrom": "2026-04-01T00:00:00+08:00", "serviceTo": "2026-05-01T00:00:00+08:00", "orderType": "renewal", "verified": false},
 	}
 	preview := doJSON(t, ts.Client(), http.MethodPost, ts.URL+"/api/billing/import", token, map[string]any{"records": rows, "dryRun": true})
 	if preview["code"] != successCode || preview["data"].(map[string]any)["imported"] != float64(0) || len(preview["data"].(map[string]any)["records"].([]any)) != 2 {
@@ -51,7 +51,7 @@ func TestHistoricalBillingImportPreviewAndVerification(t *testing.T) {
 	if finance["code"] != successCode || finance["data"].(map[string]any)["cashIncome"] != float64(0) || finance["data"].(map[string]any)["monthIncome"] != float64(0) {
 		t.Fatalf("unverified income included: %#v", finance)
 	}
-	verified := doJSON(t, ts.Client(), http.MethodPost, ts.URL+"/api/users/history-user/billing-records/"+pendingID+"/verify", token, map[string]any{"paidAt": "2026-04-01"})
+	verified := doJSON(t, ts.Client(), http.MethodPost, ts.URL+"/api/users/history-user/billing-records/"+pendingID+"/verify", token, map[string]any{"paidAt": "2026-04-01T00:00:00+08:00"})
 	if verified["code"] != successCode {
 		t.Fatalf("verify = %#v", verified)
 	}

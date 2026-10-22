@@ -179,10 +179,10 @@ func (s *Server) costsTrend(w http.ResponseWriter, r *http.Request) {
 	if months > 24 {
 		months = 24
 	}
-	now := time.Now().UTC()
+	now := time.Now()
 	items := make([]map[string]any, 0, months)
 	for index := months - 1; index >= 0; index-- {
-		period := now.AddDate(0, -index, 0).Format("2006-01")
+		period := businessMonthPeriod(now.AddDate(0, -index, 0))
 		summary, err := s.financeSummary(period)
 		if err != nil {
 			s.logger.Error("compute finance trend month", "period", period, "error", err)

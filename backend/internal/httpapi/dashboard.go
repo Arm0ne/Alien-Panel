@@ -347,7 +347,7 @@ func (s *Server) dashboard(w http.ResponseWriter, r *http.Request) {
 		writeFailure(w, http.StatusInternalServerError, internalErrorCode, "could not read dashboard events")
 		return
 	}
-	finance, err := s.financeSummary(now.Format("2006-01"))
+	finance, err := s.financeSummary(businessMonthPeriod(now))
 	if err != nil {
 		writeFailure(w, http.StatusInternalServerError, internalErrorCode, "could not read finance summary")
 		return

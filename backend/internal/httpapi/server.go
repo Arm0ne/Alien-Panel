@@ -2980,7 +2980,7 @@ type financeResponse struct {
 func (s *Server) finance(w http.ResponseWriter, r *http.Request) {
 	period := r.URL.Query().Get("period")
 	if period == "" {
-		period = time.Now().UTC().Format("2006-01")
+		period = businessMonthPeriod(time.Now())
 	}
 	result, err := s.financeSummary(period)
 	if err != nil {
@@ -2992,6 +2992,10 @@ func (s *Server) finance(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) financeSummary(period string) (financeResponse, error) {
 	start, end, err := monthBounds(period)
+	if err != nil {
+		return financeResponse{}, errors.New("period must use YYYY-MM format")
+	}
+	startDate, endDate, err := monthDateBounds(period)
 	if err != nil {
 		return financeResponse{}, errors.New("period must use YYYY-MM format")
 	}
@@ -3034,13 +3038,13 @@ WHERE currency = 'CNY' AND status = 'confirmed' AND COALESCE(verification_status
 	// Cost dates are stored as calendar dates with inclusive effective_to.
 	// Compare them as dates against the half-open month [start, end) so a
 	// record beginning on the first day of the next month is not included.
-	if err := s.db.QueryRow(`SELECT COALESCE(SUM(monthly_amount), 0) FROM node_costs WHERE currency = 'CNY' AND date(effective_from) < date(?) AND (effective_to IS NULL OR date(effective_to) >= date(?))`, end, start).Scan(&nodeCost); err != nil {
+	if err := s.db.QueryRow(`SELECT COALESCE(SUM(monthly_amount), 0) FROM node_costs WHERE currency = 'CNY' AND date(effective_from) < date(?) AND (effective_to IS NULL OR date(effective_to) >= date(?))`, endDate, startDate).Scan(&nodeCost); err != nil {
 		return financeResponse{}, err
 	}
-	if err := s.db.QueryRow(`SELECT COALESCE(SUM(monthly_amount), 0) FROM other_costs WHERE currency = 'CNY' AND date(effective_from) < date(?) AND (effective_to IS NULL OR date(effective_to) >= date(?))`, end, start).Scan(&otherCost); err != nil {
+	if err := s.db.QueryRow(`SELECT COALESCE(SUM(monthly_amount), 0) FROM other_costs WHERE currency = 'CNY' AND date(effective_from) < date(?) AND (effective_to IS NULL OR date(effective_to) >= date(?))`, endDate, startDate).Scan(&otherCost); err != nil {
 		return financeResponse{}, err
 	}
-	if err := s.db.QueryRow(`SELECT COALESCE(SUM(monthly_cost), 0) FROM exit_ips WHERE currency = 'CNY' AND enabled = 1 AND (valid_from IS NULL OR date(valid_from) < date(?)) AND (valid_to IS NULL OR date(valid_to) >= date(?))`, end, start).Scan(&exitCost); err != nil {
+	if err := s.db.QueryRow(`SELECT COALESCE(SUM(monthly_cost), 0) FROM exit_ips WHERE currency = 'CNY' AND enabled = 1 AND (valid_from IS NULL OR date(valid_from) < date(?)) AND (valid_to IS NULL OR date(valid_to) >= date(?))`, endDate, startDate).Scan(&exitCost); err != nil {
 		return financeResponse{}, err
 	}
 	result.Breakdown = append(result.Breakdown,
@@ -3106,11 +3110,15 @@ ORDER BY datetime(b.paid_at) DESC, b.created_at DESC LIMIT 500`, start, end)
 		return err
 	}
 
+	startDate, endDate, err := monthDateBounds(period)
+	if err != nil {
+		return err
+	}
 	result.CostDetails = make([]map[string]any, 0)
 	rows, err = s.db.Query(`SELECT c.id, 'node', COALESCE(n.name, ''), c.category, c.monthly_amount, c.currency, c.effective_from, COALESCE(c.effective_to, ''), COALESCE(c.notes, '') FROM node_costs c LEFT JOIN nodes n ON n.id = c.node_id WHERE c.currency = 'CNY' AND date(c.effective_from) < date(?) AND (c.effective_to IS NULL OR date(c.effective_to) >= date(?))
 UNION ALL SELECT c.id, 'other', c.name, c.category, c.monthly_amount, c.currency, c.effective_from, COALESCE(c.effective_to, ''), COALESCE(c.notes, '') FROM other_costs c WHERE c.currency = 'CNY' AND date(c.effective_from) < date(?) AND (c.effective_to IS NULL OR date(c.effective_to) >= date(?) )
 UNION ALL SELECT e.id, 'ip', e.ip, 'exit_ip', e.monthly_cost, e.currency, COALESCE(e.valid_from, '1970-01-01'), COALESCE(e.valid_to, ''), COALESCE(e.notes, '') FROM exit_ips e WHERE e.currency = 'CNY' AND e.enabled = 1 AND (e.valid_from IS NULL OR date(e.valid_from) < date(?)) AND (e.valid_to IS NULL OR date(e.valid_to) >= date(?))
-ORDER BY effective_from DESC`, end, start, end, start, end, start)
+ORDER BY effective_from DESC`, endDate, startDate, endDate, startDate, endDate, startDate)
 	if err != nil {
 		return err
 	}
@@ -3439,12 +3447,32 @@ func positiveInt(value string, fallback int) int {
 	return parsed
 }
 
+// monthBounds resolves a YYYY-MM period to a UTC time range using the same
+// UTC+8 business calendar as the dashboard, so finance and operations pages
+// always agree on which month a timestamp belongs to.
 func monthBounds(period string) (string, string, error) {
-	start, err := time.Parse("2006-01", period)
+	start, err := time.ParseInLocation("2006-01", period, dashboardBusinessLocation)
 	if err != nil {
 		return "", "", err
 	}
 	return start.UTC().Format(time.RFC3339Nano), start.AddDate(0, 1, 0).UTC().Format(time.RFC3339Nano), nil
+}
+
+// businessMonthPeriod returns the UTC+8 calendar month for a timestamp.
+func businessMonthPeriod(now time.Time) string {
+	return now.In(dashboardBusinessLocation).Format("2006-01")
+}
+
+// monthDateBounds returns the UTC+8 calendar month as plain dates. Date-only
+// columns (node costs, other costs, exit IP validity) are compared against
+// these instead of UTC instants, otherwise an 8-hour shift would pull the last
+// day of the previous month into the current month.
+func monthDateBounds(period string) (string, string, error) {
+	start, err := time.ParseInLocation("2006-01", period, dashboardBusinessLocation)
+	if err != nil {
+		return "", "", err
+	}
+	return start.Format("2006-01-02"), start.AddDate(0, 1, 0).Format("2006-01-02"), nil
 }
 
 func nullableString(value string) any {
