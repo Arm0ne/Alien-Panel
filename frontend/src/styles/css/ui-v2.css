@@ -466,7 +466,67 @@ body {
   gap: 6px;
 }
 
-/* 顶栏搜索：胶囊输入框 */
+/* 顶栏搜索：胶囊按钮（点击或 Ctrl/Cmd+K 打开搜索面板） */
+.search-pill {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 32px;
+  width: 232px;
+  padding: 0 10px;
+  border: 1px solid #24272e;
+  border-radius: 9px;
+  background: #14161a;
+  color: #6b727c;
+  font-size: 12.5px;
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.search-pill:hover {
+  background: #191c21;
+  border-color: #2c3037;
+}
+
+.search-pill-ico {
+  width: 14px;
+  height: 14px;
+  flex: none;
+}
+
+.search-pill-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-align: left;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.search-pill-kbd {
+  flex: none;
+  padding: 1px 6px;
+  border: 1px solid #2a2e35;
+  border-radius: 5px;
+  background: #1c1f24;
+  color: #6f7681;
+  font-family: inherit;
+  font-size: 10.5px;
+}
+
+@media (max-width: 1200px) {
+  .search-pill {
+    width: 32px;
+    justify-content: center;
+    padding: 0;
+  }
+
+  .search-pill-text,
+  .search-pill-kbd {
+    display: none;
+  }
+}
+
 .v2-header-actions .n-input {
   width: 232px;
   border-radius: 9px;
