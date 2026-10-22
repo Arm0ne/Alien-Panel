@@ -62,14 +62,15 @@ type agentHeartbeatRequest struct {
 }
 
 type agentClientPayload struct {
-	RemoteID   string `json:"remote_id"`
-	Email      string `json:"email"`
-	Enable     bool   `json:"enable"`
-	ExpiryTime int64  `json:"expiry_time"`
-	Up         int64  `json:"up"`
-	Down       int64  `json:"down"`
-	AllTime    int64  `json:"all_time"`
-	LastOnline int64  `json:"last_online"`
+	RemoteID   string  `json:"remote_id"`
+	Email      string  `json:"email"`
+	Enable     bool    `json:"enable"`
+	ExpiryTime int64   `json:"expiry_time"`
+	Up         int64   `json:"up"`
+	Down       int64   `json:"down"`
+	AllTime    int64   `json:"all_time"`
+	LastOnline int64   `json:"last_online"`
+	TotalGB    float64 `json:"total_gb"`
 }
 
 type agentInboundPayload struct {
@@ -398,10 +399,10 @@ FROM inbounds i LEFT JOIN users u ON u.id = i.user_id WHERE i.id = ?`, inboundID
 				continue
 			}
 			clientCount++
-			_, err := tx.Exec(`INSERT INTO clients (id, node_id, inbound_id, remote_client_id, email, enable, expiry_time, up, down, all_time, last_online, last_seen_at)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-ON CONFLICT(node_id, inbound_id, remote_client_id) DO UPDATE SET email = excluded.email, enable = excluded.enable, expiry_time = excluded.expiry_time, up = excluded.up, down = excluded.down, all_time = excluded.all_time, last_online = excluded.last_online, last_seen_at = excluded.last_seen_at`,
-				newID(), principal.NodeID, inboundID, client.RemoteID, client.Email, boolInt(client.Enable), epochString(client.ExpiryTime), client.Up, client.Down, client.AllTime, epochString(client.LastOnline), observedAt.Format(time.RFC3339Nano))
+			_, err := tx.Exec(`INSERT INTO clients (id, node_id, inbound_id, remote_client_id, email, enable, expiry_time, up, down, all_time, last_online, last_seen_at, quota_bytes)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT(node_id, inbound_id, remote_client_id) DO UPDATE SET email = excluded.email, enable = excluded.enable, expiry_time = excluded.expiry_time, up = excluded.up, down = excluded.down, all_time = excluded.all_time, last_online = excluded.last_online, last_seen_at = excluded.last_seen_at, quota_bytes = excluded.quota_bytes`,
+				newID(), principal.NodeID, inboundID, client.RemoteID, client.Email, boolInt(client.Enable), epochString(client.ExpiryTime), client.Up, client.Down, client.AllTime, epochString(client.LastOnline), observedAt.Format(time.RFC3339Nano), quotaBytes(client.TotalGB))
 			if err != nil {
 				s.failSync(w, tx, syncRunID, fmt.Errorf("upsert client %s: %w", client.RemoteID, err))
 				return
@@ -1291,6 +1292,15 @@ func parseObservedAt(value string) (time.Time, error) {
 		return time.Time{}, err
 	}
 	return parsed.UTC(), nil
+}
+
+// quotaBytes converts an X-Panel totalGB quota into bytes. 0 stays 0 so the UI
+// can distinguish "unknown/unlimited" from a real quota.
+func quotaBytes(totalGB float64) int64 {
+	if totalGB <= 0 {
+		return 0
+	}
+	return int64(totalGB * (1 << 30))
 }
 
 func epochString(value int64) any {

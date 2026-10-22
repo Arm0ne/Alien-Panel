@@ -62,6 +62,33 @@ export async function restoreSystemBackup(file: File) {
   return body.data as { restored: boolean; previousBackup: string; requiresLogin: boolean };
 }
 
+/** List server-side backups created from the panel or CLI. */
+export function fetchBackups() {
+  return request<Api.Central.BackupListResult>({ url: '/system/backups' });
+}
+
+/** Create a manual backup stored on the server (not downloaded). */
+export function createServerBackup() {
+  return request<{ name: string; size: number }>({ url: '/system/backups', method: 'post' });
+}
+
+/** Run a SQLite integrity check against one stored backup. */
+export function verifyServerBackup(name: string) {
+  return request<{ ok: boolean; message?: string }>({
+    url: '/system/backups/verify',
+    method: 'post',
+    data: { name }
+  });
+}
+
+/** Delete one stored backup (the newest one is protected by the backend). */
+export function deleteServerBackup(name: string) {
+  return request<{ deleted: string }>({
+    url: `/system/backups/${encodeURIComponent(name)}`,
+    method: 'delete'
+  });
+}
+
 export function fetchUsers(params: Api.Central.PageParams = {}) {
   return request<Api.Central.UserListResult>({ url: '/users', params });
 }
@@ -372,6 +399,24 @@ export function deleteExitIp(id: string) {
 
 export function fetchFinanceSummary(params: { period?: string } = {}) {
   return request<Api.Central.FinanceSummary>({ url: '/costs/summary', params });
+}
+
+/** Aggregated event counters for the events page (server-side). */
+export function fetchEventStats(params: { window?: string } = {}) {
+  return request<Api.Central.EventStats>({ url: '/events/stats', params });
+}
+
+/** Monthly finance series computed server-side. */
+export function fetchCostsTrend(params: { months?: number } = {}) {
+  return request<{ items: Api.Central.CostsTrendPoint[] }>({ url: '/costs/trend', params });
+}
+
+/** Pending Agent-detected renewals across all users. */
+export function fetchRenewalCandidates(params: { period?: string } = {}) {
+  return request<{ items: Api.Central.RenewalCandidate[]; total: number }>({
+    url: '/renewal-candidates',
+    params
+  });
 }
 
 export function fetchEvents(params: Api.Central.PageParams = {}) {

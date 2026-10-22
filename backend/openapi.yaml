@@ -37,6 +37,46 @@ paths:
                 type: string
                 format: binary
         '401': { description: Authentication required }
+  /system/backups:
+    get:
+      summary: List server-side backups
+      responses:
+        '200': { description: Backup files newest first, plus the newest protected name }
+    post:
+      summary: Create a manual server-side backup
+      description: Writes a timestamped snapshot into the backup directory without pruning.
+      responses:
+        '200': { description: Created backup name and size }
+  /system/backups/verify:
+    post:
+      summary: Verify one stored backup
+      description: Runs a SQLite integrity check and returns ok=false with a reason when the file is unusable.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name: { type: string }
+      responses:
+        '200': { description: Verification result }
+        '400': { description: Invalid backup name }
+  /system/backups/{name}:
+    parameters:
+      - name: name
+        in: path
+        required: true
+        schema: { type: string }
+    delete:
+      summary: Delete one stored backup
+      description: Only plain panel-*.sqlite3 names are accepted; the newest backup is protected.
+      responses:
+        '200': { description: Deleted backup name }
+        '400': { description: Invalid backup name }
+        '404': { description: Backup not found }
+        '409': { description: The newest backup is protected }
   /system/restore:
     post:
       summary: Validate and restore a SQLite backup
@@ -821,6 +861,7 @@ paths:
         - $ref: '#/components/parameters/PageSize'
         - $ref: '#/components/parameters/Keyword'
         - $ref: '#/components/parameters/Status'
+        - $ref: '#/components/parameters/Region'
       responses:
         '200': { description: Paginated exit IPs }
     post:
@@ -936,8 +977,50 @@ paths:
         - $ref: '#/components/parameters/Severity'
         - $ref: '#/components/parameters/Status'
         - $ref: '#/components/parameters/EventCategory'
+        - name: type
+          in: query
+          description: Exact event type filter, for example sync_failed.
+          schema: { type: string }
+        - name: from
+          in: query
+          description: Inclusive lower bound (RFC3339) on the event time.
+          schema: { type: string, format: date-time }
+        - name: to
+          in: query
+          description: Exclusive upper bound (RFC3339) on the event time.
+          schema: { type: string, format: date-time }
       responses:
         '200': { description: Paginated events }
+  /events/stats:
+    get:
+      summary: Aggregated event counters for the event center
+      parameters:
+        - name: window
+          in: query
+          description: Window token such as 7d, 30d or today. Defaults to 7d.
+          schema: { type: string }
+      responses:
+        '200': { description: Pending/unread counters plus category, severity and type distributions }
+  /costs/trend:
+    get:
+      summary: Monthly finance trend series
+      parameters:
+        - name: months
+          in: query
+          description: Number of months ending with the current month (1-24).
+          schema: { type: integer, minimum: 1, maximum: 24, default: 12 }
+      responses:
+        '200': { description: Monthly income, cost and renewal series }
+  /renewal-candidates:
+    get:
+      summary: Pending Agent-detected renewal candidates
+      parameters:
+        - name: period
+          in: query
+          description: Optional YYYY-MM period filtering by detection month.
+          schema: { type: string, pattern: '^\d{4}-\d{2}$' }
+      responses:
+        '200': { description: Pending renewal candidates across all users }
   /events/summary:
     get:
       summary: Event notification counts
@@ -1032,6 +1115,11 @@ components:
       name: status
       in: query
       description: For events, use pending, alerts, open, unread, or resolved.
+      schema: { type: string }
+    Region:
+      name: region
+      in: query
+      description: Filter exit IP assets by country/region label (exact match on the effective region).
       schema: { type: string }
     NodeId:
       name: node_id
@@ -1891,6 +1979,7 @@ components:
         down: { type: integer, format: int64 }
         all_time: { type: integer, format: int64 }
         last_online: { type: integer, format: int64 }
+        total_gb: { type: number, description: X-Panel per-client traffic quota in GB; omitted or 0 means unknown/unlimited. }
     AgentInbound:
       type: object
       required: [remote_id]

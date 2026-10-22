@@ -19,7 +19,7 @@ const statusValue = computed(() => {
 });
 
 const statusMap: Record<string, { label: string; type: 'default' | 'warning' | 'success' | 'error' }> = {
-  active: { label: '有效', type: 'success' },
+  active: { label: '启用中', type: 'success' },
   expiring: { label: '即将到期', type: 'warning' },
   expired: { label: '已到期', type: 'error' },
   disabled: { label: '已停用', type: 'default' },

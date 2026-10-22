@@ -158,8 +158,15 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/events/{id}/reset-user", s.requireAuth(http.HandlerFunc(s.resetUserFromReplacementEvent)))
 	mux.Handle("POST /api/events/{id}/resolve", s.requireAuth(http.HandlerFunc(s.resolveEvent)))
 	mux.Handle("GET /api/events", s.requireAuth(http.HandlerFunc(s.events)))
+	mux.Handle("GET /api/events/stats", s.requireAuth(http.HandlerFunc(s.eventsStats)))
+	mux.Handle("GET /api/costs/trend", s.requireAuth(http.HandlerFunc(s.costsTrend)))
+	mux.Handle("GET /api/renewal-candidates", s.requireAuth(http.HandlerFunc(s.renewalCandidates)))
 	mux.Handle("POST /api/inbounds/{id}/reset-user", s.requireAuth(http.HandlerFunc(s.resetInboundUser)))
 	mux.Handle("GET /api/system/backups/download", s.requireAuth(http.HandlerFunc(s.downloadBackup)))
+	mux.Handle("GET /api/system/backups", s.requireAuth(http.HandlerFunc(s.listBackups)))
+	mux.Handle("POST /api/system/backups", s.requireAuth(http.HandlerFunc(s.createBackup)))
+	mux.Handle("POST /api/system/backups/verify", s.requireAuth(http.HandlerFunc(s.verifyBackup)))
+	mux.Handle("DELETE /api/system/backups/{name}", s.requireAuth(http.HandlerFunc(s.deleteBackup)))
 	mux.Handle("POST /api/system/restore", s.requireAuth(http.HandlerFunc(s.restoreBackup)))
 
 	return s.withSecurityHeaders(s.withRequestID(s.withCORS(s.withDatabaseLock(mux))))
@@ -429,11 +436,12 @@ WHERE ` + strings.Join(where, " AND ")
 		writeFailure(w, http.StatusInternalServerError, internalErrorCode, "could not read user statistics")
 		return
 	}
-	rows, err := s.db.Query(`SELECT u.id, u.display_name, u.status, COALESCE(u.billing_type, 'paid'), COALESCE(u.expiry_time, ''),
+	rows, err := s.db.Query(`SELECT u.id, u.display_name, u.status, COALESCE(u.billing_type, 'paid'), COALESCE(u.billing_cycle, 'monthly'), COALESCE(u.billing_amount, u.monthly_fee), COALESCE(u.expiry_time, ''),
 COALESCE(i.node_id, ''), COALESCE(n.name, ''), COALESCE(i.tag, ''),
 COALESCE((SELECT r.name FROM user_routes ur JOIN routes r ON r.id = ur.route_id
  WHERE ur.user_id = u.id AND ur.is_primary = 1 AND ur.active_to IS NULL ORDER BY ur.active_from DESC LIMIT 1), ''),
 COALESCE(i.client_count, 0),
+COALESCE((SELECT MAX(c.quota_bytes) FROM clients c WHERE c.inbound_id = i.id), 0),
 (CASE WHEN COALESCE(i.up, 0) > COALESCE(i.traffic_baseline_up, 0) THEN COALESCE(i.up, 0) - COALESCE(i.traffic_baseline_up, 0) ELSE 0 END
  + CASE WHEN COALESCE(i.down, 0) > COALESCE(i.traffic_baseline_down, 0) THEN COALESCE(i.down, 0) - COALESCE(i.traffic_baseline_down, 0) ELSE 0 END),
 COALESCE((SELECT MAX(NULLIF(c.last_online, '')) FROM clients c WHERE c.inbound_id = i.id), ''),
@@ -452,16 +460,18 @@ ORDER BY CASE WHEN u.expiry_time IS NULL THEN 1 ELSE 0 END, u.expiry_time ASC LI
 	defer rows.Close()
 	items := make([]map[string]any, 0)
 	for rows.Next() {
-		var id, name, status, billingType, expiry, nodeID, nodeName, inboundTag, routeName, lastActivity, landingName, landingInboundTag, exitIP, exitOwner, pathMode, pathID string
+		var id, name, status, billingType, billingCycle, expiry, nodeID, nodeName, inboundTag, routeName, lastActivity, landingName, landingInboundTag, exitIP, exitOwner, pathMode, pathID string
 		var clientCount int
+		var quota int64
+		var billingAmount float64
 		var traffic int64
-		if err := rows.Scan(&id, &name, &status, &billingType, &expiry, &nodeID, &nodeName, &inboundTag, &routeName, &clientCount, &traffic, &lastActivity, &landingName, &landingInboundTag, &exitIP, &exitOwner, &pathMode, &pathID); err != nil {
+		if err := rows.Scan(&id, &name, &status, &billingType, &billingCycle, &billingAmount, &expiry, &nodeID, &nodeName, &inboundTag, &routeName, &clientCount, &quota, &traffic, &lastActivity, &landingName, &landingInboundTag, &exitIP, &exitOwner, &pathMode, &pathID); err != nil {
 			writeFailure(w, http.StatusInternalServerError, internalErrorCode, "could not decode users")
 			return
 		}
 		items = append(items, map[string]any{
 			"id": id, "name": name, "nodeId": nodeID, "nodeName": nodeName, "inboundTag": inboundTag, "routeName": nullableString(routeName),
-			"status": status, "billingType": billingType, "expiresAt": nullableString(expiry), "clientCount": clientCount,
+			"status": status, "billingType": billingType, "billingCycle": billingCycle, "billingAmount": billingAmount, "expiresAt": nullableString(expiry), "clientCount": clientCount, "quotaBytes": quota,
 			"trafficBytes": traffic, "lastActivityAt": nullableString(lastActivity),
 			"landingNodeName": nullableString(landingName), "landingInboundTag": nullableString(landingInboundTag), "exitIpAddress": nullableString(exitIP),
 			"exitIpOwnerNodeName": nullableString(exitOwner), "pathMode": nullableString(pathMode),
@@ -2825,6 +2835,10 @@ func (s *Server) exitIPs(w http.ResponseWriter, r *http.Request) {
 		like := "%" + query.keyword + "%"
 		args = append(args, like, like, like, like, like)
 	}
+	if query.region != "" {
+		where = append(where, `COALESCE(CASE WHEN COALESCE(e.source_type, 'node') = 's5' THEN e.region ELSE owner.region END, '') = ?`)
+		args = append(args, query.region)
+	}
 	switch query.status {
 	case "active":
 		where = append(where, "e.enabled = 1")
@@ -2856,7 +2870,7 @@ WHERE ` + strings.Join(where, " AND ")
 	COALESCE(e.landing_node_id, ''), COALESCE(landing.name, ''), e.family, COALESCE(CASE WHEN COALESCE(e.source_type, 'node') = 's5' THEN e.region ELSE owner.region END, ''), COALESCE(e.provider, ''), e.enabled, e.monthly_cost, e.currency,
 (SELECT COUNT(DISTINCT p.user_id) FROM user_paths p
 JOIN users u ON u.id = p.user_id
-WHERE `+exitIPAllocatedUserPredicate("e.id")+`), e.updated_at, COALESCE(e.valid_to, '')
+WHERE `+exitIPAllocatedUserPredicate("e.id")+`), e.updated_at, COALESCE(e.valid_to, ''), COALESCE(e.notes, '')
 `+base+` ORDER BY e.ip ASC LIMIT ? OFFSET ?`, append(args, query.pageSize, query.offset)...)
 	if err != nil {
 		writeFailure(w, http.StatusInternalServerError, internalErrorCode, "could not read exit IPs")
@@ -2865,10 +2879,10 @@ WHERE `+exitIPAllocatedUserPredicate("e.id")+`), e.updated_at, COALESCE(e.valid_
 	defer rows.Close()
 	items := make([]map[string]any, 0)
 	for rows.Next() {
-		var id, ip, sourceType, ownerNodeID, ownerNodeName, ownerNodeType, landingNodeID, landing, region, provider, currency, checkedAt, validTo string
+		var id, ip, sourceType, ownerNodeID, ownerNodeName, ownerNodeType, landingNodeID, landing, region, provider, currency, checkedAt, validTo, notes string
 		var family, enabled, allocated int
 		var monthlyCost float64
-		if err := rows.Scan(&id, &ip, &sourceType, &ownerNodeID, &ownerNodeName, &ownerNodeType, &landingNodeID, &landing, &family, &region, &provider, &enabled, &monthlyCost, &currency, &allocated, &checkedAt, &validTo); err != nil {
+		if err := rows.Scan(&id, &ip, &sourceType, &ownerNodeID, &ownerNodeName, &ownerNodeType, &landingNodeID, &landing, &family, &region, &provider, &enabled, &monthlyCost, &currency, &allocated, &checkedAt, &validTo, &notes); err != nil {
 			writeFailure(w, http.StatusInternalServerError, internalErrorCode, "could not decode exit IPs")
 			return
 		}
@@ -2880,7 +2894,7 @@ WHERE `+exitIPAllocatedUserPredicate("e.id")+`), e.updated_at, COALESCE(e.valid_
 			"id": id, "address": ip, "sourceType": sourceType, "ownerNodeId": nullableString(ownerNodeID), "ownerNodeName": nullableString(ownerNodeName), "ownerNodeType": nullableString(ownerNodeType),
 			"landingNodeId": nullableString(landingNodeID), "landingNodeName": nullableString(landing), "region": nullableString(region), "family": family, "provider": nullableString(provider),
 			"status": status, "monthlyCost": monthlyCost, "currency": currency,
-			"allocatedUserCount": allocated, "checkedAt": nullableString(checkedAt), "validTo": nullableString(validTo),
+			"allocatedUserCount": allocated, "checkedAt": nullableString(checkedAt), "validTo": nullableString(validTo), "notes": nullableString(notes),
 		})
 	}
 	response := s.pageResponse(items, total, query)
@@ -3070,23 +3084,23 @@ FROM user_billing_records WHERE currency = 'CNY' AND status = 'confirmed' AND CO
 	}
 
 	result.Orders = make([]map[string]any, 0)
-	rows, err = s.db.Query(`SELECT b.id, COALESCE(b.order_no, ''), b.user_id, COALESCE(u.display_name, ''), COALESCE(b.order_type, 'initial'), b.billing_cycle, b.amount, b.currency, b.service_from, b.service_to, b.paid_at, b.source, COALESCE(i.tag, ''), COALESCE(n.name, '')
+	rows, err = s.db.Query(`SELECT b.id, COALESCE(b.order_no, ''), b.user_id, COALESCE(u.display_name, ''), COALESCE(b.order_type, 'initial'), b.billing_cycle, b.amount, b.currency, b.service_from, b.service_to, b.paid_at, b.source, COALESCE(i.tag, ''), COALESCE(n.name, ''), b.status, COALESCE(b.verification_status, 'verified')
 FROM user_billing_records b LEFT JOIN users u ON u.id = b.user_id
 LEFT JOIN user_inbounds ui ON ui.user_id = b.user_id AND ui.is_primary = 1 AND ui.active_to IS NULL
 LEFT JOIN inbounds i ON i.id = ui.inbound_id LEFT JOIN nodes n ON n.id = i.node_id
-WHERE b.status = 'confirmed' AND COALESCE(b.verification_status, 'verified') = 'verified' AND b.paid_at IS NOT NULL AND datetime(b.paid_at) >= datetime(?) AND datetime(b.paid_at) < datetime(?)
+WHERE b.status IN ('pending', 'confirmed') AND datetime(COALESCE(b.paid_at, b.created_at)) >= datetime(?) AND datetime(COALESCE(b.paid_at, b.created_at)) < datetime(?)
 ORDER BY datetime(b.paid_at) DESC, b.created_at DESC LIMIT 500`, start, end)
 	if err != nil {
 		return err
 	}
 	for rows.Next() {
-		var id, orderNo, userID, userName, orderType, cycle, currency, from, to, paidAt, source, inbound, node string
+		var id, orderNo, userID, userName, orderType, cycle, currency, from, to, paidAt, source, inbound, node, orderStatus, verificationStatus string
 		var amount float64
-		if err := rows.Scan(&id, &orderNo, &userID, &userName, &orderType, &cycle, &amount, &currency, &from, &to, &paidAt, &source, &inbound, &node); err != nil {
+		if err := rows.Scan(&id, &orderNo, &userID, &userName, &orderType, &cycle, &amount, &currency, &from, &to, &paidAt, &source, &inbound, &node, &orderStatus, &verificationStatus); err != nil {
 			_ = rows.Close()
 			return err
 		}
-		result.Orders = append(result.Orders, map[string]any{"id": id, "orderNo": nullableString(orderNo), "userId": userID, "userName": userName, "orderType": orderType, "billingCycle": cycle, "amount": amount, "currency": currency, "serviceFrom": from, "serviceTo": to, "paidAt": nullableString(paidAt), "source": source, "inboundTag": nullableString(inbound), "nodeName": nullableString(node)})
+		result.Orders = append(result.Orders, map[string]any{"id": id, "orderNo": nullableString(orderNo), "userId": userID, "userName": userName, "orderType": orderType, "billingCycle": cycle, "amount": amount, "currency": currency, "serviceFrom": from, "serviceTo": to, "paidAt": nullableString(paidAt), "source": source, "inboundTag": nullableString(inbound), "nodeName": nullableString(node), "status": orderStatus, "verificationStatus": verificationStatus})
 	}
 	if err := rows.Close(); err != nil {
 		return err
@@ -3163,6 +3177,18 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 	if query.category != "" {
 		where = append(where, "e.event_category = ?")
 		args = append(args, query.category)
+	}
+	if query.eventType != "" {
+		where = append(where, "e.event_type = ?")
+		args = append(args, query.eventType)
+	}
+	if query.from != "" {
+		where = append(where, "datetime(e.created_at) >= datetime(?)")
+		args = append(args, query.from)
+	}
+	if query.to != "" {
+		where = append(where, "datetime(e.created_at) < datetime(?)")
+		args = append(args, query.to)
 	}
 	switch query.status {
 	case "pending":
@@ -3357,6 +3383,10 @@ type listQuery struct {
 	nodeType    string
 	severity    string
 	category    string
+	region      string
+	eventType   string
+	from        string
+	to          string
 }
 
 func parseListQuery(r *http.Request) listQuery {
@@ -3371,6 +3401,10 @@ func parseListQuery(r *http.Request) listQuery {
 		billingType: strings.TrimSpace(r.URL.Query().Get("billing_type")),
 		nodeID:      strings.TrimSpace(r.URL.Query().Get("node_id")), nodeType: strings.TrimSpace(r.URL.Query().Get("node_type")),
 		severity: strings.TrimSpace(r.URL.Query().Get("severity")), category: strings.TrimSpace(r.URL.Query().Get("category")),
+		region: strings.TrimSpace(r.URL.Query().Get("region")),
+		eventType: strings.TrimSpace(r.URL.Query().Get("type")),
+		from:      strings.TrimSpace(r.URL.Query().Get("from")),
+		to:        strings.TrimSpace(r.URL.Query().Get("to")),
 	}
 }
 

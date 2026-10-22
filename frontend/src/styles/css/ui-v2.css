@@ -1,0 +1,627 @@
+/* ============================================================
+   Alien Panel · UI v2 全局样式
+   与 design-preview/assets/kit-v2.css 对齐：
+   深色实心面板、发丝描边、蓝 #4C6FFF 主色、次级文字最低 12px
+   ============================================================ */
+
+:root {
+  --ui2-bg: #0a0b0d;
+  --ui2-panel: #0f1013;
+  --ui2-card: #141519;
+  --ui2-card-hover: #191b20;
+  --ui2-line: #23262c;
+  --ui2-line-soft: #1c1f24;
+  --ui2-text-1: #f2f3f5;
+  --ui2-text-2: #bcc2cc;
+  --ui2-text-3: #9aa1ad;
+  --ui2-text-4: #868d99;
+  --ui2-brand: #4c6fff;
+  --ui2-radius: 14px;
+}
+
+html,
+body {
+  background: var(--ui2-bg);
+  color: var(--ui2-text-1);
+}
+
+body {
+  font-size: 13px;
+  line-height: 1.65;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/* 数字等宽，表格对齐更稳 */
+.n-data-table .n-data-table-td,
+.n-statistic-value,
+.n-number-animation {
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---------- 卡片：实心 + 发丝描边，去掉默认投影 ---------- */
+.n-card {
+  box-shadow: none !important;
+}
+
+.n-card > .n-card-header {
+  border-bottom: 1px solid var(--ui2-line-soft);
+  padding: 15px 18px;
+}
+
+.n-card > .n-card-header .n-card-header__main {
+  font-size: 14px;
+  font-weight: 600;
+}
+
+/* ---------- 数据表格：表头小字提亮、行高与 hover ---------- */
+.n-data-table .n-data-table-th {
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  color: var(--ui2-text-3);
+}
+
+.n-data-table .n-data-table-td {
+  font-size: 13px;
+  color: var(--ui2-text-2);
+}
+
+.n-data-table .n-data-table-tr:hover .n-data-table-td {
+  background-color: var(--ui2-card-hover) !important;
+}
+
+/* 表格内的次要信息（组件里用 .text-xs / .text-gray-500 时兜底提亮） */
+.n-data-table .n-data-table-td .text-xs,
+.n-data-table .n-data-table-td .text-12px {
+  font-size: 12px !important;
+  color: var(--ui2-text-3) !important;
+}
+
+/* ---------- 滚动条 ---------- */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(163, 177, 255, 0.16);
+  border: 3px solid transparent;
+  border-radius: 99px;
+  background-clip: padding-box;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(163, 177, 255, 0.28);
+  background-clip: padding-box;
+}
+
+/* ---------- 弹层统一圆角与描边 ---------- */
+.n-popover,
+.n-dropdown-menu,
+.n-select-menu {
+  border: 1px solid var(--ui2-line);
+}
+
+.n-drawer,
+.n-modal {
+  border: 1px solid var(--ui2-line);
+}
+
+/* ---------- 页面背景：纯色，无渐变 ---------- */
+.bg-layout {
+  background: var(--ui2-bg) !important;
+}
+
+/* 让全局小字不再小于 12px（设计规范下限） */
+.text-10px,
+.text-11px {
+  font-size: 12px !important;
+}
+
+/* ============================================================
+   页面级设计变量全局兜底
+   各业务页在自身根节点上定义了一套 --n- / --d- / --u- / --fin- / --e- 前缀变量，
+   但弹窗通过 Teleport 挂到 body，脱离页面根节点作用域会取不到值
+   （表现为弹窗背景透明）。这里在 :root 提供同名兜底值。
+   ============================================================ */
+:root {
+  /* nodes */
+  --n-card: #141519;
+  --n-card-hover: #191b20;
+  --n-line: #23262c;
+  --n-line-soft: #1c1f24;
+  --n-text-1: #f2f3f5;
+  --n-text-2: #bcc2cc;
+  --n-text-3: #9aa1ad;
+  --n-text-4: #868d99;
+  --n-brand: #4c6fff;
+  --n-brand-soft: rgba(76, 111, 255, 0.16);
+  --n-ok: #2ed47a;
+  --n-warn: #f5b93d;
+  --n-danger: #f3656f;
+  --n-info: #5aa9f0;
+  --n-violet: #a78bfa;
+  --n-radius: 14px;
+
+  /* nodes detail */
+  --d-card: #141519;
+  --d-card-hover: #191b20;
+  --d-line: #23262c;
+  --d-line-soft: #1c1f24;
+  --d-text-1: #f2f3f5;
+  --d-text-2: #bcc2cc;
+  --d-text-3: #9aa1ad;
+  --d-text-4: #868d99;
+  --d-brand: #4c6fff;
+  --d-ok: #2ed47a;
+  --d-warn: #f5b93d;
+  --d-danger: #f3656f;
+  --d-info: #5aa9f0;
+  --d-violet: #a78bfa;
+  --d-radius: 14px;
+
+  /* users */
+  --u-card: #141519;
+  --u-card-hover: #191b20;
+  --u-line: #23262c;
+  --u-line-soft: #1c1f24;
+  --u-text-1: #f2f3f5;
+  --u-text-2: #bcc2cc;
+  --u-text-3: #9aa1ad;
+  --u-text-4: #868d99;
+  --u-brand: #4c6fff;
+  --u-brand-soft: rgba(76, 111, 255, 0.16);
+  --u-ok: #2ed47a;
+  --u-ok-soft: rgba(46, 212, 122, 0.14);
+  --u-warn: #f5b93d;
+  --u-warn-soft: rgba(245, 185, 61, 0.14);
+  --u-danger: #f3656f;
+  --u-danger-soft: rgba(243, 101, 111, 0.14);
+  --u-info: #5aa9f0;
+  --u-info-soft: rgba(90, 169, 240, 0.14);
+  --u-violet: #a78bfa;
+  --u-violet-soft: rgba(167, 139, 250, 0.14);
+  --u-radius: 14px;
+
+  /* finance */
+  --fin-card: #141519;
+  --fin-card-hover: #191b20;
+  --fin-line: #23262c;
+  --fin-line-soft: #1c1f24;
+  --fin-text-1: #f2f3f5;
+  --fin-text-2: #bcc2cc;
+  --fin-text-3: #9aa1ad;
+  --fin-text-4: #868d99;
+  --fin-brand: #4c6fff;
+  --fin-brand-soft: rgba(76, 111, 255, 0.16);
+  --fin-ok: #2ed47a;
+  --fin-warn: #f5b93d;
+  --fin-danger: #f3656f;
+  --fin-info: #5aa9f0;
+  --fin-violet: #a78bfa;
+  --fin-cyan: #34d3e0;
+  --fin-pink: #f472b6;
+  --fin-radius: 14px;
+
+  /* events / exit-ips（共用 e- 前缀） */
+  --e-card: #141519;
+  --e-card-hover: #191b20;
+  --e-line: #23262c;
+  --e-line-soft: #1c1f24;
+  --e-text-1: #f2f3f5;
+  --e-text-2: #bcc2cc;
+  --e-text-3: #9aa1ad;
+  --e-text-4: #868d99;
+  --e-brand: #4c6fff;
+  --e-ok: #2ed47a;
+  --e-warn: #f5b93d;
+  --e-danger: #f3656f;
+  --e-info: #5aa9f0;
+  --e-violet: #a78bfa;
+  --e-cyan: #34d3e0;
+  --e-radius: 14px;
+}
+
+/* ============================================================
+   外壳：侧栏 / 顶栏 / 标签页
+   ============================================================ */
+
+/* ---------- 侧栏 ---------- */
+.v2-sider {
+  background: transparent;
+}
+
+.v2-sider-head {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  height: 62px;
+  padding: 0 16px;
+  flex: none;
+  border-bottom: 1px solid var(--ui2-line-soft);
+}
+
+.v2-brand-mark {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  flex: none;
+  border-radius: 9px;
+  background: linear-gradient(140deg, #6a72e0 0%, #4c54b8 55%, #3f4bb0 100%);
+  box-shadow: 0 8px 20px -10px rgba(76, 111, 255, 0.95), 0 0 0 1px rgba(255, 255, 255, 0.14) inset;
+  color: #ffffff;
+}
+
+.v2-brand-mark svg {
+  width: 17px;
+  height: 17px;
+}
+
+.v2-sider-brand {
+  min-width: 0;
+  line-height: 1.3;
+}
+
+.v2-sider-brand strong {
+  display: block;
+  font-size: 13px;
+  font-weight: 650;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #f2f3f5;
+  white-space: nowrap;
+}
+
+.v2-sider-brand span {
+  display: block;
+  margin-top: 1px;
+  font-size: 10.5px;
+  color: #868d99;
+  white-space: nowrap;
+}
+
+.v2-sider-nav {
+  flex: 1;
+  min-height: 0;
+  padding: 6px 10px 12px;
+  overflow-y: auto;
+}
+
+.v2-nav-group {
+  margin-top: 14px;
+}
+
+.v2-nav-group:first-child {
+  margin-top: 4px;
+}
+
+.v2-nav-group-title {
+  padding: 0 8px 6px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.13em;
+  color: #7f8792;
+}
+
+.v2-nav-item {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 38px;
+  padding: 0 10px;
+  margin-bottom: 2px;
+  border-radius: 9px;
+  color: #b0b6c1;
+  font-size: 13.5px;
+  text-decoration: none;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.v2-nav-item:hover {
+  background: #1a1c21;
+  color: #f2f3f5;
+}
+
+.v2-nav-item.is-active {
+  background: var(--ui2-brand);
+  color: #ffffff;
+  font-weight: 550;
+  box-shadow: 0 6px 16px -8px rgba(76, 111, 255, 0.8);
+}
+
+.v2-nav-icon {
+  width: 17px;
+  height: 17px;
+  flex: none;
+  color: #8a919c;
+}
+
+.v2-nav-item:hover .v2-nav-icon {
+  color: #c3c9d3;
+}
+
+.v2-nav-item.is-active .v2-nav-icon {
+  color: #ffffff;
+}
+
+.v2-nav-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.v2-nav-badge {
+  margin-left: auto;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 6px;
+  display: grid;
+  place-items: center;
+  border-radius: 99px;
+  border: 1px solid rgba(243, 101, 111, 0.34);
+  background: rgba(243, 101, 111, 0.16);
+  color: #ff9ba2;
+  font-size: 10.5px;
+  font-style: normal;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+}
+
+.v2-nav-badge.is-quiet {
+  border-color: #2a2e35;
+  background: #1d2026;
+  color: #b0b6c1;
+}
+
+/* 侧栏底部系统状态 */
+.v2-sider-status {
+  margin: 0 10px 10px;
+  padding: 11px 12px;
+  border: 1px solid var(--ui2-line-soft);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.022);
+}
+
+.v2-sider-status-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+  font-size: 10.5px;
+  letter-spacing: 0.12em;
+  color: #7f8792;
+}
+
+.v2-status-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #2ed47a;
+  box-shadow: 0 0 8px rgba(46, 212, 122, 0.6);
+}
+
+.v2-status-dot.is-off {
+  background: #f5b93d;
+  box-shadow: 0 0 8px rgba(245, 185, 61, 0.6);
+}
+
+.v2-sider-status-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 2px 0;
+  font-size: 11.5px;
+  color: #9aa1ad;
+}
+
+.v2-sider-status-row b {
+  font-weight: 600;
+  color: #e6e8ec;
+  font-variant-numeric: tabular-nums;
+}
+
+.v2-sider-status-row b.is-danger {
+  color: #ff9ba2;
+}
+
+/* 折叠态 */
+.v2-nav-item.is-collapsed {
+  justify-content: center;
+  padding: 0;
+}
+
+.v2-nav-item.is-collapsed .v2-nav-icon {
+  margin: 0;
+}
+
+/* ---------- 顶栏 ---------- */
+.v2-header {
+  height: 100%;
+  padding: 0 18px 0 20px;
+  background: transparent;
+  border-bottom: 1px solid var(--ui2-line-soft);
+  gap: 14px;
+}
+
+.v2-header-crumb {
+  margin-left: 10px;
+}
+
+.v2-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+}
+
+.v2-header-actions .n-button .n-button__content {
+  gap: 6px;
+}
+
+/* 顶栏搜索：胶囊按钮（点击或 Ctrl/Cmd+K 打开搜索面板） */
+.search-pill {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 32px;
+  width: 232px;
+  padding: 0 10px;
+  border: 1px solid #24272e;
+  border-radius: 9px;
+  background: #14161a;
+  color: #6b727c;
+  font-size: 12.5px;
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.search-pill:hover {
+  background: #191c21;
+  border-color: #2c3037;
+}
+
+.search-pill-ico {
+  width: 14px;
+  height: 14px;
+  flex: none;
+}
+
+.search-pill-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-align: left;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.search-pill-kbd {
+  flex: none;
+  padding: 1px 6px;
+  border: 1px solid #2a2e35;
+  border-radius: 5px;
+  background: #1c1f24;
+  color: #6f7681;
+  font-family: inherit;
+  font-size: 10.5px;
+}
+
+@media (max-width: 1200px) {
+  .search-pill {
+    width: 32px;
+    justify-content: center;
+    padding: 0;
+  }
+
+  .search-pill-text,
+  .search-pill-kbd {
+    display: none;
+  }
+}
+
+.v2-header-actions .n-input {
+  width: 232px;
+  border-radius: 9px;
+}
+
+/* ---------- 移动端（<=900px） ---------- */
+@media (max-width: 900px) {
+  .v2-header {
+    padding: 0 10px;
+    gap: 6px;
+  }
+
+  .v2-header-actions {
+    gap: 2px;
+    min-width: 0;
+  }
+
+  .v2-tabbar {
+    padding: 0 8px;
+  }
+
+  /* 页面根节点禁止撑破视口 */
+  .shell-content > * {
+    max-width: 100%;
+    min-width: 0;
+    overflow-x: hidden;
+  }
+
+  /* KPI 一律两列，避免 4/6/7 列在窄屏溢出 */
+  .dash-kpis,
+  .u-kpis,
+  .n-kpis,
+  .d-kpis,
+  .fin-kpis,
+  .e-kpis {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  }
+
+  .dash-split,
+  .fin-split,
+  .dash-three,
+  .n-grid,
+  .b-grid,
+  .d-meta-grid,
+  .d-detail-grid {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+
+  .dash-kpi,
+  .fin-kpi,
+  .u-kpi,
+  .n-kpi,
+  .d-kpi,
+  .e-kpi {
+    min-width: 0;
+  }
+
+  /* 宽表在窄屏内横向滚动，避免撑破面板 */
+  .dash-table-wrap,
+  .fin-table-wrap,
+  .u-table-wrap,
+  .e-table-wrap,
+  .d-table-wrap,
+  .b-card-body {
+    overflow-x: auto;
+  }
+
+  .b-table {
+    min-width: 520px;
+  }
+}
+
+/* ---------- 标签页 ---------- */
+.v2-tabbar {
+  background: transparent;
+  border-bottom: 1px solid var(--ui2-line-soft);
+  padding: 0 14px;
+  gap: 6px;
+  overflow: hidden;
+}
+
+/* button 模式标签：当前项带品牌色 */
+.v2-tabbar .n-tabs .n-tabs-tab.n-tabs-tab--active {
+  background: rgba(76, 111, 255, 0.18);
+  border-radius: 7px;
+  box-shadow: inset 0 -2px 0 var(--ui2-brand);
+}
+
+.v2-tabbar .n-tabs .n-tabs-tab.n-tabs-tab--active .n-tabs-tab__label,
+.v2-tabbar .n-tabs .n-tabs-tab.n-tabs-tab--active .n-base-icon {
+  color: #fff;
+}
+
+/* 兜底：PageTab 组件内的激活态标签（非 Naive Tabs 实现时） */
+.v2-tabbar [class*='tab'][class*='active'] {
+  color: #fff;
+}
+

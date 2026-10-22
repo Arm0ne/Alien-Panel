@@ -19,7 +19,15 @@ declare namespace Api {
       node_id?: string;
       node_type?: NodeType;
       billing_type?: BillingType;
-    }
+          /** Optional region/country filter for exit IP inventory */
+      region?: string;
+      /** Optional event type filter */
+      type?: string;
+      /** Optional inclusive lower bound (RFC3339) for event time filters */
+      from?: string;
+      /** Optional exclusive upper bound (RFC3339) for event time filters */
+      to?: string;
+}
 
     interface PageResult<T> {
       items: T[];
@@ -44,9 +52,12 @@ declare namespace Api {
       pathConfigured?: boolean;
       status: UserStatus;
       billingType: BillingType;
+      billingCycle?: string;
+      billingAmount?: number;
       expiresAt?: string;
       clientCount: number;
       trafficBytes: number;
+      quotaBytes?: number;
       lastActivityAt?: string;
       dataAt?: string | null;
     }
@@ -657,6 +668,7 @@ declare namespace Api {
       checkedAt?: string | null;
       validFrom?: string | null;
       validTo?: string | null;
+      notes?: string | null;
     }
 
     interface ExitIpCountryStat {
@@ -763,6 +775,8 @@ declare namespace Api {
         source: string;
         inboundTag: string | null;
         nodeName: string | null;
+        status?: string;
+        verificationStatus?: string;
       }>;
       costDetails?: Array<{
         id: string;
@@ -806,6 +820,59 @@ declare namespace Api {
       resolvedBy?: string | null;
       source?: string | null;
       correlationId?: string | null;
+    }
+
+    interface BackupEntry {
+      name: string;
+      size: number;
+      createdAt: string;
+    }
+
+    interface BackupListResult {
+      items: BackupEntry[];
+      total: number;
+      directory: string;
+      latest: string;
+    }
+
+    interface EventStats {
+      windowDays: number;
+      pendingCount: number;
+      unreadCount: number;
+      attentionCount: number;
+      processedToday: number;
+      resolvedInWindow: number;
+      avgHandleMinutes: number;
+      medianHandleMinutes: number;
+      totalCount: number;
+      autoRecoveredToday: number;
+      byCategory: Array<{ category: string; count: number }>;
+      bySeverity: Array<{ severity: string; count: number }>;
+      byType: Array<{ type: string; count: number }>;
+    }
+
+    interface CostsTrendPoint {
+      period: string;
+      income: number;
+      cost: number;
+      cashIncome: number;
+      renewalRate: number;
+      dueUsers: number;
+      renewedUsers: number;
+    }
+
+    interface RenewalCandidate {
+      id: string;
+      userId: string;
+      userName: string;
+      inboundId: string | null;
+      oldExpiryAt: string;
+      newExpiryAt: string;
+      detectedAt: string;
+      billingCycle: BillingCycle;
+      amount: number;
+      currency: string;
+      notes?: string | null;
     }
 
     interface EventSummaryCounts {

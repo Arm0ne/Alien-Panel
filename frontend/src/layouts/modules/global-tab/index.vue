@@ -3,7 +3,6 @@ import { nextTick, reactive, ref, watch } from 'vue';
 import { useRoute } from 'vue-router';
 import { useElementBounding } from '@vueuse/core';
 import { PageTab } from '@sa/materials';
-import { useAppStore } from '@/store/modules/app';
 import { useThemeStore } from '@/store/modules/theme';
 import { useTabStore } from '@/store/modules/tab';
 import { isPC } from '@/utils/agent';
@@ -16,7 +15,6 @@ defineOptions({
 });
 
 const route = useRoute();
-const appStore = useAppStore();
 const themeStore = useThemeStore();
 const tabStore = useTabStore();
 
@@ -119,10 +117,6 @@ function switchTab(e: MouseEvent, tab: App.Global.Tab) {
   tabStore.switchRouteByTab(tab);
 }
 
-async function refresh() {
-  appStore.reloadPage(500);
-}
-
 interface DropdownConfig {
   visible: boolean;
   x: number;
@@ -198,7 +192,7 @@ init();
 </script>
 
 <template>
-  <DarkModeContainer class="size-full flex-y-center px-16px shadow-tab">
+  <div class="v2-tabbar size-full flex-y-center">
     <div ref="bsWrapper" class="h-full flex-1-hidden" @wheel="handleWheel">
       <BetterScroll ref="bsScroll" :options="{ scrollX: true, scrollY: false, click: !isPCFlag }" @click="removeFocus">
         <div
@@ -230,9 +224,7 @@ init();
         </div>
       </BetterScroll>
     </div>
-    <ReloadButton :loading="!appStore.reloadFlag" @click="refresh" />
-    <FullScreen :full="appStore.fullContent" @click="appStore.toggleFullContent" />
-  </DarkModeContainer>
+  </div>
   <ContextMenu
     :visible="dropdown.visible"
     :tab-id="dropdown.tabId"

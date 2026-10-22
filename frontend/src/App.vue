@@ -4,6 +4,7 @@ import { NConfigProvider, darkTheme } from 'naive-ui';
 import type { WatermarkProps } from 'naive-ui';
 import { useAppStore } from './store/modules/app';
 import { useThemeStore } from './store/modules/theme';
+import { uiV2ThemeOverrides } from './theme/ui-v2';
 import { naiveDateLocales, naiveLocales } from './locales/naive';
 
 defineOptions({
@@ -12,6 +13,9 @@ defineOptions({
 
 const appStore = useAppStore();
 const themeStore = useThemeStore();
+
+// UI v2 设计 token：覆盖 Naive UI 组件外观（颜色/圆角/字号/输入框/表格等）
+themeStore.setNaiveThemeOverrides(uiV2ThemeOverrides);
 
 const naiveDarkTheme = computed(() => (themeStore.darkMode ? darkTheme : undefined));
 

@@ -271,3 +271,27 @@ func TestCollectorCollectsInboundAndStatusWithoutReset(t *testing.T) {
 		t.Fatalf("collector called reset endpoint: %v", paths)
 	}
 }
+
+func TestParseInboundReadsClientQuota(t *testing.T) {
+	payload := json.RawMessage(`{"id":7,"settings":{"clients":[
+		{"email":"alice","totalGB":100},
+		{"email":"bob","totalGB":"2.5"},
+		{"email":"carol"}
+	]}}`)
+	inbound, err := parseInbound(payload)
+	if err != nil {
+		t.Fatalf("parseInbound: %v", err)
+	}
+	if len(inbound.Clients) != 3 {
+		t.Fatalf("clients = %d, want 3", len(inbound.Clients))
+	}
+	if inbound.Clients[0].TotalGB != 100 {
+		t.Fatalf("alice totalGB = %v, want 100", inbound.Clients[0].TotalGB)
+	}
+	if inbound.Clients[1].TotalGB != 2.5 {
+		t.Fatalf("bob totalGB = %v, want 2.5", inbound.Clients[1].TotalGB)
+	}
+	if inbound.Clients[2].TotalGB != 0 {
+		t.Fatalf("carol totalGB = %v, want 0", inbound.Clients[2].TotalGB)
+	}
+}

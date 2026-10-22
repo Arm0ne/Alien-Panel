@@ -35,6 +35,9 @@ type Client struct {
 	Down       int64  `json:"down"`
 	AllTime    int64  `json:"all_time"`
 	LastOnline int64  `json:"last_online,omitempty"`
+	// TotalGB is the X-Panel per-client traffic quota in GB. 0 means the panel
+	// did not report a quota (unlimited or an older X-Panel build).
+	TotalGB float64 `json:"total_gb,omitempty"`
 }
 
 type Inbound struct {
@@ -275,6 +278,7 @@ func parseClient(raw json.RawMessage) (Client, error) {
 		Down:       intField(object, "down", "download"),
 		AllTime:    intField(object, "all_time", "allTime", "total"),
 		LastOnline: timestampField(object, "last_online", "lastOnline", "last_online_at", "lastOnlineAt", "last_online_time", "lastOnlineTime"),
+		TotalGB:    floatField(object, "totalGB", "total_gb", "totalGb"),
 	}
 	if client.AllTime == 0 {
 		client.AllTime = client.Up + client.Down
