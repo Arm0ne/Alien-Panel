@@ -3,7 +3,6 @@ import { computed } from 'vue';
 import { GLOBAL_SIDER_MENU_ID } from '@/constants/app';
 import { useAppStore } from '@/store/modules/app';
 import { useThemeStore } from '@/store/modules/theme';
-import GlobalLogo from '../global-logo/index.vue';
 
 defineOptions({
   name: 'GlobalSider'
@@ -12,25 +11,21 @@ defineOptions({
 const appStore = useAppStore();
 const themeStore = useThemeStore();
 
-const isTopHybridSidebarFirst = computed(() => themeStore.layout.mode === 'top-hybrid-sidebar-first');
-const isTopHybridHeaderFirst = computed(() => themeStore.layout.mode === 'top-hybrid-header-first');
-const darkMenu = computed(
-  () =>
-    !themeStore.darkMode && !isTopHybridSidebarFirst.value && !isTopHybridHeaderFirst.value && themeStore.sider.inverted
-);
 const showLogo = computed(() => themeStore.layout.mode === 'vertical');
 const menuWrapperClass = computed(() => (showLogo.value ? 'flex-1-hidden' : 'h-full'));
 </script>
 
 <template>
-  <DarkModeContainer class="size-full flex-col-stretch shadow-sider" :inverted="darkMenu">
-    <GlobalLogo
-      v-if="showLogo"
-      :show-title="!appStore.siderCollapse"
-      :style="{ height: themeStore.header.height + 'px' }"
-    />
-    <div :id="GLOBAL_SIDER_MENU_ID" :class="menuWrapperClass"></div>
-  </DarkModeContainer>
+  <div class="v2-sider size-full flex-col-stretch">
+    <div v-if="showLogo" class="v2-sider-head">
+      <SystemLogo class="v2-sider-logo" />
+      <div v-show="!appStore.siderCollapse" class="v2-sider-brand">
+        <strong>Alien Panel</strong>
+        <span>中央运营控制台</span>
+      </div>
+    </div>
+    <div :id="GLOBAL_SIDER_MENU_ID" class="v2-sider-menu" :class="menuWrapperClass"></div>
+  </div>
 </template>
 
 <style scoped></style>

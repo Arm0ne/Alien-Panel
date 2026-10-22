@@ -198,7 +198,7 @@ init();
 </script>
 
 <template>
-  <DarkModeContainer class="size-full flex-y-center px-16px shadow-tab">
+  <div class="v2-tabbar size-full flex-y-center">
     <div ref="bsWrapper" class="h-full flex-1-hidden" @wheel="handleWheel">
       <BetterScroll ref="bsScroll" :options="{ scrollX: true, scrollY: false, click: !isPCFlag }" @click="removeFocus">
         <div
@@ -232,7 +232,7 @@ init();
     </div>
     <ReloadButton :loading="!appStore.reloadFlag" @click="refresh" />
     <FullScreen :full="appStore.fullContent" @click="appStore.toggleFullContent" />
-  </DarkModeContainer>
+  </div>
   <ContextMenu
     :visible="dropdown.visible"
     :tab-id="dropdown.tabId"
