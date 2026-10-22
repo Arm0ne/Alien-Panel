@@ -291,8 +291,8 @@ const activeModule = computed(() => moduleMap[props.module || 'pwd-login']);
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 13px;
-  margin-bottom: 36px;
+  gap: 14px;
+  margin-bottom: 38px;
 }
 
 .form-mark {
@@ -302,8 +302,8 @@ const activeModule = computed(() => moduleMap[props.module || 'pwd-login']);
 
 .form-mark svg {
   display: block;
-  width: 40px;
-  height: 40px;
+  width: 48px;
+  height: 48px;
 }
 
 .form-sub {
@@ -396,8 +396,8 @@ const activeModule = computed(() => moduleMap[props.module || 'pwd-login']);
   }
 
   .form-mark svg {
-    width: 38px;
-    height: 38px;
+    width: 44px;
+    height: 44px;
   }
 
   .form-foot {
@@ -415,8 +415,8 @@ const activeModule = computed(() => moduleMap[props.module || 'pwd-login']);
   }
 
   .form-mark svg {
-    width: 34px;
-    height: 34px;
+    width: 40px;
+    height: 40px;
   }
 }
 

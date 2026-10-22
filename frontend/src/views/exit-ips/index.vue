@@ -637,7 +637,7 @@ onMounted(() => {
       <div class="e-kpi">
         <div class="e-kpi-top">
           <span class="e-kpi-label">空闲</span>
-          <span class="e-kpi-icon is-amber"><SvgIcon icon="mdi:activity" /></span>
+          <span class="e-kpi-icon is-amber"><SvgIcon icon="mdi:power-plug-off" /></span>
         </div>
         <div class="e-kpi-value">{{ stats ? stats.unassigned : '--' }}<span class="e-kpi-unit">个</span></div>
         <div class="e-kpi-foot">可继续配置使用</div>

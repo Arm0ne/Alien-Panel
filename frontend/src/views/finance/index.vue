@@ -1169,7 +1169,7 @@ onMounted(() => {
               <div class="fin-kpi">
                 <div class="fin-kpi-top">
                   <span class="fin-kpi-label">本月续费率</span>
-                  <span class="fin-kpi-icon is-green"><SvgIcon icon="mdi:activity" /></span>
+                  <span class="fin-kpi-icon is-green"><SvgIcon icon="mdi:chart-line" /></span>
                 </div>
                 <div class="fin-kpi-value">{{ formatPercentValue(renewal.renewalRate * 100) }}</div>
                 <div class="fin-kpi-foot">

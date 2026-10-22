@@ -527,7 +527,7 @@ onMounted(() => {
       <div class="n-kpi">
         <div class="n-kpi-top">
           <span class="n-kpi-label">在线节点</span>
-          <span class="n-kpi-icon is-green"><SvgIcon icon="mdi:activity" /></span>
+          <span class="n-kpi-icon is-green"><SvgIcon icon="mdi:access-point-network" /></span>
         </div>
         <div class="n-kpi-value">
           {{ stats ? stats.online : '--' }}<span class="n-kpi-unit">/ {{ stats ? stats.total : '--' }}</span>
