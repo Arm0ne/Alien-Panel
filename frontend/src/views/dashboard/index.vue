@@ -268,7 +268,19 @@ function buildTrafficOptions(): ECOption {
         data: points.map(point => point.downloadBytes),
         lineStyle: { width: 2.5, color: '#4c6fff' },
         itemStyle: { color: '#4c6fff' },
-        areaStyle: { color: 'rgba(76, 111, 255, 0.16)' }
+        areaStyle: {
+          color: {
+            type: 'linear',
+            x: 0,
+            y: 0,
+            x2: 0,
+            y2: 1,
+            colorStops: [
+              { offset: 0, color: 'rgba(76, 111, 255, 0.26)' },
+              { offset: 1, color: 'rgba(76, 111, 255, 0)' }
+            ]
+          }
+        }
       },
       {
         name: '上传累计',
@@ -597,7 +609,7 @@ onMounted(loadDashboard);
 .dash {
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: 18px;
 }
 
 /* ---------- 页头 ---------- */
@@ -693,11 +705,11 @@ onMounted(loadDashboard);
 .dash-kpis {
   display: grid;
   grid-template-columns: repeat(6, minmax(0, 1fr));
-  gap: 10px;
+  gap: 12px;
 }
 
 .dash-kpi {
-  padding: 13px 14px 12px;
+  padding: 15px 16px 14px;
   border: 1px solid #23262c;
   border-radius: 14px;
   background: #141519;
@@ -808,7 +820,7 @@ onMounted(loadDashboard);
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 14px 16px;
+  padding: 16px 18px;
   border-bottom: 1px solid #1c1f24;
 }
 
@@ -841,14 +853,14 @@ onMounted(loadDashboard);
 }
 
 .dash-card-body {
-  padding: 14px 16px 16px;
+  padding: 16px 18px 18px;
 }
 
 /* ---------- 趋势 ---------- */
 .dash-split {
   display: grid;
   grid-template-columns: minmax(0, 1.62fr) minmax(0, 1fr);
-  gap: 14px;
+  gap: 18px;
 }
 
 .dash-card-chart {
@@ -859,13 +871,13 @@ onMounted(loadDashboard);
 .dash-chart-wrap {
   position: relative;
   flex: 1;
-  min-height: 260px;
+  min-height: 280px;
 }
 
 .dash-chart {
   width: 100%;
   height: 100%;
-  min-height: 260px;
+  min-height: 280px;
 }
 
 .dash-chart-empty {
@@ -992,7 +1004,7 @@ onMounted(loadDashboard);
 }
 
 .dash-table thead th {
-  padding: 9px 14px;
+  padding: 10px 14px;
   border-bottom: 1px solid #23262c;
   font-size: 11.5px;
   font-weight: 600;
@@ -1007,7 +1019,7 @@ onMounted(loadDashboard);
 }
 
 .dash-table tbody td {
-  height: 44px;
+  height: 46px;
   padding: 0 14px;
   border-bottom: 1px solid #1c1f24;
   color: #bcc2cc;
@@ -1084,7 +1096,7 @@ onMounted(loadDashboard);
 .dash-three {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 14px;
+  gap: 18px;
 }
 
 .dash-expiry-row {

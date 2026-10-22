@@ -143,10 +143,21 @@ body {
   border-bottom: 1px solid var(--ui2-line-soft);
 }
 
-.v2-sider-logo {
+.v2-brand-mark {
+  display: grid;
+  place-items: center;
   width: 30px;
   height: 30px;
   flex: none;
+  border-radius: 9px;
+  background: linear-gradient(140deg, #6a72e0 0%, #4c54b8 55%, #3f4bb0 100%);
+  box-shadow: 0 8px 20px -10px rgba(76, 111, 255, 0.95), 0 0 0 1px rgba(255, 255, 255, 0.14) inset;
+  color: #ffffff;
+}
+
+.v2-brand-mark svg {
+  width: 17px;
+  height: 17px;
 }
 
 .v2-sider-brand {
@@ -160,44 +171,121 @@ body {
   font-weight: 650;
   letter-spacing: 0.08em;
   text-transform: uppercase;
-  color: var(--ui2-text-1);
+  color: #f2f3f5;
   white-space: nowrap;
 }
 
 .v2-sider-brand span {
   display: block;
+  margin-top: 1px;
   font-size: 10.5px;
-  color: var(--ui2-text-4);
+  color: #868d99;
   white-space: nowrap;
 }
 
-.v2-sider-menu {
+.v2-sider-nav {
+  flex: 1;
   min-height: 0;
-  padding: 10px 10px 12px;
+  padding: 6px 10px 12px;
   overflow-y: auto;
 }
 
-/* 侧栏菜单：分组标题 + 当前项蓝色实底 */
-.v2-sider-menu .n-menu-item-content {
+.v2-nav-group {
+  margin-top: 14px;
+}
+
+.v2-nav-group:first-child {
+  margin-top: 4px;
+}
+
+.v2-nav-group-title {
+  padding: 0 8px 6px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.13em;
+  color: #7f8792;
+}
+
+.v2-nav-item {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 38px;
+  padding: 0 10px;
+  margin-bottom: 2px;
   border-radius: 9px;
+  color: #b0b6c1;
+  font-size: 13.5px;
+  text-decoration: none;
+  transition: background 0.15s ease, color 0.15s ease;
 }
 
-.v2-sider-menu .n-menu-item-content--selected::before {
-  display: none;
+.v2-nav-item:hover {
+  background: #1a1c21;
+  color: #f2f3f5;
 }
 
-.v2-sider-menu .n-menu-item-content--selected {
-  background: var(--ui2-brand) !important;
+.v2-nav-item.is-active {
+  background: var(--ui2-brand);
+  color: #ffffff;
+  font-weight: 550;
   box-shadow: 0 6px 16px -8px rgba(76, 111, 255, 0.8);
 }
 
-.v2-sider-menu .n-menu-item-content--selected .n-menu-item-content-header,
-.v2-sider-menu .n-menu-item-content--selected .n-icon {
-  color: #fff !important;
+.v2-nav-icon {
+  width: 17px;
+  height: 17px;
+  flex: none;
+  color: #8a919c;
 }
 
-.v2-sider-menu .n-menu-item-content-header {
-  font-size: 13.5px;
+.v2-nav-item:hover .v2-nav-icon {
+  color: #c3c9d3;
+}
+
+.v2-nav-item.is-active .v2-nav-icon {
+  color: #ffffff;
+}
+
+.v2-nav-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.v2-nav-badge {
+  margin-left: auto;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 6px;
+  display: grid;
+  place-items: center;
+  border-radius: 99px;
+  border: 1px solid rgba(243, 101, 111, 0.34);
+  background: rgba(243, 101, 111, 0.16);
+  color: #ff9ba2;
+  font-size: 10.5px;
+  font-style: normal;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+}
+
+.v2-nav-badge.is-quiet {
+  border-color: #2a2e35;
+  background: #1d2026;
+  color: #b0b6c1;
+}
+
+/* 折叠态 */
+.v2-nav-item.is-collapsed {
+  justify-content: center;
+  padding: 0;
+}
+
+.v2-nav-item.is-collapsed .v2-nav-icon {
+  margin: 0;
 }
 
 /* ---------- 顶栏 ---------- */

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, defineAsyncComponent } from 'vue';
+import { computed } from 'vue';
 import { AdminLayout, LAYOUT_SCROLL_EL_ID } from '@sa/materials';
 import type { LayoutMode } from '@sa/materials';
 import { useAppStore } from '@/store/modules/app';
@@ -18,8 +18,6 @@ defineOptions({
 const appStore = useAppStore();
 const themeStore = useThemeStore();
 const { secondLevelMenus, childLevelMenus, isActiveFirstLevelMenuHasChildren } = provideMixMenuContext();
-
-const GlobalMenu = defineAsyncComponent(() => import('../modules/global-menu/index.vue'));
 
 const layoutMode = computed(() => {
   const vertical: LayoutMode = 'vertical';
@@ -145,7 +143,6 @@ function getSiderAndCollapsedWidth(isCollapsed: boolean) {
     <template #sider>
       <GlobalSider />
     </template>
-    <GlobalMenu />
     <GlobalContent />
     <template #footer>
       <GlobalFooter />
