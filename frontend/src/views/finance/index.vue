@@ -783,7 +783,7 @@ onMounted(() => {
                 <span class="fin-kpi-icon is-blue"><SvgIcon icon="mdi:coins" /></span>
               </div>
               <div class="fin-kpi-value">{{ formatMoney(summary.monthIncome, summary.currency) }}</div>
-              <div class="fin-kpi-foot">按秒分摊 · 覆盖 {{ summary.effectiveUserCount }} 户</div>
+              <div class="fin-kpi-foot">按秒分摊 · 覆盖 {{ summary.effectiveUserCount }} 户（收费 {{ summary.paidUserCount }} · 免费 {{ summary.freeUserCount }}）</div>
             </div>
 
             <div class="fin-kpi">
@@ -792,7 +792,7 @@ onMounted(() => {
                 <span class="fin-kpi-icon is-green"><SvgIcon icon="mdi:credit-card-outline" /></span>
               </div>
               <div class="fin-kpi-value">{{ formatMoney(summary.cashIncome, summary.currency) }}</div>
-              <div class="fin-kpi-foot">本月 {{ orders.length }} 笔已确认</div>
+              <div class="fin-kpi-foot">本月 {{ orders.length }} 笔 · 累计 {{ formatMoney(summary.cumulativeCashIncome, summary.currency) }}</div>
             </div>
 
             <div class="fin-kpi">
@@ -1128,6 +1128,41 @@ onMounted(() => {
                 <div class="fin-kpi-foot">
                   到期前已续费 {{ renewal.renewedUsers }} / 到期 {{ renewal.dueUsers }} 户 · 免费用户不计入
                 </div>
+              </div>
+            </section>
+
+            <section class="fin-kpis is-4">
+              <div class="fin-kpi">
+                <div class="fin-kpi-top">
+                  <span class="fin-kpi-label">本期到期用户</span>
+                  <span class="fin-kpi-icon is-blue"><SvgIcon icon="mdi:account-clock-outline" /></span>
+                </div>
+                <div class="fin-kpi-value">{{ renewal.dueUsers }}<span class="fin-kpi-unit">户</span></div>
+                <div class="fin-kpi-foot">续费率分母 · 只取本期到期的收费用户</div>
+              </div>
+              <div class="fin-kpi">
+                <div class="fin-kpi-top">
+                  <span class="fin-kpi-label">到期前已续费</span>
+                  <span class="fin-kpi-icon is-green"><SvgIcon icon="mdi:check-circle-outline" /></span>
+                </div>
+                <div class="fin-kpi-value">{{ renewal.renewedUsers }}<span class="fin-kpi-unit">户</span></div>
+                <div class="fin-kpi-foot">到期前已确认 renewal 订单</div>
+              </div>
+              <div class="fin-kpi">
+                <div class="fin-kpi-top">
+                  <span class="fin-kpi-label">到期未续费</span>
+                  <span class="fin-kpi-icon is-danger"><SvgIcon icon="mdi:alert-circle-outline" /></span>
+                </div>
+                <div class="fin-kpi-value">{{ renewal.notRenewedUsers }}<span class="fin-kpi-unit">户</span></div>
+                <div class="fin-kpi-foot">已到期且没有续费确认</div>
+              </div>
+              <div class="fin-kpi">
+                <div class="fin-kpi-top">
+                  <span class="fin-kpi-label">逾期恢复</span>
+                  <span class="fin-kpi-icon is-amber"><SvgIcon icon="mdi:backup-restore" /></span>
+                </div>
+                <div class="fin-kpi-value">{{ renewal.recoveryUsers }}<span class="fin-kpi-unit">户</span></div>
+                <div class="fin-kpi-foot">到期后恢复缴费 · 不计入续费率</div>
               </div>
             </section>
 
@@ -1761,6 +1796,10 @@ onMounted(() => {
 
 .fin-kpis.is-3 {
   grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.fin-kpis.is-4 {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
 }
 
 .fin-kpi {

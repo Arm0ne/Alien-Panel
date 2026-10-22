@@ -3,7 +3,16 @@ import { computed, h, onMounted, reactive, ref, watch } from 'vue';
 import { NDropdown, NInput } from 'naive-ui';
 import type { DropdownOption } from 'naive-ui';
 import { useRoute, useRouter } from 'vue-router';
-import { deleteNode, fetchNodeDetail, issueNodeInstallToken, requestNodeSync, updateNode } from '@/service/api';
+import {
+  createNodeCost,
+  deleteNode,
+  fetchNodeCosts,
+  fetchNodeDetail,
+  issueNodeInstallToken,
+  requestNodeSync,
+  updateNode,
+  updateNodeCost
+} from '@/service/api';
 import DataFreshness from '@/components/project/data-freshness.vue';
 import NodeStatusTag from '@/components/project/node-status-tag.vue';
 import NodeTypeTag from '@/components/project/node-type-tag.vue';
@@ -290,8 +299,113 @@ async function loadNode() {
   } else {
     detail.value = data;
     if (syncPage.value > syncPageCount.value) syncPage.value = syncPageCount.value;
+    void loadCosts();
   }
   loading.value = false;
+}
+
+// ---------- 节点成本 ----------
+const costs = ref<Api.Central.NodeCostRecord[]>([]);
+const costsLoading = ref(false);
+const costModalVisible = ref(false);
+const costSaving = ref(false);
+const costError = ref('');
+const editingCostId = ref('');
+const costForm = reactive({
+  category: '服务器',
+  monthlyAmount: '',
+  effectiveFrom: null as string | null,
+  effectiveTo: null as string | null,
+  notes: ''
+});
+
+const activeCostTotal = computed(() => {
+  const now = Date.now();
+  return costs.value
+    .filter(item => {
+      const from = new Date(item.effectiveFrom).getTime();
+      const to = item.effectiveTo ? new Date(item.effectiveTo).getTime() : Number.POSITIVE_INFINITY;
+      return (!Number.isFinite(from) || from <= now) && to >= now;
+    })
+    .reduce((sum, item) => sum + (Number(item.monthlyAmount) || 0), 0);
+});
+
+async function loadCosts() {
+  if (!nodeId.value) return;
+  costsLoading.value = true;
+  const { data, error } = await fetchNodeCosts(nodeId.value);
+  costsLoading.value = false;
+  if (!error && data) {
+    costs.value = data;
+  }
+}
+
+function openCostCreate() {
+  editingCostId.value = '';
+  costForm.category = '服务器';
+  costForm.monthlyAmount = '';
+  costForm.effectiveFrom = null;
+  costForm.effectiveTo = null;
+  costForm.notes = '';
+  costError.value = '';
+  costModalVisible.value = true;
+}
+
+function openCostEdit(record: Api.Central.NodeCostRecord) {
+  editingCostId.value = record.id;
+  costForm.category = record.category || '服务器';
+  costForm.monthlyAmount = String(record.monthlyAmount ?? '');
+  costForm.effectiveFrom = record.effectiveFrom ? record.effectiveFrom.slice(0, 10) : null;
+  costForm.effectiveTo = record.effectiveTo ? record.effectiveTo.slice(0, 10) : null;
+  costForm.notes = record.notes || '';
+  costError.value = '';
+  costModalVisible.value = true;
+}
+
+function closeCostModal() {
+  if (costSaving.value) return;
+  costModalVisible.value = false;
+}
+
+async function submitCost() {
+  costError.value = '';
+  const amount = Number(costForm.monthlyAmount);
+  if (!costForm.category.trim()) {
+    costError.value = '请填写成本类别';
+    return;
+  }
+  if (!costForm.monthlyAmount.trim() || !Number.isFinite(amount) || amount <= 0) {
+    costError.value = '月金额必须为大于 0 的数字';
+    return;
+  }
+  if (!costForm.effectiveFrom) {
+    costError.value = '请选择生效日期';
+    return;
+  }
+  if (costForm.effectiveTo && costForm.effectiveTo < costForm.effectiveFrom) {
+    costError.value = '失效日期不能早于生效日期';
+    return;
+  }
+  costSaving.value = true;
+  const payload: Api.Central.NodeCostCreatePayload = {
+    category: costForm.category.trim(),
+    monthlyAmount: amount,
+    currency: 'CNY',
+    effectiveFrom: `${costForm.effectiveFrom}T00:00:00Z`,
+    effectiveTo: costForm.effectiveTo ? `${costForm.effectiveTo}T23:59:59Z` : null,
+    notes: costForm.notes.trim() || null
+  };
+  const { error } = editingCostId.value
+    ? await updateNodeCost(nodeId.value, editingCostId.value, payload)
+    : await createNodeCost(nodeId.value, payload);
+  costSaving.value = false;
+  if (error) {
+    costError.value = '保存成本记录失败，请稍后重试';
+    return;
+  }
+  window.$message?.success(editingCostId.value ? '成本记录已更新' : '成本记录已新增');
+  costModalVisible.value = false;
+  await Promise.all([loadCosts(), loadNode()]);
 }
 
 function openEdit() {
@@ -714,6 +828,55 @@ onMounted(() => void loadNode());
         </div>
       </section>
 
+      <!-- 节点成本 -->
+      <section class="d-card">
+        <div class="d-card-head">
+          <h3>节点成本</h3>
+          <span class="d-badge is-neutral">{{ costs.length }} 条记录</span>
+          <div class="d-right">
+            <span v-if="activeCostTotal > 0" class="d-dim">当前生效 {{ formatMoney(activeCostTotal) }}/月</span>
+            <button class="d-btn d-btn-xs is-ghost" type="button" :disabled="costsLoading" @click="loadCosts">
+              <SvgIcon icon="mdi:refresh" class="d-btn-ico" />刷新
+            </button>
+            <button class="d-btn d-btn-xs is-primary" type="button" @click="openCostCreate">
+              <SvgIcon icon="mdi:plus" class="d-btn-ico" />新增成本
+            </button>
+          </div>
+        </div>
+        <div class="d-card-body">
+          <div v-if="costsLoading" class="d-dim">正在读取成本记录…</div>
+          <div v-else-if="!costs.length" class="d-dim">
+            暂无成本记录。新增后会计入「成本与收入」的月度成本；历史记录可直接编辑，不会被覆盖。
+          </div>
+          <table v-else class="d-table">
+            <thead>
+              <tr>
+                <th>类别</th>
+                <th>月金额</th>
+                <th>生效区间</th>
+                <th>备注</th>
+                <th style="width: 72px">操作</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="item in costs" :key="item.id">
+                <td>{{ item.category }}</td>
+                <td class="d-mono">{{ formatMoney(item.monthlyAmount, item.currency) }}</td>
+                <td class="d-dim">
+                  {{ formatDateOnly(item.effectiveFrom) }} →
+                  {{ item.effectiveTo ? formatDateOnly(item.effectiveTo) : '长期' }}
+                </td>
+                <td class="d-dim">{{ item.notes || '--' }}</td>
+                <td>
+                  <button class="d-btn d-btn-xs" type="button" @click="openCostEdit(item)">编辑</button>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+          <div class="d-help mt-12">成本按生效区间计入月度成本；改金额请编辑原记录，新增记录不会覆盖历史口径。</div>
+        </div>
+      </section>
+
       <!-- 承载用户与 Inbound -->
       <section class="d-card">
         <div class="d-card-head">
@@ -920,6 +1083,58 @@ onMounted(() => void loadNode());
         节点的 CPU / 内存 / 磁盘等资源指标由独立探针监控，不在本页展示。本页只维护中央节点记录，不会写入 Xray 或 X-Panel。
       </div>
     </template>
+
+    <!-- ===================== 节点成本 ===================== -->
+    <Teleport to="body">
+      <div v-if="costModalVisible" class="d-mask" @click.self="closeCostModal">
+        <div class="d-modal" style="width: 560px">
+          <div class="d-modal-head">
+            <div class="d-modal-head-main">
+              <h3>{{ editingCostId ? '编辑成本记录' : '新增成本记录' }}</h3>
+              <p class="d-modal-sub">成本按生效区间计入「成本与收入」的月度成本</p>
+            </div>
+            <button class="d-icon-btn" type="button" :disabled="costSaving" @click="closeCostModal">
+              <SvgIcon icon="mdi:close" />
+            </button>
+          </div>
+          <div class="d-modal-body">
+            <div v-if="costError" class="d-alert is-danger mb-12">{{ costError }}</div>
+            <div class="d-form-grid">
+              <div class="d-field">
+                <span class="d-label">成本类别 <span class="d-req">*</span></span>
+                <NInput v-model:value="costForm.category" maxlength="60" placeholder="例如：服务器 / 流量" />
+              </div>
+              <div class="d-field">
+                <span class="d-label">月金额（CNY） <span class="d-req">*</span></span>
+                <NInput v-model:value="costForm.monthlyAmount" placeholder="例如：120" />
+              </div>
+              <div class="d-field">
+                <span class="d-label">生效日期 <span class="d-req">*</span></span>
+                <input v-model="costForm.effectiveFrom" type="date" class="d-date" />
+              </div>
+              <div class="d-field">
+                <span class="d-label">失效日期</span>
+                <input v-model="costForm.effectiveTo" type="date" class="d-date" />
+                <span class="d-help">留空表示长期有效</span>
+              </div>
+              <div class="d-field d-field-wide">
+                <span class="d-label">备注</span>
+                <NInput v-model:value="costForm.notes" maxlength="200" placeholder="可选" />
+              </div>
+            </div>
+          </div>
+          <div class="d-modal-foot">
+            <span class="d-dim">保存只更新中央成本记录，不会写入 X-Panel</span>
+            <div class="d-foot-actions">
+              <button class="d-btn" type="button" :disabled="costSaving" @click="closeCostModal">取消</button>
+              <button class="d-btn is-primary" type="button" :disabled="costSaving" @click="submitCost">
+                {{ costSaving ? '保存中…' : '保存' }}
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </Teleport>
 
     <!-- ===================== 编辑节点信息 ===================== -->
     <Teleport to="body">
@@ -1418,6 +1633,17 @@ onMounted(() => void loadNode());
 .d-modal-foot { display: flex; align-items: center; gap: 10px; padding: 13px 20px; border-top: 1px solid var(--d-line-soft); font-size: 12px; }
 .d-form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
 .d-detail-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px 20px; }
+.d-date {
+  width: 100%;
+  height: 34px;
+  padding: 0 10px;
+  border: 1px solid #2a2e35;
+  border-radius: 8px;
+  background: #14161a;
+  color: #e6e8ec;
+  font-size: 12.5px;
+}
+
 .d-help { font-size: 11.5px; line-height: 1.6; color: var(--d-text-4); }
 .d-req { color: var(--d-danger); }
 .d-code-title { margin-bottom: 7px; font-size: 12px; color: var(--d-text-2); }
