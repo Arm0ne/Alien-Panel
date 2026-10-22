@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue';
-import { AdminLayout, LAYOUT_SCROLL_EL_ID } from '@sa/materials';
-import type { LayoutMode } from '@sa/materials';
+import { LAYOUT_SCROLL_EL_ID } from '@sa/materials';
 import { useAppStore } from '@/store/modules/app';
 import { useThemeStore } from '@/store/modules/theme';
 import GlobalHeader from '../modules/global-header/index.vue';
@@ -9,7 +8,6 @@ import GlobalSider from '../modules/global-sider/index.vue';
 import GlobalTab from '../modules/global-tab/index.vue';
 import GlobalContent from '../modules/global-content/index.vue';
 import GlobalFooter from '../modules/global-footer/index.vue';
-import { provideMixMenuContext } from '../modules/global-menu/context';
 
 defineOptions({
   name: 'BaseLayout'
@@ -17,138 +15,149 @@ defineOptions({
 
 const appStore = useAppStore();
 const themeStore = useThemeStore();
-const { secondLevelMenus, childLevelMenus, isActiveFirstLevelMenuHasChildren } = provideMixMenuContext();
 
-const layoutMode = computed(() => {
-  const vertical: LayoutMode = 'vertical';
-  const horizontal: LayoutMode = 'horizontal';
-  return themeStore.layout.mode.includes(vertical) ? vertical : horizontal;
-});
+const headerProps = computed<App.Global.HeaderProps>(() => ({
+  showLogo: false,
+  showMenu: false,
+  showMenuToggler: true
+}));
 
-const headerProps = computed(() => {
-  const { mode } = themeStore.layout;
+const siderCollapsed = computed(() => appStore.siderCollapse);
 
-  const headerPropsConfig: Record<UnionKey.ThemeLayoutMode, App.Global.HeaderProps> = {
-    vertical: {
-      showLogo: false,
-      showMenu: false,
-      showMenuToggler: true
-    },
-    'vertical-mix': {
-      showLogo: false,
-      showMenu: false,
-      showMenuToggler: false
-    },
-    'vertical-hybrid-header-first': {
-      showLogo: !isActiveFirstLevelMenuHasChildren.value,
-      showMenu: true,
-      showMenuToggler: false
-    },
-    horizontal: {
-      showLogo: true,
-      showMenu: true,
-      showMenuToggler: false
-    },
-    'top-hybrid-sidebar-first': {
-      showLogo: true,
-      showMenu: true,
-      showMenuToggler: false
-    },
-    'top-hybrid-header-first': {
-      showLogo: true,
-      showMenu: true,
-      showMenuToggler: isActiveFirstLevelMenuHasChildren.value
-    }
-  };
-
-  return headerPropsConfig[mode];
-});
-
-const siderVisible = computed(() => themeStore.layout.mode !== 'horizontal');
-
-const isVerticalMix = computed(() => themeStore.layout.mode === 'vertical-mix');
-
-const isVerticalHybridHeaderFirst = computed(() => themeStore.layout.mode === 'vertical-hybrid-header-first');
-
-const isTopHybridSidebarFirst = computed(() => themeStore.layout.mode === 'top-hybrid-sidebar-first');
-
-const isTopHybridHeaderFirst = computed(() => themeStore.layout.mode === 'top-hybrid-header-first');
-
-const siderWidth = computed(() => getSiderAndCollapsedWidth(false));
-
-const siderCollapsedWidth = computed(() => getSiderAndCollapsedWidth(true));
-
-function getSiderAndCollapsedWidth(isCollapsed: boolean) {
-  const {
-    mixChildMenuWidth,
-    collapsedWidth,
-    width: themeWidth,
-    mixCollapsedWidth,
-    mixWidth: themeMixWidth
-  } = themeStore.sider;
-
-  const width = isCollapsed ? collapsedWidth : themeWidth;
-  const mixWidth = isCollapsed ? mixCollapsedWidth : themeMixWidth;
-
-  if (isTopHybridHeaderFirst.value) {
-    return isActiveFirstLevelMenuHasChildren.value ? width : 0;
-  }
-
-  if (isVerticalHybridHeaderFirst.value && !isActiveFirstLevelMenuHasChildren.value) {
-    return 0;
-  }
-
-  const isMixMode = isVerticalMix.value || isTopHybridSidebarFirst.value || isVerticalHybridHeaderFirst.value;
-  let finalWidth = isMixMode ? mixWidth : width;
-
-  if (isVerticalMix.value && appStore.mixSiderFixed && secondLevelMenus.value.length) {
-    finalWidth += mixChildMenuWidth;
-  }
-
-  if (isVerticalHybridHeaderFirst.value && appStore.mixSiderFixed && childLevelMenus.value.length) {
-    finalWidth += mixChildMenuWidth;
-  }
-
-  return finalWidth;
+function handleMobileMaskClick() {
+  appStore.setSiderCollapse(true);
 }
 </script>
 
 <template>
-  <AdminLayout
-    v-model:sider-collapse="appStore.siderCollapse"
-    :mode="layoutMode"
-    :scroll-el-id="LAYOUT_SCROLL_EL_ID"
-    :scroll-mode="themeStore.layout.scrollMode"
-    :is-mobile="appStore.isMobile"
-    :full-content="appStore.fullContent"
-    :fixed-top="themeStore.fixedHeaderAndTab"
-    :header-height="themeStore.header.height"
-    :tab-visible="themeStore.tab.visible"
-    :tab-height="themeStore.tab.height"
-    :content-class="appStore.contentXScrollable ? 'overflow-x-hidden' : ''"
-    :sider-visible="siderVisible"
-    :sider-width="siderWidth"
-    :sider-collapsed-width="siderCollapsedWidth"
-    :footer-visible="themeStore.footer.visible"
-    :footer-height="themeStore.footer.height"
-    :fixed-footer="themeStore.footer.fixed"
-    :right-footer="themeStore.footer.right"
-  >
-    <template #header>
-      <GlobalHeader v-bind="headerProps" />
-    </template>
-    <template #tab>
-      <GlobalTab />
-    </template>
-    <template #sider>
+  <div class="shell" :class="{ 'is-mobile': appStore.isMobile }">
+    <!-- 侧栏面板 -->
+    <aside
+      v-if="!appStore.isMobile"
+      class="shell-sider"
+      :class="{ 'is-collapsed': siderCollapsed }"
+    >
       <GlobalSider />
+    </aside>
+
+    <!-- 移动端侧栏抽屉 -->
+    <template v-if="appStore.isMobile">
+      <aside class="shell-sider is-mobile-drawer" :class="{ 'is-open': !siderCollapsed }">
+        <GlobalSider />
+      </aside>
+      <div v-show="!siderCollapsed" class="shell-mask" @click="handleMobileMaskClick"></div>
     </template>
-    <GlobalContent />
-    <template #footer>
-      <GlobalFooter />
-    </template>
-  </AdminLayout>
+
+    <!-- 主面板：顶栏 + 标签栏 + 内容 -->
+    <section class="shell-main">
+      <header class="shell-header">
+        <GlobalHeader v-bind="headerProps" />
+      </header>
+      <div
+        v-if="themeStore.tab.visible"
+        class="shell-tab"
+        :style="{ height: `${themeStore.tab.height}px` }"
+      >
+        <GlobalTab />
+      </div>
+      <main :id="LAYOUT_SCROLL_EL_ID" class="shell-content">
+        <GlobalContent />
+      </main>
+      <GlobalFooter v-if="themeStore.footer.visible" />
+    </section>
+  </div>
 </template>
+
+<style scoped>
+.shell {
+  display: flex;
+  gap: 12px;
+  width: 100%;
+  height: 100vh;
+  padding: 12px;
+  overflow: hidden;
+  background: var(--ui2-bg);
+}
+
+/* ---------- 侧栏面板 ---------- */
+.shell-sider {
+  flex: none;
+  width: 246px;
+  min-height: 0;
+  overflow: hidden;
+  border: 1px solid var(--ui2-line);
+  border-radius: 16px;
+  background: var(--ui2-panel);
+  transition: width 0.25s ease;
+}
+
+.shell-sider.is-collapsed {
+  width: 68px;
+}
+
+/* ---------- 主面板 ---------- */
+.shell-main {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  border: 1px solid var(--ui2-line);
+  border-radius: 16px;
+  background: var(--ui2-panel);
+}
+
+.shell-header {
+  flex: none;
+  height: 62px;
+}
+
+.shell-tab {
+  flex: none;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.shell-content {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
+/* ---------- 移动端 ---------- */
+.shell-mask {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  background: rgba(0, 0, 0, 0.55);
+}
+
+.shell-sider.is-mobile-drawer {
+  position: fixed;
+  top: 12px;
+  bottom: 12px;
+  left: 12px;
+  z-index: 1001;
+  width: 246px;
+  transform: translateX(-110%);
+  transition: transform 0.25s ease;
+}
+
+.shell-sider.is-mobile-drawer.is-open {
+  transform: translateX(0);
+}
+
+.shell.is-mobile {
+  padding: 8px;
+  gap: 0;
+}
+
+.shell.is-mobile .shell-main {
+  border-radius: 14px;
+}
+</style>
 
 <style lang="scss">
 #__SCROLL_EL_ID__ {

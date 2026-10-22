@@ -233,12 +233,7 @@ body {
 
 /* ---------- 侧栏 ---------- */
 .v2-sider {
-  margin: 10px;
-  height: calc(100% - 20px);
-  border: 1px solid var(--ui2-line);
-  border-radius: 16px;
-  background: var(--ui2-panel);
-  overflow: hidden;
+  background: transparent;
 }
 
 .v2-sider-head {
