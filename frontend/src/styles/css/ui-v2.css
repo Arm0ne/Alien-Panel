@@ -532,6 +532,73 @@ body {
   border-radius: 9px;
 }
 
+/* ---------- 移动端（<=900px） ---------- */
+@media (max-width: 900px) {
+  .v2-header {
+    padding: 0 10px;
+    gap: 6px;
+  }
+
+  .v2-header-actions {
+    gap: 2px;
+    min-width: 0;
+  }
+
+  .v2-tabbar {
+    padding: 0 8px;
+  }
+
+  /* 页面根节点禁止撑破视口 */
+  .shell-content > * {
+    max-width: 100%;
+    min-width: 0;
+    overflow-x: hidden;
+  }
+
+  /* KPI 一律两列，避免 4/6/7 列在窄屏溢出 */
+  .dash-kpis,
+  .u-kpis,
+  .n-kpis,
+  .d-kpis,
+  .fin-kpis,
+  .e-kpis {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  }
+
+  .dash-split,
+  .fin-split,
+  .dash-three,
+  .n-grid,
+  .b-grid,
+  .d-meta-grid,
+  .d-detail-grid {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+
+  .dash-kpi,
+  .fin-kpi,
+  .u-kpi,
+  .n-kpi,
+  .d-kpi,
+  .e-kpi {
+    min-width: 0;
+  }
+
+  /* 宽表在窄屏内横向滚动，避免撑破面板 */
+  .dash-table-wrap,
+  .fin-table-wrap,
+  .u-table-wrap,
+  .e-table-wrap,
+  .d-table-wrap,
+  .b-card-body {
+    overflow-x: auto;
+  }
+
+  .b-table {
+    min-width: 520px;
+  }
+}
+
 /* ---------- 标签页 ---------- */
 .v2-tabbar {
   background: transparent;

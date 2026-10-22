@@ -317,7 +317,8 @@ onMounted(loadDashboard);
         <div class="dash-eyebrow">运营 · 运营总览 · 业务日 UTC+8</div>
         <h1 class="dash-title">运营总览</h1>
         <p class="dash-desc">
-          以业务用户 Inbound 为统计单位，掌握流量、用户与节点状态。财务口径与明细见「成本与收入」，本页不重复财务指标。
+          以业务用户 Inbound 为统计单位，掌握流量、用户与节点状态。财务口径与明细见
+          <RouterLink to="/finance" class="dash-desc-link">「成本与收入」</RouterLink>，本页不重复财务指标。
         </p>
       </div>
       <div class="dash-actions">
@@ -649,6 +650,16 @@ onMounted(loadDashboard);
   font-size: 13px;
   line-height: 1.72;
   color: #a2a9b4;
+}
+
+.dash-desc-link {
+  color: #9db2ff;
+  text-decoration: none;
+}
+
+.dash-desc-link:hover {
+  color: #c9d2ff;
+  text-decoration: underline;
 }
 
 .dash-actions {
