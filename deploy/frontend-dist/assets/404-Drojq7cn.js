@@ -1,1 +1,0 @@
-import{Gi as e,ta as t,zi as n}from"./router-Cr8t_Tbn.js";import{t as r}from"./exception-base-D4EgWb7w.js";var i=e({name:`404`,__name:`index`,setup(e){return(e,i)=>{let a=r;return t(),n(a,{type:`404`})}}});export{i as default};
