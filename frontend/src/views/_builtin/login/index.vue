@@ -58,8 +58,11 @@ const activeModule = computed(() => moduleMap[props.module || 'pwd-login']);
         <div class="form-panel">
           <div class="form-inner">
             <header class="form-head">
-              <h1>ALIEN PANEL</h1>
-              <p>请输入账号信息以登录管理后台</p>
+              <span class="form-mark" aria-hidden="true">
+                <svg viewBox="0 0 28 28" fill="none">
+                  <path d="M14 3.4 L25.4 24.6 H19.4 L14 13.6 L8.6 24.6 H2.6 Z" fill="currentColor" />
+                </svg>
+              </span>
             </header>
 
             <Transition name="fade-slide" mode="out-in" appear>
@@ -284,27 +287,20 @@ const activeModule = computed(() => moduleMap[props.module || 'pwd-login']);
 }
 
 .form-head {
-  margin-bottom: 32px;
-  text-align: center;
+  display: flex;
+  justify-content: center;
+  margin-bottom: 34px;
 }
 
-.form-head h1 {
-  margin: 0 0 10px;
-  font-size: 30px;
-  line-height: 1.2;
-  font-weight: 700;
-  letter-spacing: 0.16em;
-  /* letter-spacing 会在末尾多出一份空隙，左侧补等量缩进让视觉真正居中 */
-  text-indent: 0.16em;
+.form-mark {
+  display: block;
   color: #ffffff;
 }
 
-.form-head p {
-  margin: 0;
-  font-size: 14px;
-  line-height: 1.6;
-  letter-spacing: 0.01em;
-  color: #9ca0b8;
+.form-mark svg {
+  display: block;
+  width: 44px;
+  height: 44px;
 }
 
 .form-foot {
@@ -381,17 +377,12 @@ const activeModule = computed(() => moduleMap[props.module || 'pwd-login']);
   }
 
   .form-head {
-    margin-bottom: 26px;
+    margin-bottom: 28px;
   }
 
-  .form-head h1 {
-    font-size: 30px;
-    letter-spacing: 0.12em;
-    text-indent: 0.12em;
-  }
-
-  .form-head p {
-    font-size: 13.5px;
+  .form-mark svg {
+    width: 40px;
+    height: 40px;
   }
 
   .form-foot {
@@ -408,10 +399,9 @@ const activeModule = computed(() => moduleMap[props.module || 'pwd-login']);
     padding: 28px 18px 30px;
   }
 
-  .form-head h1 {
-    font-size: 26px;
-    letter-spacing: 0.12em;
-    text-indent: 0.12em;
+  .form-mark svg {
+    width: 36px;
+    height: 36px;
   }
 }
 
