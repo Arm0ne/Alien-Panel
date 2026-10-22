@@ -124,6 +124,110 @@ body {
 }
 
 /* ============================================================
+   页面级设计变量全局兜底
+   各业务页在自身根节点上定义了一套 --n- / --d- / --u- / --fin- / --e- 前缀变量，
+   但弹窗通过 Teleport 挂到 body，脱离页面根节点作用域会取不到值
+   （表现为弹窗背景透明）。这里在 :root 提供同名兜底值。
+   ============================================================ */
+:root {
+  /* nodes */
+  --n-card: #141519;
+  --n-card-hover: #191b20;
+  --n-line: #23262c;
+  --n-line-soft: #1c1f24;
+  --n-text-1: #f2f3f5;
+  --n-text-2: #bcc2cc;
+  --n-text-3: #9aa1ad;
+  --n-text-4: #868d99;
+  --n-brand: #4c6fff;
+  --n-brand-soft: rgba(76, 111, 255, 0.16);
+  --n-ok: #2ed47a;
+  --n-warn: #f5b93d;
+  --n-danger: #f3656f;
+  --n-info: #5aa9f0;
+  --n-violet: #a78bfa;
+  --n-radius: 14px;
+
+  /* nodes detail */
+  --d-card: #141519;
+  --d-card-hover: #191b20;
+  --d-line: #23262c;
+  --d-line-soft: #1c1f24;
+  --d-text-1: #f2f3f5;
+  --d-text-2: #bcc2cc;
+  --d-text-3: #9aa1ad;
+  --d-text-4: #868d99;
+  --d-brand: #4c6fff;
+  --d-ok: #2ed47a;
+  --d-warn: #f5b93d;
+  --d-danger: #f3656f;
+  --d-info: #5aa9f0;
+  --d-violet: #a78bfa;
+  --d-radius: 14px;
+
+  /* users */
+  --u-card: #141519;
+  --u-card-hover: #191b20;
+  --u-line: #23262c;
+  --u-line-soft: #1c1f24;
+  --u-text-1: #f2f3f5;
+  --u-text-2: #bcc2cc;
+  --u-text-3: #9aa1ad;
+  --u-text-4: #868d99;
+  --u-brand: #4c6fff;
+  --u-brand-soft: rgba(76, 111, 255, 0.16);
+  --u-ok: #2ed47a;
+  --u-ok-soft: rgba(46, 212, 122, 0.14);
+  --u-warn: #f5b93d;
+  --u-warn-soft: rgba(245, 185, 61, 0.14);
+  --u-danger: #f3656f;
+  --u-danger-soft: rgba(243, 101, 111, 0.14);
+  --u-info: #5aa9f0;
+  --u-info-soft: rgba(90, 169, 240, 0.14);
+  --u-violet: #a78bfa;
+  --u-violet-soft: rgba(167, 139, 250, 0.14);
+  --u-radius: 14px;
+
+  /* finance */
+  --fin-card: #141519;
+  --fin-card-hover: #191b20;
+  --fin-line: #23262c;
+  --fin-line-soft: #1c1f24;
+  --fin-text-1: #f2f3f5;
+  --fin-text-2: #bcc2cc;
+  --fin-text-3: #9aa1ad;
+  --fin-text-4: #868d99;
+  --fin-brand: #4c6fff;
+  --fin-brand-soft: rgba(76, 111, 255, 0.16);
+  --fin-ok: #2ed47a;
+  --fin-warn: #f5b93d;
+  --fin-danger: #f3656f;
+  --fin-info: #5aa9f0;
+  --fin-violet: #a78bfa;
+  --fin-cyan: #34d3e0;
+  --fin-pink: #f472b6;
+  --fin-radius: 14px;
+
+  /* events / exit-ips（共用 e- 前缀） */
+  --e-card: #141519;
+  --e-card-hover: #191b20;
+  --e-line: #23262c;
+  --e-line-soft: #1c1f24;
+  --e-text-1: #f2f3f5;
+  --e-text-2: #bcc2cc;
+  --e-text-3: #9aa1ad;
+  --e-text-4: #868d99;
+  --e-brand: #4c6fff;
+  --e-ok: #2ed47a;
+  --e-warn: #f5b93d;
+  --e-danger: #f3656f;
+  --e-info: #5aa9f0;
+  --e-violet: #a78bfa;
+  --e-cyan: #34d3e0;
+  --e-radius: 14px;
+}
+
+/* ============================================================
    外壳：侧栏 / 顶栏 / 标签页
    ============================================================ */
 
