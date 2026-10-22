@@ -1,6 +1,13 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue';
-import { downloadSystemBackup, restoreSystemBackup } from '@/service/api';
+import { computed, onMounted, ref } from 'vue';
+import {
+  createServerBackup,
+  deleteServerBackup,
+  downloadSystemBackup,
+  fetchBackups,
+  restoreSystemBackup,
+  verifyServerBackup
+} from '@/service/api';
 
 defineOptions({ name: 'SystemBackup' });
 
@@ -9,6 +16,15 @@ const restoring = ref(false);
 const selectedFile = ref<File | null>(null);
 const fileInput = ref<HTMLInputElement | null>(null);
 const copiedKey = ref('');
+
+const backups = ref<Api.Central.BackupEntry[]>([]);
+const backupsLoading = ref(false);
+const backupsError = ref('');
+const backupDirectory = ref('');
+const latestBackup = ref('');
+const creatingBackup = ref(false);
+const verifyingBackup = ref('');
+const deletingBackup = ref('');
 
 const backupContents = [
   '业务用户与 Client',
@@ -99,6 +115,88 @@ async function restoreBackup() {
   }
 }
 
+function formatDateTime(value?: string | null) {
+  if (!value) return '--';
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? '--' : date.toLocaleString('zh-CN', { hour12: false });
+}
+
+function formatBackupSize(size?: number) {
+  if (!size || !Number.isFinite(size)) return '--';
+  if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`;
+  return `${(size / 1024 / 1024).toFixed(1)} MB`;
+}
+
+async function loadBackups() {
+  backupsLoading.value = true;
+  backupsError.value = '';
+  const { data, error } = await fetchBackups();
+  backupsLoading.value = false;
+  if (error || !data) {
+    backupsError.value = '无法读取服务器备份列表';
+    backups.value = [];
+    return;
+  }
+  backups.value = data.items;
+  backupDirectory.value = data.directory;
+  latestBackup.value = data.latest;
+}
+
+async function createBackupOnServer() {
+  if (creatingBackup.value) return;
+  creatingBackup.value = true;
+  const { error } = await createServerBackup();
+  creatingBackup.value = false;
+  if (error) {
+    window.$message?.error('创建备份失败，请稍后重试');
+    return;
+  }
+  window.$message?.success('备份已生成并保存在服务器');
+  await loadBackups();
+}
+
+async function verifyBackup(entry: Api.Central.BackupEntry) {
+  if (verifyingBackup.value) return;
+  verifyingBackup.value = entry.name;
+  const { data, error } = await verifyServerBackup(entry.name);
+  verifyingBackup.value = '';
+  if (error || !data) {
+    window.$message?.error('校验请求失败，请稍后重试');
+    return;
+  }
+  if (data.ok) {
+    window.$message?.success(`${entry.name} 完整性校验通过`);
+    return;
+  }
+  window.$dialog?.error({
+    title: '备份校验失败',
+    content: `${entry.name} 无法通过 SQLite 完整性校验：${data.message || '文件可能已损坏'}`,
+    positiveText: '知道了'
+  });
+}
+
+function deleteBackup(entry: Api.Central.BackupEntry) {
+  if (deletingBackup.value) return;
+  window.$dialog?.warning({
+    title: '删除备份',
+    content: `确认删除 ${entry.name}（${formatBackupSize(entry.size)}）？删除后不可恢复，最新一份备份受保护不可删除。`,
+    positiveText: '确认删除',
+    negativeText: '取消',
+    maskClosable: false,
+    onPositiveClick: async () => {
+      deletingBackup.value = entry.name;
+      const { error } = await deleteServerBackup(entry.name);
+      deletingBackup.value = '';
+      if (error) {
+        window.$message?.error('删除备份失败，请稍后重试');
+        return;
+      }
+      window.$message?.success('备份已删除');
+      await loadBackups();
+    }
+  });
+}
+
 async function copyCommand(key: string, command: string) {
   try {
     await navigator.clipboard.writeText(command);
@@ -111,6 +209,9 @@ async function copyCommand(key: string, command: string) {
     window.$message?.error('复制失败，请手动选择命令文本');
   }
 }
+onMounted(() => {
+  void loadBackups();
+});
 </script>
 
 <template>
@@ -158,7 +259,11 @@ async function copyCommand(key: string, command: string) {
               <SvgIcon icon="mdi:database-export" class="b-btn-ico" />
               立即生成并下载
             </button>
-            <span class="b-dim">生成过程在服务端完成，不会中断线上请求</span>
+            <button class="b-btn" type="button" :disabled="creatingBackup" @click="createBackupOnServer">
+              <SvgIcon icon="mdi:content-save-outline" class="b-btn-ico" />
+              {{ creatingBackup ? '生成中…' : '备份到服务器' }}
+            </button>
+            <span class="b-dim">「下载」不留在服务器；「备份到服务器」会出现在下方备份记录里</span>
           </div>
         </div>
       </section>
@@ -204,8 +309,74 @@ async function copyCommand(key: string, command: string) {
 
     <section class="b-card">
       <div class="b-card-head">
+        <h3>备份记录</h3>
+        <span class="b-badge">{{ backups.length }} 份</span>
+        <span v-if="backupDirectory" class="b-dim">{{ backupDirectory }}</span>
+        <div class="b-card-tools">
+          <button class="b-btn b-btn-xs" type="button" :disabled="backupsLoading" @click="loadBackups">
+            <SvgIcon icon="mdi:refresh" class="b-btn-ico" />刷新
+          </button>
+        </div>
+      </div>
+      <div class="b-card-body">
+        <div v-if="backupsError" class="b-callout is-danger">{{ backupsError }}</div>
+        <div v-else-if="backupsLoading" class="b-dim">正在读取备份目录…</div>
+        <div v-else-if="!backups.length" class="b-dim">
+          服务器上暂无备份。点上方「备份到服务器」生成第一份；恢复数据前系统也会自动保留一份安全快照。
+        </div>
+        <table v-else class="b-table">
+          <thead>
+            <tr>
+              <th>文件名</th>
+              <th>大小</th>
+              <th>生成时间</th>
+              <th>状态</th>
+              <th style="width: 168px">操作</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="entry in backups" :key="entry.name">
+              <td class="b-mono">{{ entry.name }}</td>
+              <td>{{ formatBackupSize(entry.size) }}</td>
+              <td>{{ formatDateTime(entry.createdAt) }}</td>
+              <td>
+                <span v-if="entry.name === latestBackup" class="b-badge is-ok">最新 · 受保护</span>
+                <span v-else class="b-badge">可删除</span>
+              </td>
+              <td>
+                <div class="b-row-actions">
+                  <button
+                    class="b-btn b-btn-xs"
+                    type="button"
+                    :disabled="verifyingBackup === entry.name"
+                    @click="verifyBackup(entry)"
+                  >
+                    <SvgIcon icon="mdi:shield-check-outline" class="b-btn-ico" />
+                    {{ verifyingBackup === entry.name ? '校验中…' : '校验' }}
+                  </button>
+                  <button
+                    class="b-btn b-btn-xs is-danger"
+                    type="button"
+                    :disabled="entry.name === latestBackup || deletingBackup === entry.name"
+                    @click="deleteBackup(entry)"
+                  >
+                    删除
+                  </button>
+                </div>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+        <div class="b-help-note">
+          备份文件位于服务器数据库同级的 <code>backups</code> 目录；「最新一份」不可删除，避免误删后没有可恢复快照。
+        </div>
+      </div>
+    </section>
+
+    <section class="b-card">
+      <div class="b-card-head">
         <h3>运维命令（服务器本地执行）</h3>
-        <span class="b-dim">以下操作没有 HTTP 接口，需在服务器上通过 CLI 执行</span>
+        <span class="b-dim">面板已支持备份 / 校验 / 删除；以下命令用于服务器本地维护与离线文件校验</span>
       </div>
       <div class="b-card-body">
         <div v-for="item in cliCommands" :key="item.key" class="b-cli-row">
@@ -613,6 +784,69 @@ async function copyCommand(key: string, command: string) {
   font-size: 11.5px;
   white-space: nowrap;
   overflow-x: auto;
+}
+
+.b-card-tools {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.b-table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: 12.5px;
+}
+
+.b-table th {
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--b-line);
+  font-size: 11.5px;
+  font-weight: 600;
+  text-align: left;
+  white-space: nowrap;
+  color: var(--b-text-3);
+}
+
+.b-table td {
+  height: 40px;
+  padding: 0 10px;
+  border-bottom: 1px solid var(--b-line-soft);
+  color: var(--b-text-2);
+  white-space: nowrap;
+}
+
+.b-table tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.b-mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  color: var(--b-text-1);
+}
+
+.b-row-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.b-help-note {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--b-line-soft);
+  font-size: 11.5px;
+  line-height: 1.7;
+  color: var(--b-text-4);
+}
+
+.b-help-note code {
+  padding: 1px 5px;
+  border-radius: 5px;
+  background: #1d2026;
+  color: #b8bec8;
 }
 
 @media (max-width: 1100px) {

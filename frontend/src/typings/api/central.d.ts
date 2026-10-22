@@ -822,6 +822,19 @@ declare namespace Api {
       correlationId?: string | null;
     }
 
+    interface BackupEntry {
+      name: string;
+      size: number;
+      createdAt: string;
+    }
+
+    interface BackupListResult {
+      items: BackupEntry[];
+      total: number;
+      directory: string;
+      latest: string;
+    }
+
     interface EventStats {
       windowDays: number;
       pendingCount: number;

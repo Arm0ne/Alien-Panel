@@ -62,6 +62,33 @@ export async function restoreSystemBackup(file: File) {
   return body.data as { restored: boolean; previousBackup: string; requiresLogin: boolean };
 }
 
+/** List server-side backups created from the panel or CLI. */
+export function fetchBackups() {
+  return request<Api.Central.BackupListResult>({ url: '/system/backups' });
+}
+
+/** Create a manual backup stored on the server (not downloaded). */
+export function createServerBackup() {
+  return request<{ name: string; size: number }>({ url: '/system/backups', method: 'post' });
+}
+
+/** Run a SQLite integrity check against one stored backup. */
+export function verifyServerBackup(name: string) {
+  return request<{ ok: boolean; message?: string }>({
+    url: '/system/backups/verify',
+    method: 'post',
+    data: { name }
+  });
+}
+
+/** Delete one stored backup (the newest one is protected by the backend). */
+export function deleteServerBackup(name: string) {
+  return request<{ deleted: string }>({
+    url: `/system/backups/${encodeURIComponent(name)}`,
+    method: 'delete'
+  });
+}
+
 export function fetchUsers(params: Api.Central.PageParams = {}) {
   return request<Api.Central.UserListResult>({ url: '/users', params });
 }

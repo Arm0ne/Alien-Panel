@@ -163,6 +163,10 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /api/renewal-candidates", s.requireAuth(http.HandlerFunc(s.renewalCandidates)))
 	mux.Handle("POST /api/inbounds/{id}/reset-user", s.requireAuth(http.HandlerFunc(s.resetInboundUser)))
 	mux.Handle("GET /api/system/backups/download", s.requireAuth(http.HandlerFunc(s.downloadBackup)))
+	mux.Handle("GET /api/system/backups", s.requireAuth(http.HandlerFunc(s.listBackups)))
+	mux.Handle("POST /api/system/backups", s.requireAuth(http.HandlerFunc(s.createBackup)))
+	mux.Handle("POST /api/system/backups/verify", s.requireAuth(http.HandlerFunc(s.verifyBackup)))
+	mux.Handle("DELETE /api/system/backups/{name}", s.requireAuth(http.HandlerFunc(s.deleteBackup)))
 	mux.Handle("POST /api/system/restore", s.requireAuth(http.HandlerFunc(s.restoreBackup)))
 
 	return s.withSecurityHeaders(s.withRequestID(s.withCORS(s.withDatabaseLock(mux))))
