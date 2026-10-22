@@ -9,3 +9,5 @@ agent/*.exe
 frontend/node_modules/
 frontend/dist/
 *.tmp
+
+release/
