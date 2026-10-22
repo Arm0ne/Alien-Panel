@@ -1,14 +1,13 @@
 <script setup lang="ts">
-import { computed, h, onMounted, reactive, ref } from 'vue';
-import { useRoute } from 'vue-router';
-import { NButton } from 'naive-ui';
-import type { DataTableColumns } from 'naive-ui';
+import { computed, nextTick, onMounted, reactive, ref } from 'vue';
+import { useRoute, useRouter } from 'vue-router';
 import {
   assignUserPath,
   cancelUserBillingRecord,
   createUserBillingRecord,
   confirmUserRenewal,
   clearUserPath,
+  fetchEvents,
   fetchUserDetail,
   fetchUserGroups,
   fetchUserPathAssets,
@@ -19,11 +18,11 @@ import {
   verifyUserBillingRecord,
   updateUser
 } from '@/service/api';
-import ModulePage from '@/components/project/module-page.vue';
-import UserStatusTag from '@/components/project/user-status-tag.vue';
+import DataFreshness from '@/components/project/data-freshness.vue';
 import DeviceTable from '@/components/project/device-table.vue';
 import TrafficTrendChart from '@/components/project/traffic-trend-chart.vue';
 import TrafficValue from '@/components/project/traffic-value.vue';
+import type { DropdownOption } from 'naive-ui';
 import { billingServiceInterval, billingTimestampISO } from '@/utils/billing';
 
 defineOptions({ name: 'UserManagement' });
@@ -33,11 +32,24 @@ const errorMessage = ref('');
 const groups = ref<Api.Central.UserGroupSummary[]>([]);
 const groupTotal = ref(0);
 const stats = ref<Api.Central.UserListStats | null>(null);
-const expiringUsers = ref<Api.Central.UserSummary[]>([]);
-const expiringUsersTotal = ref(0);
-const expiringUsersLoading = ref(false);
-const expiringUsersError = ref('');
 const dataAt = ref('');
+const userRows = ref<Api.Central.UserSummary[]>([]);
+const userTotal = ref(0);
+const userLoading = ref(false);
+const userError = ref('');
+const totalUsers = ref<number | null>(null);
+const pendingRenewalCount = ref<number | null>(null);
+const pendingRenewalAmount = ref(0);
+const viewMode = ref<'table' | 'grouped'>('table');
+const detailTab = ref<'overview' | 'billing' | 'path' | 'device'>('overview');
+const businessEditing = ref(false);
+const renewModalVisible = ref(false);
+const renewCandidate = ref<Api.Central.UserRenewalCandidate | null>(null);
+const renewSaving = ref(false);
+const renewForm = reactive({
+  amount: 0 as number | null,
+  paidAt: new Date().toISOString().slice(0, 10)
+});
 const expandedGroups = ref(new Set<string>());
 interface GroupUsersState {
   rows: Api.Central.UserSummary[];
@@ -105,10 +117,10 @@ const pathLandingInboundID = ref<string | null>(null);
 const pathExitIPIDs = ref<string[]>([]);
 const pathNotes = ref('');
 const route = useRoute();
+const router = useRouter();
 let pathAssetsRequestID = 0;
 
 const defaultGroupPageSize = 20;
-const expiringListPageSize = 200;
 const filters = reactive({
   page: 1,
   page_size: defaultGroupPageSize,
@@ -119,8 +131,8 @@ const filters = reactive({
 });
 
 const statusOptions = [
-  { label: '全部状态', value: 'all' },
-  { label: '有效', value: 'active' },
+  { label: '全部', value: 'all' },
+  { label: '启用中', value: 'active' },
   { label: '即将到期', value: 'expiring' },
   { label: '已到期', value: 'expired' },
   { label: '已停用', value: 'disabled' }
@@ -136,6 +148,79 @@ const nodeOptions = computed(() => [
   { label: '全部线路机', value: '' },
   ...groups.value.map(group => ({ label: group.nodeName, value: group.nodeId }))
 ]);
+
+const billingCycleOptions = [
+  { label: '月付', value: 'monthly' },
+  { label: '年付', value: 'annual' }
+];
+
+const billingTypeFormOptions = [
+  { label: '收费用户', value: 'paid' },
+  { label: '免费用户', value: 'free' }
+];
+
+const detailTabs = [
+  { key: 'overview', label: '概览' },
+  { key: 'billing', label: '账务' },
+  { key: 'path', label: '路径' },
+  { key: 'device', label: '设备与流量' }
+] as const;
+
+const moreMenuOptions = computed<DropdownOption[]>(() => [
+  { label: '新增订单', key: 'order' },
+  { label: '导入历史账单', key: 'import' },
+  { type: 'divider', key: 'divider' },
+  { label: '更换客户 · 不可恢复', key: 'replace' }
+]);
+
+const hasActiveFilters = computed(
+  () =>
+    Boolean(filters.keyword.trim()) ||
+    filters.status !== 'all' ||
+    filters.billingType !== 'all' ||
+    filters.nodeID !== ''
+);
+
+const userPageCount = computed(() => Math.max(1, Math.ceil(userTotal.value / Math.max(filters.page_size, 1))));
+
+const pendingCandidates = computed(() =>
+  (detail.value?.renewalCandidates || []).filter(candidate => candidate.status === 'pending')
+);
+
+const enabledClientCount = computed(() => (detail.value?.clients || []).filter(client => client.enabled).length);
+
+const lastOnlineAt = computed(() => {
+  const clients = detail.value?.clients || [];
+  const times = clients
+    .map(client => (client.lastOnlineAt ? new Date(client.lastOnlineAt).getTime() : 0))
+    .filter(value => Number.isFinite(value) && value > 0);
+  return times.length ? new Date(Math.max(...times)).toISOString() : null;
+});
+
+const detailInitial = computed(() => {
+  const name = detail.value?.displayName || selectedUserID.value || '?';
+  return name.trim().slice(0, 1).toUpperCase();
+});
+
+const expiringHint = computed(() => {
+  if (!stats.value) return '等待中央数据';
+  return stats.value.expiring > 0 ? '无宽限期，到期即失效' : '当前没有 7 天内到期用户';
+});
+
+const distribution = computed(() => {
+  const total = totalUsers.value || 0;
+  const active = stats.value?.active || 0;
+  const expiring = stats.value?.expiring || 0;
+  const stopped = Math.max(0, total - active - expiring);
+  const pending = pendingRenewalCount.value || 0;
+  const percent = (value: number) => (total > 0 ? Math.min(100, Math.round((value / total) * 100)) : 0);
+  return [
+    { key: 'active', label: '启用中', value: active, tone: 'is-ok', percent: percent(active) },
+    { key: 'expiring', label: '7 天内到期', value: expiring, tone: 'is-warn', percent: percent(expiring) },
+    { key: 'stopped', label: '已到期 / 停用', value: stopped, tone: 'is-danger', percent: percent(stopped) },
+    { key: 'pending', label: '待确认续费', value: pending, tone: 'is-neutral', percent: percent(pending) }
+  ];
+});
 
 const pathModeOptions = [
   { label: '线路机直出', value: 'relay' },
@@ -243,6 +328,117 @@ function pathModeLabel(mode?: Api.Central.UserSummary['pathMode']) {
   return '未配置';
 }
 
+/** 状态文案统一（有效 → 启用中） */
+function statusLabel(status: Api.Central.UserStatus) {
+  if (status === 'active') return '启用中';
+  if (status === 'expiring') return '即将到期';
+  if (status === 'expired') return '已到期';
+  if (status === 'disabled') return '已停用';
+  return '状态未知';
+}
+
+function statusBadgeClass(status: Api.Central.UserStatus) {
+  if (status === 'active') return 'is-ok';
+  if (status === 'expiring') return 'is-warn';
+  if (status === 'expired') return 'is-danger';
+  if (status === 'disabled') return 'is-neutral';
+  return 'is-violet';
+}
+
+function nodeDotClass(status: Api.Central.NodeStatus) {
+  if (status === 'online') return 'is-ok';
+  if (status === 'degraded' || status === 'unknown') return 'is-warn';
+  if (status === 'offline' || status === 'disabled') return 'is-danger';
+  return 'is-warn';
+}
+
+function nodeBadgeClass(status: Api.Central.NodeStatus) {
+  if (status === 'online') return 'is-ok';
+  if (status === 'degraded' || status === 'unknown') return 'is-warn';
+  if (status === 'offline') return 'is-danger';
+  return 'is-neutral';
+}
+
+function relativeTime(value?: string | null) {
+  if (!value) return '时间未知';
+  const timestamp = new Date(value).getTime();
+  if (!Number.isFinite(timestamp)) return '时间未知';
+  const seconds = Math.max(0, Math.round((Date.now() - timestamp) / 1000));
+  if (seconds < 60) return `${seconds} 秒前`;
+  const minutes = Math.round(seconds / 60);
+  if (minutes < 60) return `${minutes} 分钟前`;
+  const hours = Math.round(minutes / 60);
+  if (hours < 24) return `${hours} 小时前`;
+  return `${Math.round(hours / 24)} 天前`;
+}
+
+function daysUntil(value?: string | null) {
+  if (!value) return 0;
+  const target = new Date(value).getTime();
+  if (!Number.isFinite(target)) return 0;
+  return Math.ceil((target - Date.now()) / 86_400_000);
+}
+
+function expiryHint(row: Api.Central.UserSummary) {
+  if (!row.expiresAt) return row.status === 'active' ? '不限期' : '时间未知';
+  if (row.status === 'expired') return `已逾期 ${Math.abs(daysUntil(row.expiresAt))} 天`;
+  if (row.status === 'disabled') return '停用前最后同步';
+  if (row.status === 'expiring') return `还剩 ${Math.max(0, daysUntil(row.expiresAt))} 天`;
+  return `还剩 ${Math.max(0, daysUntil(row.expiresAt))} 天`;
+}
+
+function expiryBadgeClass(value: { expiresAt?: string | null; status: Api.Central.UserStatus }) {
+  if (!value.expiresAt) return value.status === 'active' ? 'is-ok' : 'is-neutral';
+  const days = daysUntil(value.expiresAt);
+  if (days < 0) return 'is-danger';
+  if (days <= 7) return 'is-warn';
+  return 'is-ok';
+}
+
+function expiryText(value: { expiresAt?: string | null; status: Api.Central.UserStatus }) {
+  if (!value.expiresAt) return value.status === 'active' ? '长期有效' : '时间未知';
+  const days = daysUntil(value.expiresAt);
+  if (days < 0) return `已逾期 ${Math.abs(days)} 天`;
+  return `还剩 ${days} 天`;
+}
+
+function exitIpHint(row: Api.Central.UserSummary) {
+  if (row.pathMode === 'landing') return row.landingNodeName ? `经 ${row.landingNodeName}` : '经落地机';
+  if (row.pathMode === 'external') return '独立 S5';
+  if (row.pathMode === 'relay') return '线路机直出';
+  return '尚未配置路径';
+}
+
+function groupSummary(group: Api.Central.UserGroupSummary) {
+  const statsValue = group.stats;
+  const parts = [`启用中 ${statsValue.active}`, `即将到期 ${statsValue.expiring}`];
+  if (statsValue.expired) parts.push(`已到期 ${statsValue.expired}`);
+  if (statsValue.disabled) parts.push(`已停用 ${statsValue.disabled}`);
+  return parts.join(' · ');
+}
+
+function groupRows(nodeID: string) {
+  return groupUsers[nodeID]?.rows || [];
+}
+
+function groupUserTotal(nodeID: string) {
+  return groupUsers[nodeID]?.total || 0;
+}
+
+function groupPage(nodeID: string) {
+  return groupUsers[nodeID]?.page || 1;
+}
+
+function groupPageCount(nodeID: string) {
+  const state = groupUsers[nodeID];
+  if (!state) return 1;
+  return Math.max(1, Math.ceil(state.total / Math.max(state.pageSize, 1)));
+}
+
+function changeGroupPage(nodeID: string, page: number) {
+  void loadGroupUsers(nodeID, page);
+}
+
 function pathExitIPText(path?: Api.Central.UserPathDetail | null) {
   if (!path) return '--';
   const addresses = path.exitIps?.map(item => item.address).filter(Boolean) || [];
@@ -314,7 +510,7 @@ async function createInitialOrder() {
   detail.value = data;
   copyDetailToForm(data);
   window.$message?.success('首笔订单已确认并计入实收');
-  void loadGroups();
+  void reloadAll();
 }
 
 function resetOrderForm() {
@@ -363,7 +559,7 @@ async function createAdditionalOrder() {
   copyDetailToForm(data);
   orderModalVisible.value = false;
   window.$message?.success('订单已保存');
-  void loadGroups();
+  void reloadAll();
 }
 
 function openVerifyModal(record: Api.Central.UserBillingRecord) {
@@ -393,7 +589,7 @@ async function submitVerifyRecord() {
   copyDetailToForm(data);
   verifyModalVisible.value = false;
   window.$message?.success('历史订单已核验并计入财务');
-  void loadGroups();
+  void reloadAll();
 }
 
 function cancelRecord(record: Api.Central.UserBillingRecord) {
@@ -407,7 +603,7 @@ function cancelRecord(record: Api.Central.UserBillingRecord) {
     detail.value = data;
     copyDetailToForm(data);
     window.$message?.success('订单已取消，财务统计已排除');
-    void loadGroups();
+    void reloadAll();
   };
   if (!window.$dialog) {
     void cancel();
@@ -499,7 +695,7 @@ async function submitBillingImport() {
     importPreview.value = null;
     importText.value = '';
     window.$message?.success(`已导入 ${data.imported} 笔历史订单${data.unverified ? `，其中 ${data.unverified} 笔待核实` : ''}`);
-    void loadGroups();
+    void reloadAll();
     if (selectedUserID.value) void openDetail(selectedUserID.value);
   } catch (error) {
     window.$message?.error(error instanceof Error ? error.message : 'CSV 格式错误');
@@ -592,7 +788,7 @@ async function savePathAssignment() {
   detail.value = data;
   syncPathForm(data);
   window.$message?.success('用户路径已保存');
-  void loadGroups();
+  void reloadAll();
 }
 
 async function removePathAssignment() {
@@ -608,7 +804,7 @@ async function removePathAssignment() {
   detail.value = data;
   syncPathForm(data);
   window.$message?.success('已解除用户路径');
-  void loadGroups();
+  void reloadAll();
 }
 
 function confirmRemovePathAssignment() {
@@ -639,7 +835,7 @@ function confirmReplaceCurrentUser() {
     }
     window.$message?.success('已关闭旧用户并创建新用户，旧账务记录已保留');
     drawerVisible.value = false;
-    void loadGroups();
+    void reloadAll();
     void openDetail(data.newUserId);
   };
   if (!window.$dialog) {
@@ -663,10 +859,15 @@ async function openDetail(id: string) {
   detailLoading.value = true;
   detailError.value = '';
   detail.value = null;
+  detailTab.value = 'overview';
+  businessEditing.value = false;
   resetInitialOrderForm();
   pathAssets.value = null;
   pathLandingInbounds.value = [];
   pathAssetsLoading.value = false;
+  if (route.query.userId !== id) {
+    void router.replace({ query: { ...route.query, userId: id } });
+  }
   const { data, error } = await fetchUserDetail(id);
   if (error || !data) {
     detailError.value = '无法读取用户详情，请确认中央后端已启动后重试。';
@@ -706,9 +907,10 @@ async function saveBusinessFields() {
   if (error || !data) return;
   detail.value = data;
   copyDetailToForm(data);
+  businessEditing.value = false;
   window.$message?.success('中央业务信息已保存');
   window.dispatchEvent(new Event('xpanel-events-updated'));
-  void loadGroups();
+  void reloadAll();
 }
 
 function cycleLabel(cycle: Api.Central.BillingCycle) {
@@ -723,20 +925,41 @@ function formatMoney(amount: number, currency = 'CNY') {
   return `${currency} ${Number(amount || 0).toFixed(2)}`;
 }
 
-async function confirmRenewal(candidate: Api.Central.UserRenewalCandidate) {
-  if (!detail.value) return;
-  const { data, error } = await confirmUserRenewal(detail.value.id, candidate.id, {
-    billingCycle: candidate.billingCycle,
-    amount: candidate.suggestedAmount
+function openRenewConfirm(candidate: Api.Central.UserRenewalCandidate) {
+  renewCandidate.value = candidate;
+  renewForm.amount = candidate.suggestedAmount;
+  renewForm.paidAt = new Date().toISOString().slice(0, 10);
+  renewModalVisible.value = true;
+}
+
+async function submitRenewConfirm() {
+  if (!detail.value || !renewCandidate.value) return;
+  const amount = renewForm.amount;
+  if (amount === null || !Number.isFinite(amount) || amount < 0) {
+    window.$message?.warning('请填写有效的续费金额');
+    return;
+  }
+  if (!renewForm.paidAt) {
+    window.$message?.warning('请填写实际收款日期');
+    return;
+  }
+  renewSaving.value = true;
+  const { data, error } = await confirmUserRenewal(detail.value.id, renewCandidate.value.id, {
+    billingCycle: renewCandidate.value.billingCycle,
+    amount,
+    paidAt: dayToRFC3339(renewForm.paidAt, true)
   });
+  renewSaving.value = false;
   if (error || !data) {
     window.$message?.error('续费确认失败，请稍后重试');
     return;
   }
   detail.value = data;
   copyDetailToForm(data);
+  renewModalVisible.value = false;
+  renewCandidate.value = null;
   window.$message?.success('续费已确认并计入财务');
-  void loadGroups();
+  void reloadAll();
 }
 
 async function rejectRenewal(candidate: Api.Central.UserRenewalCandidate) {
@@ -748,84 +971,8 @@ async function rejectRenewal(candidate: Api.Central.UserRenewalCandidate) {
   }
   detail.value = data;
   window.$message?.success('已标记为非收费变更');
+  void reloadAll();
 }
-
-const columns: DataTableColumns<Api.Central.UserSummary> = [
-  {
-    title: '用户 / Inbound',
-    key: 'name',
-    minWidth: 220,
-    render: row =>
-      h('div', [
-        h('div', { class: 'font-medium' }, row.name || '未命名用户'),
-        h('div', { class: 'text-12px text-gray-500' }, row.inboundTag)
-      ])
-  },
-  {
-    title: '线路机',
-    key: 'nodeName',
-    minWidth: 150,
-    render: row => row.nodeName || '未关联线路机'
-  },
-  {
-    title: '计费类型',
-    key: 'billingType',
-    width: 100,
-    render: row => (row.billingType === 'free' ? h('span', { class: 'text-orange-500' }, '免费') : '收费')
-  },
-  { title: '落地机', key: 'landingNodeName', minWidth: 140, render: row => row.landingNodeName || '线路机直出' },
-  {
-    title: '出口 IP',
-    key: 'exitIpAddress',
-    minWidth: 220,
-    render: row =>
-      h('div', [
-        h('div', { class: 'font-medium whitespace-normal break-all' }, row.exitIpAddress || '未配置'),
-        row.exitIpOwnerNodeName
-          ? h('div', { class: 'text-12px text-gray-500' }, `归属：${row.exitIpOwnerNodeName}`)
-          : null
-      ])
-  },
-  {
-    title: '路径状态',
-    key: 'pathMode',
-    minWidth: 140,
-    render: row =>
-      h('div', [
-        h('div', pathModeLabel(row.pathMode)),
-        row.pathMode === 'landing'
-          ? h('div', { class: 'text-12px text-gray-500' }, `Inbound：${row.landingInboundTag || '未配置'}`)
-          : null
-      ])
-  },
-  {
-    title: '状态',
-    key: 'status',
-    width: 100,
-    render: row => h(UserStatusTag, { status: row.status, expiresAt: row.expiresAt })
-  },
-  { title: '到期时间', key: 'expiresAt', minWidth: 170, render: row => formatExpiry(row.expiresAt, row.status) },
-  { title: '设备数', key: 'clientCount', width: 90 },
-  {
-    title: '累计流量',
-    key: 'trafficBytes',
-    minWidth: 120,
-    render: row => h(TrafficValue, { value: row.trafficBytes })
-  },
-  { title: '最近在线', key: 'lastActivityAt', minWidth: 170, render: row => formatDate(row.lastActivityAt) },
-  {
-    title: '操作',
-    key: 'actions',
-    width: 90,
-    fixed: 'right',
-    render: row =>
-      h(
-        NButton,
-        { size: 'small', type: 'primary', text: true, onClick: () => void openDetail(row.id) },
-        { default: () => '查看' }
-      )
-  }
-];
 
 function ensureGroupUsers(nodeID: string) {
   if (!groupUsers[nodeID]) {
@@ -834,25 +981,6 @@ function ensureGroupUsers(nodeID: string) {
   return groupUsers[nodeID];
 }
 
-function groupPagination(nodeID: string) {
-  const state = ensureGroupUsers(nodeID);
-  return {
-    page: state.page,
-    pageSize: state.pageSize,
-    itemCount: state.total,
-    showSizePicker: true,
-    pageSizes: [20, 50, 100],
-    onChange: (page: number) => {
-      state.page = page;
-      void loadGroupUsers(nodeID);
-    },
-    onUpdatePageSize: (pageSize: number) => {
-      state.pageSize = pageSize;
-      state.page = 1;
-      void loadGroupUsers(nodeID);
-    }
-  };
-}
 
 function isGroupExpanded(nodeID: string) {
   return expandedGroups.value.has(nodeID);
@@ -923,35 +1051,12 @@ async function loadGroupUsers(nodeID: string, requestedPage?: number) {
   state.loading = false;
 }
 
-async function loadExpiringUsers() {
-  expiringUsersLoading.value = true;
-  expiringUsersError.value = '';
-  const { data, error } = await fetchUsers({
-    page: filters.page,
-    page_size: expiringListPageSize,
-    keyword: filters.keyword || undefined,
-    status: 'expiring',
-    billing_type: filters.billingType === 'all' ? undefined : (filters.billingType as Api.Central.BillingType),
-    node_id: filters.nodeID || undefined
-  });
-  if (error || !data) {
-    expiringUsers.value = [];
-    expiringUsersTotal.value = 0;
-    expiringUsersError.value = '无法读取即将到期用户';
-  } else {
-    expiringUsers.value = data.items;
-    expiringUsersTotal.value = data.total;
-  }
-  expiringUsersLoading.value = false;
-}
-
 async function loadGroups() {
   loading.value = true;
   errorMessage.value = '';
-  const previouslyExpanded = [...expandedGroups.value];
   const { data, error } = await fetchUserGroups({
-    page: filters.page,
-    page_size: filters.page_size,
+    page: 1,
+    page_size: 100,
     keyword: filters.keyword || undefined,
     status: filters.status === 'all' ? undefined : filters.status,
     billing_type: filters.billingType === 'all' ? undefined : (filters.billingType as Api.Central.BillingType),
@@ -962,41 +1067,75 @@ async function loadGroups() {
     groups.value = [];
     groupTotal.value = 0;
     stats.value = null;
-    expiringUsers.value = [];
-    expiringUsersTotal.value = 0;
-    expiringUsersError.value = '';
     dataAt.value = '';
   } else {
     groups.value = data.items;
     groupTotal.value = data.total;
     stats.value = data.stats;
     dataAt.value = data.dataAt || '';
-    if (filters.status === 'expiring') {
-      await loadExpiringUsers();
-      expandedGroups.value = new Set();
-      loading.value = false;
-      return;
-    }
     const available = new Set(groups.value.map(group => group.nodeId));
     expandedGroups.value = new Set([...expandedGroups.value].filter(nodeID => available.has(nodeID)));
     for (const nodeID of Object.keys(groupUsers)) {
       if (!available.has(nodeID)) Reflect.deleteProperty(groupUsers, nodeID);
     }
-    if (groups.value.length === 1) {
+    if (viewMode.value === 'grouped' && !expandedGroups.value.size && groups.value.length) {
       expandedGroups.value = new Set([groups.value[0].nodeId]);
       void loadGroupUsers(groups.value[0].nodeId);
-    } else {
-      for (const nodeID of previouslyExpanded) {
-        if (available.has(nodeID)) void loadGroupUsers(nodeID);
-      }
     }
   }
   loading.value = false;
 }
 
-function submitFilters() {
-  filters.page_size = filters.status === 'expiring' ? expiringListPageSize : defaultGroupPageSize;
-  filters.page = 1;
+async function loadUsers() {
+  userLoading.value = true;
+  userError.value = '';
+  const { data, error } = await fetchUsers({
+    page: filters.page,
+    page_size: filters.page_size,
+    keyword: filters.keyword || undefined,
+    status: filters.status === 'all' ? undefined : filters.status,
+    billing_type: filters.billingType === 'all' ? undefined : (filters.billingType as Api.Central.BillingType),
+    node_id: filters.nodeID || undefined
+  });
+  if (error || !data) {
+    userRows.value = [];
+    userTotal.value = 0;
+    userError.value = '无法读取用户列表，请确认中央后端已启动后重试。';
+  } else {
+    userRows.value = data.items;
+    userTotal.value = data.total;
+  }
+  userLoading.value = false;
+}
+
+/**
+ * 全局概览：后端用户列表 stats 只有 启用/即将到期/付费/免费，
+ * 因此「总用户」用列表 total、「待确认续费」用待处理事件里的续费候选事件统计。
+ */
+async function loadOverview() {
+  const [allUsers, pendingEvents] = await Promise.all([
+    fetchUsers({ page: 1, page_size: 1 }),
+    fetchEvents({ page: 1, page_size: 200, status: 'pending' })
+  ]);
+  if (!allUsers.error && allUsers.data) totalUsers.value = allUsers.data.total;
+  if (!pendingEvents.error && pendingEvents.data) {
+    const renewals = pendingEvents.data.items.filter(item => {
+      const type = item.type || '';
+      return type === 'renewal_candidate_detected' && item.status !== 'resolved' && item.status !== 'dismissed';
+    });
+    pendingRenewalCount.value = renewals.length;
+    pendingRenewalAmount.value = renewals.reduce((sum, item) => {
+      const amount = Number(item.payload?.suggestedAmount ?? 0);
+      return sum + (Number.isFinite(amount) ? amount : 0);
+    }, 0);
+  }
+}
+
+async function reloadAll() {
+  await Promise.all([loadGroups(), loadUsers(), loadOverview()]);
+}
+
+function resetGroupUserState() {
   expandedGroups.value = new Set();
   for (const state of Object.values(groupUsers)) {
     state.page = 1;
@@ -1005,18 +1144,49 @@ function submitFilters() {
     state.total = 0;
     state.error = '';
   }
-  expiringUsers.value = [];
-  expiringUsersTotal.value = 0;
-  expiringUsersError.value = '';
-  loadGroups();
 }
 
-function showExpiringUsers() {
-  filters.keyword = '';
-  filters.status = 'expiring';
-  filters.billingType = 'all';
-  filters.nodeID = '';
+function submitFilters() {
+  filters.page = 1;
+  resetGroupUserState();
+  void (async () => {
+    await loadGroups();
+    await loadUsers();
+    if (viewMode.value === 'grouped' && groups.value.length) {
+      expandedGroups.value = new Set([groups.value[0].nodeId]);
+      void loadGroupUsers(groups.value[0].nodeId);
+    }
+  })();
+}
+
+function setStatusFilter(value: string) {
+  filters.status = value;
   submitFilters();
+}
+
+function setNodeFilter(value: string) {
+  filters.nodeID = value;
+  submitFilters();
+}
+
+function setViewMode(mode: 'table' | 'grouped') {
+  viewMode.value = mode;
+  const current = route.query.view === 'grouped' ? 'grouped' : 'table';
+  if (current !== mode) {
+    const query = { ...route.query };
+    if (mode === 'grouped') query.view = 'grouped';
+    else delete query.view;
+    void router.replace({ query });
+  }
+  if (mode === 'grouped' && !expandedGroups.value.size && groups.value.length) {
+    expandedGroups.value = new Set([groups.value[0].nodeId]);
+    void loadGroupUsers(groups.value[0].nodeId);
+  }
+}
+
+function changeUserPage(page: number) {
+  filters.page = page;
+  void loadUsers();
 }
 
 function resetFilters() {
@@ -1028,245 +1198,996 @@ function resetFilters() {
   submitFilters();
 }
 
+function openOrderFromPage() {
+  if (drawerVisible.value && detail.value) {
+    openOrderModal();
+    return;
+  }
+  window.$message?.info('请先在列表中选择用户，再在详情抽屉中新增订单');
+}
+
+async function openOrderForUser(userID: string) {
+  await openDetail(userID);
+  if (detail.value) openOrderModal();
+}
+
+function setDetailTab(tab: 'overview' | 'billing' | 'path' | 'device') {
+  detailTab.value = tab;
+  void nextTick(() => {
+    const target = document.getElementById(`u-sec-${tab}`);
+    target?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  });
+}
+
+function scrollToSection(tab: string) {
+  setDetailTab(tab as 'overview' | 'billing' | 'path' | 'device');
+}
+
+function handleMoreMenu(key: string) {
+  if (key === 'order') openOrderModal();
+  else if (key === 'import') importModalVisible.value = true;
+  else if (key === 'replace') confirmReplaceCurrentUser();
+}
+
+function closeDetail() {
+  drawerVisible.value = false;
+  businessEditing.value = false;
+  if (route.query.userId) {
+    const query = { ...route.query };
+    delete query.userId;
+    void router.replace({ query });
+  }
+}
+
+function exportCurrentRows() {
+  if (!userRows.value.length) return;
+  const header = ['用户', 'Inbound', '状态', '到期时间', '累计流量(字节)', '线路机', '出口 IP', '计费类型'];
+  const lines = userRows.value.map(row => [
+    row.name,
+    row.inboundTag,
+    statusLabel(row.status),
+    row.expiresAt || '',
+    String(row.trafficBytes ?? ''),
+    row.nodeName,
+    row.exitIpAddress || '',
+    row.billingType === 'free' ? '免费' : '收费'
+  ]);
+  const escape = (value: string) => `"${String(value ?? '').replace(/"/g, '""')}"`;
+  const csv = [header, ...lines].map(cells => cells.map(escape).join(',')).join('\r\n');
+  const blob = new Blob([`\ufeff${csv}`], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = `users-${new Date().toISOString().slice(0, 10)}.csv`;
+  link.click();
+  URL.revokeObjectURL(url);
+}
+
 onMounted(() => {
-  void loadGroups();
+  void reloadAll();
+  if (route.query.view === 'grouped') setViewMode('grouped');
   const userId = typeof route.query.userId === 'string' ? route.query.userId : '';
   if (userId) void openDetail(userId);
 });
+
 </script>
 
 <template>
-  <div class="users-page">
-    <ModulePage
-      title="用户管理"
-      description="按线路机查看业务用户；一个 Inbound 对应一个业务用户，Client / Email 仅作为设备凭证。"
-      :loading="loading"
-      :error="errorMessage"
-      :empty="groups.length === 0 && filters.status !== 'expiring'"
-      empty-description="暂无用户同步数据"
-      :data-at="dataAt"
-      @refresh="loadGroups"
-    >
-      <template #actions>
-        <NButton size="small" secondary @click="importModalVisible = true">
-          <template #icon><icon-mdi-upload /></template>
-          导入历史账单
-        </NButton>
-        <NButton v-if="errorMessage" size="small" type="warning" secondary @click="loadGroups">重试</NButton>
-      </template>
-      <template #toolbar>
-        <div>
-          <div v-if="stats" class="users-kpis p-16px pb-0">
-            <div class="users-kpi">
-              <span>有效用户</span>
-              <strong class="users-value--active">{{ stats.active }}</strong>
-            </div>
-            <div class="users-kpi">
-              <span>付费用户</span>
-              <strong class="users-value--paid">{{ stats.paid }}</strong>
-            </div>
-            <div class="users-kpi">
-              <span>免费用户</span>
-              <strong class="users-value--free">{{ stats.free }}</strong>
-            </div>
-            <button
-              type="button"
-              class="users-kpi users-kpi--clickable"
-              aria-label="查看全部即将到期用户"
-              title="点击查看全部即将到期用户"
-              @click="showExpiringUsers"
-            >
-              <span>即将到期</span>
-              <strong class="users-value--expiring">{{ stats.expiring }}</strong>
-            </button>
-          </div>
-          <div class="border-b border-gray-200 p-16px dark:border-gray-700">
-            <NSpace wrap>
-              <NInput
-                v-model:value="filters.keyword"
-                clearable
-                class="w-240px"
-                placeholder="搜索用户、Inbound 或线路机"
-                @keyup.enter="submitFilters"
-              />
-              <NSelect v-model:value="filters.status" :options="statusOptions" class="w-140px" />
-              <NSelect v-model:value="filters.billingType" :options="billingTypeOptions" class="w-140px" />
-              <NSelect v-model:value="filters.nodeID" :options="nodeOptions" class="w-180px" filterable />
-              <NButton type="primary" @click="submitFilters">
-                <template #icon><icon-mdi-magnify /></template>
-                查询
-              </NButton>
-              <NButton @click="resetFilters">{{ filters.status === 'expiring' ? '查看全部用户' : '重置' }}</NButton>
-              <NButton secondary :disabled="groups.length === 0" @click="expandAllGroups">全部展开</NButton>
-              <NButton secondary :disabled="groups.length === 0" @click="collapseAllGroups">全部收起</NButton>
-            </NSpace>
-          </div>
+  <div class="u-page">
+    <!-- ===================== 页头 ===================== -->
+    <header class="u-head">
+      <div class="u-head-main">
+        <div class="u-eyebrow">
+          <span>业务</span>
+          <span class="u-eyebrow-sep">·</span>
+          <span>用户管理</span>
+          <span class="u-eyebrow-sep">·</span>
+          <span>数据更新于 {{ relativeTime(dataAt) }}</span>
         </div>
-      </template>
-      <div v-if="filters.status === 'expiring'" class="user-expiring-list p-16px pt-0">
-        <NSpin :show="expiringUsersLoading">
-          <NAlert v-if="expiringUsersError" type="warning" :show-icon="false" class="mb-12px">
-            {{ expiringUsersError }}
-            <NButton size="small" class="ml-8px" @click="loadExpiringUsers">重试</NButton>
-          </NAlert>
-          <NDataTable
-            v-else
-            :columns="columns"
-            :data="expiringUsers"
-            :pagination="false"
-            :bordered="false"
-            :single-line="true"
-            size="small"
-            :scroll-x="1170"
-          />
-        </NSpin>
-        <div v-if="expiringUsersTotal > filters.page_size" class="flex justify-end pt-12px">
-          <NPagination
-            v-model:page="filters.page"
-            :page-count="Math.ceil(expiringUsersTotal / filters.page_size)"
-            @update:page="loadExpiringUsers"
-          />
+        <h1 class="u-title">用户管理</h1>
+        <p class="u-desc">
+          业务用户 = 一台线路机上的一个用户 Inbound；Email 与 Client 只是这台用户下的设备凭证，不参与身份。
+          到期时间由启用 Client 派生（取最早有限的到期值），不可手改；收费与路径由中央面板维护。
+        </p>
+      </div>
+      <div class="u-head-actions">
+        <DataFreshness :data-at="dataAt" />
+        <button class="u-btn" type="button" :disabled="loading || userLoading" @click="reloadAll">
+          <SvgIcon icon="mdi:refresh" class="u-btn-ico" />刷新
+        </button>
+        <button class="u-btn is-primary" type="button" @click="openOrderFromPage">
+          <SvgIcon icon="mdi:plus" class="u-btn-ico" />新增订单
+        </button>
+      </div>
+    </header>
+
+    <!-- ===================== KPI ===================== -->
+    <section class="u-kpis">
+      <div class="u-kpi">
+        <div class="u-kpi-top">
+          <span class="u-kpi-label">总用户 <span class="u-dim">· 业务用户</span></span>
+          <span class="u-kpi-icon is-blue"><SvgIcon icon="mdi:account-group-outline" /></span>
+        </div>
+        <div class="u-kpi-value">{{ totalUsers === null ? '--' : totalUsers }}<span class="u-kpi-unit">户</span></div>
+        <div class="u-kpi-foot">{{ groupTotal }} 个线路机分组</div>
+      </div>
+
+      <div class="u-kpi">
+        <div class="u-kpi-top">
+          <span class="u-kpi-label">启用中</span>
+          <span class="u-kpi-icon is-green"><SvgIcon icon="mdi:account-check-outline" /></span>
+        </div>
+        <div class="u-kpi-value">{{ stats ? stats.active : '--' }}<span class="u-kpi-unit">户</span></div>
+        <div class="u-kpi-foot">
+          付费 {{ stats ? stats.paid : '--' }} · 免费 {{ stats ? stats.free : '--' }}
         </div>
       </div>
-      <div v-else-if="groups.length" class="user-groups-grid p-16px pt-0">
-        <div
-          v-for="group in groups"
-          :key="group.nodeId"
-          class="user-group-card"
-          :class="{ 'user-group-card--expanded': isGroupExpanded(group.nodeId) }"
+
+      <div class="u-kpi is-clickable" title="查看 7 天内到期用户" @click="setStatusFilter('expiring')">
+        <div class="u-kpi-top">
+          <span class="u-kpi-label">7 天内到期</span>
+          <span class="u-kpi-icon is-amber"><SvgIcon icon="mdi:clock-alert-outline" /></span>
+        </div>
+        <div class="u-kpi-value">{{ stats ? stats.expiring : '--' }}<span class="u-kpi-unit">户</span></div>
+        <div class="u-kpi-foot u-warn">{{ expiringHint }}</div>
+      </div>
+
+      <div class="u-kpi">
+        <div class="u-kpi-top">
+          <span class="u-kpi-label">待确认续费</span>
+          <span class="u-kpi-icon is-red"><SvgIcon icon="mdi:credit-card-clock-outline" /></span>
+        </div>
+        <div class="u-kpi-value">{{ pendingRenewalCount === null ? '--' : pendingRenewalCount }}<span class="u-kpi-unit">笔</span></div>
+        <div class="u-kpi-foot">
+          <span class="u-badge is-danger">{{ formatMoney(pendingRenewalAmount) }}</span>
+          <span class="u-kpi-foot-text">确认后才计入财务</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===================== 工具条 ===================== -->
+    <section class="u-toolbar">
+      <label class="u-input u-search">
+        <SvgIcon icon="mdi:magnify" class="u-input-ico" />
+        <input v-model="filters.keyword" placeholder="搜索用户、Inbound 或线路机" @keyup.enter="submitFilters" />
+      </label>
+      <NSelect
+        v-model:value="filters.nodeID"
+        :options="nodeOptions"
+        size="small"
+        class="u-select"
+        style="width: 150px"
+        @update:value="submitFilters"
+      />
+      <NSelect
+        v-model:value="filters.billingType"
+        :options="billingTypeOptions"
+        size="small"
+        class="u-select"
+        style="width: 120px"
+        @update:value="submitFilters"
+      />
+      <div class="u-seg">
+        <button
+          v-for="option in statusOptions"
+          :key="option.value"
+          type="button"
+          :class="{ 'is-active': filters.status === option.value }"
+          @click="setStatusFilter(option.value)"
         >
+          {{ option.label }}
+        </button>
+      </div>
+      <button class="u-btn u-btn-xs is-soft" type="button" @click="submitFilters">查询</button>
+      <button v-if="hasActiveFilters" class="u-btn u-btn-xs" type="button" @click="resetFilters">重置</button>
+      <span class="u-spacer"></span>
+      <div class="u-seg">
+        <button type="button" :class="{ 'is-active': viewMode === 'grouped' }" @click="setViewMode('grouped')">
+          分组视图
+        </button>
+        <button type="button" :class="{ 'is-active': viewMode === 'table' }" @click="setViewMode('table')">
+          表格视图
+        </button>
+      </div>
+      <button class="u-btn" type="button" :disabled="!userRows.length" @click="exportCurrentRows">
+        <SvgIcon icon="mdi:download" class="u-btn-ico" />导出
+      </button>
+    </section>
+
+    <!-- ===================== 表格视图 ===================== -->
+    <div v-if="viewMode === 'table'" class="u-split">
+      <aside class="u-card u-facet">
+        <div class="u-card-head">
+          <h3>线路机</h3>
+          <span class="u-badge is-neutral">{{ groupTotal }}</span>
+          <div class="u-right"><span class="u-dim">按用户数</span></div>
+        </div>
+        <div class="u-facet-body">
           <button
-            :id="`user-group-toggle-${group.nodeId}`"
             type="button"
-            class="user-group-card__header"
-            :aria-expanded="isGroupExpanded(group.nodeId)"
-            :aria-controls="`user-group-users-${group.nodeId}`"
-            @click="toggleGroup(group)"
+            class="u-facet-item"
+            :class="{ 'is-active': filters.nodeID === '' }"
+            @click="setNodeFilter('')"
           >
-            <icon-mdi-chevron-right class="user-group-card__chevron" aria-hidden="true" />
-            <span class="user-group-card__heading">
-              <span class="user-group-card__title">
-                <span class="user-group-card__name">{{ group.nodeName }}</span>
-                <span class="user-group-card__status" :class="`user-group-card__status--${nodeStatusType(group.status)}`">
-                  {{ nodeStatusLabel(group.status) }}
-                </span>
-                <span
-                  class="user-group-card__status"
-                  :class="{
-                    'user-group-card__status--sync': group.syncStatus === 'success',
-                    'user-group-card__status--error': group.syncStatus === 'failed'
-                  }"
-                >
-                  {{ syncStatusLabel(group.syncStatus) }}
-                </span>
-              </span>
-              <span class="user-group-card__sync-time">
-                {{ group.lastSyncAt ? `最近同步：${formatDate(group.lastSyncAt)}` : '尚未完成成功同步' }}
-              </span>
-            </span>
-            <span class="user-group-card__action">
-              {{ isGroupExpanded(group.nodeId) ? '收起用户' : '查看用户' }}
-            </span>
+            <i class="u-dot is-brand"></i>
+            <span class="u-facet-name">全部线路机</span>
+            <span class="u-num u-dim">{{ totalUsers === null ? '--' : totalUsers }}</span>
+          </button>
+          <button
+            v-for="group in groups"
+            :key="group.nodeId"
+            type="button"
+            class="u-facet-item"
+            :class="{ 'is-active': filters.nodeID === group.nodeId }"
+            @click="setNodeFilter(group.nodeId)"
+          >
+            <i class="u-dot" :class="nodeDotClass(group.status)"></i>
+            <span class="u-facet-name">{{ group.nodeName }}</span>
+            <span class="u-num u-dim">{{ group.stats.total }}</span>
           </button>
 
-          <div class="user-group-card__body">
-            <div class="user-group-card__metrics">
-              <div class="user-group-card__metric">
-                <span>用户</span>
-                <strong>{{ group.stats.total }}</strong>
-              </div>
-              <div class="user-group-card__metric">
-                <span>有效</span>
-                <strong class="users-value--active">{{ group.stats.active }}</strong>
-              </div>
-              <div class="user-group-card__metric">
-                <span>付费</span>
-                <strong class="users-value--paid">{{ group.stats.paid }}</strong>
-              </div>
-              <div class="user-group-card__metric">
-                <span>免费</span>
-                <strong class="users-value--free">{{ group.stats.free }}</strong>
-              </div>
-              <div class="user-group-card__metric">
-                <span>即将到期</span>
-                <strong class="users-value--expiring">{{ group.stats.expiring }}</strong>
-              </div>
-              <div class="user-group-card__metric user-group-card__metric--traffic">
-                <span>累计流量</span>
-                <strong><TrafficValue :value="group.stats.trafficBytes" /></strong>
-              </div>
+          <div class="u-hr"></div>
+          <div class="u-facet-title">到期分布</div>
+          <div v-for="item in distribution" :key="item.key" class="u-dist">
+            <div class="u-dist-top">
+              <span class="u-dim">{{ item.label }}</span>
+              <span class="u-num">{{ item.value }}</span>
             </div>
+            <div class="u-bar"><span :class="item.tone" :style="{ width: item.percent + '%' }"></span></div>
+          </div>
 
-            <div
-              v-if="isGroupExpanded(group.nodeId)"
-              :id="`user-group-users-${group.nodeId}`"
-              class="user-group-card__users"
-              role="region"
-              :aria-labelledby="`user-group-toggle-${group.nodeId}`"
-            >
-              <NSpin :show="groupUsers[group.nodeId]?.loading || false">
-                <NAlert v-if="groupUsers[group.nodeId]?.error" type="warning" :show-icon="false" class="mb-12px">
-                  {{ groupUsers[group.nodeId]?.error }}
-                  <NButton size="small" class="ml-8px" @click="loadGroupUsers(group.nodeId)">重试</NButton>
-                </NAlert>
-                <NDataTable
-                  v-else-if="groupUsers[group.nodeId]"
-                  :columns="columns"
-                  :data="groupUsers[group.nodeId].rows"
-                  :pagination="groupPagination(group.nodeId)"
-                  :bordered="false"
-                  :single-line="true"
-                  size="small"
-                  :scroll-x="1020"
-                />
-              </NSpin>
-            </div>
+          <div class="u-hr"></div>
+          <button type="button" class="u-btn u-btn-block" @click="importModalVisible = true">
+            <SvgIcon icon="mdi:upload" class="u-btn-ico" />导入历史账单
+          </button>
+          <p class="u-hint">CSV 逐行预览校验，有错禁止提交；verified=false 的记录进入待核实，不计入财务。</p>
+
+          <div class="u-hr"></div>
+          <p class="u-hint">落地机不产生业务用户：落地机 Inbound 恒为基础设施，只作为路径出口。</p>
+        </div>
+      </aside>
+
+      <section class="u-card u-main">
+        <div class="u-card-head">
+          <h3>用户</h3>
+          <span class="u-badge is-neutral">{{ userTotal }} 户</span>
+          <div class="u-right"><span class="u-dim">按到期时间升序 · 不限期排最后</span></div>
+        </div>
+
+        <NAlert v-if="errorMessage" type="warning" :show-icon="false" class="u-alert">{{ errorMessage }}</NAlert>
+
+        <div v-if="userError" class="u-inline-error">
+          {{ userError }}
+          <button class="u-btn u-btn-xs" type="button" @click="loadUsers">重试</button>
+        </div>
+
+        <div class="u-table-wrap">
+          <table class="u-table">
+            <thead>
+              <tr>
+                <th>用户 / Inbound</th>
+                <th>状态</th>
+                <th>到期时间</th>
+                <th>用量 / 配额 <span class="u-star">*</span></th>
+                <th>线路机</th>
+                <th>出口 IP</th>
+                <th class="is-num">计费 <span class="u-star">*</span></th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="row in userRows" :key="row.id" class="u-row" @click="openDetail(row.id)">
+                <td class="u-td-strong">
+                  <span class="u-name">{{ row.name || '未命名用户' }}</span>
+                  <span class="u-sub">{{ row.inboundTag || '--' }} · {{ row.clientCount }} 台设备</span>
+                </td>
+                <td>
+                  <span class="u-badge" :class="statusBadgeClass(row.status)">
+                    <i class="u-badge-dot"></i>{{ statusLabel(row.status) }}
+                  </span>
+                  <span v-if="row.status === 'expiring'" class="u-sub u-warn">还剩 {{ daysUntil(row.expiresAt) }} 天</span>
+                </td>
+                <td class="u-num">
+                  {{ formatExpiry(row.expiresAt, row.status) }}
+                  <span class="u-sub">{{ expiryHint(row) }}</span>
+                </td>
+                <td>
+                  <TrafficValue :value="row.trafficBytes" />
+                  <span class="u-dim"> / --</span>
+                </td>
+                <td><span class="u-badge is-neutral">{{ row.nodeName || '未关联' }}</span></td>
+                <td>
+                  <span class="u-mono">{{ row.exitIpAddress || '未配置' }}</span>
+                  <span class="u-sub">{{ exitIpHint(row) }}</span>
+                </td>
+                <td class="is-num">
+                  <span v-if="row.billingType === 'free'" class="u-badge is-neutral">免费</span>
+                  <span v-else class="u-strong">收费</span>
+                  <span class="u-sub">金额 --</span>
+                </td>
+                <td class="u-td-actions" @click.stop>
+                  <button
+                    v-if="row.status === 'expiring' || row.status === 'expired'"
+                    class="u-btn u-btn-xs is-soft"
+                    type="button"
+                    @click="openOrderForUser(row.id)"
+                  >
+                    续费
+                  </button>
+                  <button class="u-icon-btn" type="button" title="查看详情" @click="openDetail(row.id)">
+                    <SvgIcon icon="mdi:chevron-right" />
+                  </button>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+
+          <div v-if="userLoading" class="u-loading"><NSpin size="small" /></div>
+          <div v-if="!userLoading && !userRows.length && !userError" class="u-empty">
+            {{ hasActiveFilters ? '没有符合筛选条件的用户' : '暂无用户同步数据' }}
           </div>
         </div>
-      </div>
-      <div v-if="filters.status !== 'expiring' && groups.length && groupTotal > filters.page_size" class="flex justify-end px-16px pt-2px">
-        <NPagination
-          v-model:page="filters.page"
-          :page-count="Math.ceil(groupTotal / filters.page_size)"
-          @update:page="loadGroups"
-        />
-      </div>
-    </ModulePage>
 
-    <NModal v-model:show="importModalVisible" preset="card" title="导入历史账单" class="w-900px max-w-92vw">
-      <NAlert type="info" :show-icon="true" class="mb-12px">
-        每行一笔订单。表头支持：userId、nodeId、remoteInboundId、billingCycle、amount、serviceFrom、serviceTo、paidAt、orderType、verified、notes。
-        userId 与 nodeId + remoteInboundId 二选一；日期支持 YYYY-MM-DD。verified 填 false 的记录会进入待核实，不计入财务。
-      </NAlert>
-      <NInput
-        v-model:value="importText"
-        type="textarea"
-        :autosize="{ minRows: 8, maxRows: 18 }"
-        placeholder="userId,billingCycle,amount,serviceFrom,serviceTo,paidAt,orderType,verified,notes\n用户ID,monthly,100,2026-03-01,2026-04-01,2026-03-01,initial,true,首购"
-      />
-      <div v-if="importPreview" class="mt-12px">
-        <NAlert :type="importPreview.errors.length ? 'error' : 'success'" :show-icon="true">
-          {{ importPreview.errors.length ? `预览发现 ${importPreview.errors.length} 个错误，请修正后重新预览` : `预览通过：${importPreview.records.length} 笔，其中 ${importPreview.unverified} 笔待核实` }}
-        </NAlert>
-        <div v-if="importPreview.errors.length" class="mt-8px max-h-160px overflow-auto text-12px text-red-500">
-          <div v-for="item in importPreview.errors" :key="`${item.row}-${item.message}`">第 {{ item.row }} 行：{{ item.message }}</div>
+        <div class="u-table-foot">
+          <span class="u-dim">共 {{ userTotal }} 户 · 每页 {{ filters.page_size }} 条 · 第 {{ filters.page }} 页</span>
+          <NPagination
+            :page="filters.page"
+            :page-count="userPageCount"
+            :page-slot="5"
+            size="small"
+            @update:page="changeUserPage"
+          />
         </div>
+      </section>
+    </div>
+
+    <!-- ===================== 分组视图 ===================== -->
+    <div v-else class="u-grouped">
+      <div class="u-grouped-tools">
+        <span class="u-dim">按线路机分组 · 展开后懒加载该组用户</span>
+        <span class="u-spacer"></span>
+        <button class="u-btn u-btn-xs" type="button" :disabled="!groups.length" @click="expandAllGroups">全部展开</button>
+        <button class="u-btn u-btn-xs" type="button" :disabled="!groups.length" @click="collapseAllGroups">全部收起</button>
+      </div>
+
+      <section
+        v-for="group in groups"
+        :key="group.nodeId"
+        class="u-card u-group"
+        :class="{ 'is-open': isGroupExpanded(group.nodeId) }"
+      >
+        <button type="button" class="u-group-head" @click="toggleGroup(group)">
+          <SvgIcon icon="mdi:chevron-right" class="u-group-chev" />
+          <span class="u-group-name">{{ group.nodeName }}</span>
+          <span class="u-badge" :class="nodeBadgeClass(group.status)">
+            <i class="u-badge-dot"></i>{{ nodeStatusLabel(group.status) }}
+          </span>
+          <span class="u-badge is-brand">线路机</span>
+          <span class="u-badge is-neutral">{{ group.stats.total }} 户</span>
+          <span class="u-group-summary u-dim">{{ groupSummary(group) }}</span>
+          <span class="u-group-traffic u-dim">累计 <TrafficValue :value="group.stats.trafficBytes" /></span>
+          <span class="u-group-sync u-dim">
+            {{ group.lastSyncAt ? '最近同步 ' + formatDate(group.lastSyncAt) : '尚未完成成功同步' }}
+          </span>
+          <span class="u-group-toggle">{{ isGroupExpanded(group.nodeId) ? '收起用户' : '查看用户' }}</span>
+        </button>
+
+        <div v-if="isGroupExpanded(group.nodeId)" class="u-group-body">
+          <NSpin :show="groupUsers[group.nodeId]?.loading || false">
+            <div v-if="groupUsers[group.nodeId]?.error" class="u-inline-error">
+              {{ groupUsers[group.nodeId]?.error }}
+              <button class="u-btn u-btn-xs" type="button" @click="loadGroupUsers(group.nodeId)">重试</button>
+            </div>
+            <div v-else class="u-table-wrap">
+              <table class="u-table is-compact">
+                <thead>
+                  <tr>
+                    <th>用户 / Inbound</th>
+                    <th>状态</th>
+                    <th>到期时间</th>
+                    <th>用量 / 配额 <span class="u-star">*</span></th>
+                    <th>出口 IP</th>
+                    <th class="is-num">计费 <span class="u-star">*</span></th>
+                    <th></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr v-for="row in groupRows(group.nodeId)" :key="row.id" class="u-row" @click="openDetail(row.id)">
+                    <td class="u-td-strong">
+                      <span class="u-name">{{ row.name || '未命名用户' }}</span>
+                      <span class="u-sub">{{ row.inboundTag || '--' }}</span>
+                    </td>
+                    <td>
+                      <span class="u-badge" :class="statusBadgeClass(row.status)">
+                        <i class="u-badge-dot"></i>{{ statusLabel(row.status) }}
+                      </span>
+                    </td>
+                    <td class="u-num">
+                      {{ formatExpiry(row.expiresAt, row.status) }}
+                      <span class="u-sub">{{ expiryHint(row) }}</span>
+                    </td>
+                    <td>
+                      <TrafficValue :value="row.trafficBytes" />
+                      <span class="u-dim"> / --</span>
+                    </td>
+                    <td>
+                      <span class="u-mono">{{ row.exitIpAddress || '未配置' }}</span>
+                    </td>
+                    <td class="is-num">
+                      <span v-if="row.billingType === 'free'" class="u-badge is-neutral">免费</span>
+                      <span v-else class="u-strong">收费</span>
+                    </td>
+                    <td class="u-td-actions" @click.stop>
+                      <button class="u-icon-btn" type="button" title="查看详情" @click="openDetail(row.id)">
+                        <SvgIcon icon="mdi:chevron-right" />
+                      </button>
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </NSpin>
+          <div class="u-table-foot">
+            <span class="u-dim">共 {{ groupUserTotal(group.nodeId) }} 户 · 已显示 {{ groupRows(group.nodeId).length }} 户</span>
+            <NPagination
+              :page="groupPage(group.nodeId)"
+              :page-count="groupPageCount(group.nodeId)"
+              :page-slot="5"
+              size="small"
+              @update:page="page => changeGroupPage(group.nodeId, page)"
+            />
+          </div>
+        </div>
+      </section>
+
+      <div v-if="!groups.length" class="u-card u-empty-card">
+        {{ hasActiveFilters ? '没有符合筛选条件的线路机分组' : '暂无用户同步数据' }}
+      </div>
+    </div>
+
+    <p class="u-footnote">
+      * 「用量 / 配额」与「计费」两列需要后端补充套餐配额、金额与周期字段；当前仅返回
+      <span class="u-mono">trafficBytes</span> 与 <span class="u-mono">billingType</span>，
+      因此用量只显示累计流量（相对流量基线的增量）、计费只显示收费 / 免费，其余以 <span class="u-mono">--</span> 占位。
+    </p>
+
+    <!-- ===================== 详情抽屉 ===================== -->
+    <NDrawer v-model:show="drawerVisible" :width="760" placement="right" :mask-closable="false">
+      <NDrawerContent body-content-style="padding: 0">
+        <template #header>
+          <div class="u-dhead">
+            <span class="u-avatar">{{ detailInitial }}</span>
+            <div class="u-dhead-main">
+              <div class="u-dhead-title">
+                <h2>{{ detail?.displayName || selectedUserID || '用户详情' }}</h2>
+                <span v-if="detail" class="u-badge" :class="statusBadgeClass(detail.status)">
+                  <i class="u-badge-dot"></i>{{ statusLabel(detail.status) }}
+                </span>
+                <span v-if="pendingCandidates.length" class="u-badge is-danger">续费待确认</span>
+                <span v-if="detail" class="u-badge is-neutral">
+                  {{ cycleLabel(detail.billingCycle) }} · {{ formatMoney(detail.billingAmount) }}
+                </span>
+                <span v-if="detail?.path" class="u-badge is-brand">{{ pathModeLabel(detail.path.mode) }}</span>
+              </div>
+              <p class="u-dhead-sub">
+                {{
+                  detail
+                    ? `${detail.node.name || '未关联线路机'} · ${detail.inbound.tag || detail.inbound.remoteId || '--'} · 一个 Reality Inbound 对应一个业务用户`
+                    : '正在读取用户详情…'
+                }}
+              </p>
+            </div>
+            <div class="u-dhead-actions">
+              <NDropdown trigger="click" :options="moreMenuOptions" @select="handleMoreMenu">
+                <button class="u-icon-btn" type="button" title="更多操作">
+                  <SvgIcon icon="mdi:dots-horizontal" />
+                </button>
+              </NDropdown>
+              <button class="u-btn is-primary" type="button" :disabled="!detail" @click="openOrderModal">续费</button>
+              <button class="u-icon-btn" type="button" title="关闭" @click="closeDetail"><SvgIcon icon="mdi:close" /></button>
+            </div>
+          </div>
+        </template>
+
+        <div v-if="detailLoading" class="u-drawer-loading"><NSpin size="medium" /></div>
+
+        <template v-else>
+          <NAlert v-if="detailError" type="error" :show-icon="true" class="u-drawer-alert">
+            {{ detailError }}
+            <button class="u-btn u-btn-xs" type="button" @click="openDetail(selectedUserID)">重试</button>
+          </NAlert>
+
+          <template v-if="detail">
+            <div class="u-dtabs">
+              <button
+                v-for="tab in detailTabs"
+                :key="tab.key"
+                type="button"
+                :class="{ 'is-active': detailTab === tab.key }"
+                @click="scrollToSection(tab.key)"
+              >
+                {{ tab.label }}
+              </button>
+            </div>
+
+            <div class="u-dbody">
+              <div class="u-stack">
+                <!-- 1. 待确认续费 -->
+                <div v-if="pendingCandidates.length" class="u-callout is-warn">
+                  <SvgIcon icon="mdi:alert-outline" class="u-callout-ico" />
+                  <div class="u-callout-main">
+                    <div class="u-callout-head">
+                      <b>待确认续费</b>
+                      <span class="u-badge is-warn">Agent 检测到 Client 到期延长</span>
+                      <span class="u-dim u-ml-auto">{{ relativeTime(pendingCandidates[0].detectedAt) }}</span>
+                    </div>
+                    <div v-for="candidate in pendingCandidates" :key="candidate.id" class="u-cand">
+                      <div class="u-cand-info">
+                        <b class="u-num">{{ formatDate(candidate.oldExpiryAt) }} → {{ formatDate(candidate.newExpiryAt) }}</b>
+                        <span class="u-cand-sub">
+                          {{ cycleLabel(candidate.billingCycle) }} · 建议金额 {{ formatMoney(candidate.suggestedAmount) }} ·
+                          来源 {{ detail.node.name || '--' }} 的 Client 到期变更
+                        </span>
+                      </div>
+                      <div class="u-cand-actions">
+                        <button class="u-btn u-btn-xs is-success" type="button" @click="openRenewConfirm(candidate)">
+                          确认续费
+                        </button>
+                        <button class="u-btn u-btn-xs" type="button" @click="rejectRenewal(candidate)">非收费变更</button>
+                      </div>
+                    </div>
+                    <p class="u-callout-note">
+                      确认后会立即生成 1 条 agent_detected 收费记录并计入实收，金额与服务期不可再修改；
+                      选择「非收费变更」只关闭候选与事件，不计入财务。代理只提议、不自动记账。
+                    </p>
+                  </div>
+                </div>
+
+                <!-- 2. 业务资料 -->
+                <section id="u-sec-overview" class="u-dcard">
+                  <div class="u-dcard-head">
+                    <h3>业务资料</h3>
+                    <span class="u-badge is-brand">中央面板可写</span>
+                    <div class="u-right">
+                      <button class="u-btn u-btn-xs" type="button" @click="businessEditing = !businessEditing">
+                        {{ businessEditing ? '取消编辑' : '编辑' }}
+                      </button>
+                    </div>
+                  </div>
+                  <div class="u-dcard-body">
+                    <div class="u-grid-2">
+                      <label class="u-field">
+                        <span class="u-label">业务用户名称 <i class="u-req">*</i></span>
+                        <input v-model="editForm.displayName" class="u-input is-plain" maxlength="120" :disabled="!businessEditing" />
+                      </label>
+                      <div class="u-field">
+                        <span class="u-label">收费周期</span>
+                        <NSelect v-model:value="editForm.billingCycle" :options="billingCycleOptions" size="small" :disabled="!businessEditing" />
+                      </div>
+                      <div class="u-field">
+                        <span class="u-label">计费类型</span>
+                        <NSelect v-model:value="editForm.billingType" :options="billingTypeFormOptions" size="small" :disabled="!businessEditing" />
+                      </div>
+                      <label class="u-field">
+                        <span class="u-label">{{ editForm.billingCycle === 'annual' ? '年费（CNY）' : '月费（CNY）' }}</span>
+                        <NInputNumber
+                          v-model:value="editForm.billingAmount"
+                          :min="0"
+                          :max="100000000"
+                          :precision="2"
+                          size="small"
+                          :disabled="!businessEditing"
+                        />
+                      </label>
+                    </div>
+                    <label v-if="editForm.billingType === 'free'" class="u-field u-mt-12">
+                      <span class="u-label">免费原因</span>
+                      <input
+                        v-model="editForm.freeReason"
+                        class="u-input is-plain"
+                        maxlength="200"
+                        placeholder="例如：朋友体验、内部测试"
+                        :disabled="!businessEditing"
+                      />
+                    </label>
+                    <label class="u-field u-mt-12">
+                      <span class="u-label">备注</span>
+                      <textarea v-model="editForm.notes" class="u-input is-plain is-area" rows="3" maxlength="2000" :disabled="!businessEditing"></textarea>
+                    </label>
+                    <div v-if="businessEditing" class="u-form-actions">
+                      <button class="u-btn is-primary" type="button" :disabled="saving" @click="saveBusinessFields">保存业务信息</button>
+                    </div>
+                    <p v-else class="u-hint">点「编辑」后可修改；保存只更新中央面板业务信息，不改 X-Panel。</p>
+                  </div>
+                </section>
+
+                <!-- 3. 服务与到期 -->
+                <section class="u-dcard">
+                  <div class="u-dcard-head">
+                    <h3>服务与到期</h3>
+                    <span class="u-badge is-neutral">由启用 Client 派生</span>
+                    <div class="u-right u-dim">不可手改</div>
+                  </div>
+                  <div class="u-dcard-body">
+                    <div class="u-grid-3">
+                      <div class="u-field">
+                        <span class="u-label">到期时间</span>
+                        <b class="u-num">{{ formatExpiry(detail.expiresAt, detail.status) }}</b>
+                      </div>
+                      <div class="u-field">
+                        <span class="u-label">剩余</span>
+                        <span class="u-badge" :class="expiryBadgeClass(detail)">{{ expiryText(detail) }}</span>
+                      </div>
+                      <div class="u-field">
+                        <span class="u-label">用户状态</span>
+                        <span class="u-badge" :class="statusBadgeClass(detail.status)">{{ statusLabel(detail.status) }}</span>
+                      </div>
+                      <div class="u-field">
+                        <span class="u-label">启用 Client</span>
+                        <b class="u-num">{{ enabledClientCount }} 个</b>
+                      </div>
+                      <div class="u-field">
+                        <span class="u-label">X-Panel 累计流量</span>
+                        <b><TrafficValue :value="detail.inbound.allTime" /></b>
+                      </div>
+                      <div class="u-field">
+                        <span class="u-label">最近在线</span>
+                        <b class="u-num">{{ formatDate(lastOnlineAt) }}</b>
+                      </div>
+                    </div>
+                    <p class="u-hint u-mt-12">
+                      到期时间取启用 Client 中最早有限的到期值；不限期用户不会生成待确认续费。无宽限期，到期后连接能力由本机配置决定。
+                    </p>
+                  </div>
+                </section>
+
+                <!-- 4. 收费记录 -->
+                <section id="u-sec-billing" class="u-dcard">
+                  <div class="u-dcard-head">
+                    <h3>收费记录</h3>
+                    <span class="u-badge is-neutral">{{ detail.billingRecords.length }} 笔</span>
+                    <div class="u-right">
+                      <button class="u-btn u-btn-xs is-soft" type="button" @click="openOrderModal">新增订单</button>
+                    </div>
+                  </div>
+                  <div v-if="detail.billingRecords.length" class="u-list">
+                    <div v-for="record in detail.billingRecords" :key="record.id" class="u-list-row">
+                      <div class="u-list-main">
+                        <div class="u-list-title">
+                          <span class="u-strong">
+                            {{ orderTypeLabel(record.orderType) }} · {{ cycleLabel(record.billingCycle) }} ·
+                            {{ formatMoney(record.amount, record.currency) }}
+                          </span>
+                          <span v-if="record.verificationStatus === 'unverified'" class="u-badge is-warn">待核实</span>
+                          <span v-else-if="record.origin === 'historical_import'" class="u-badge is-info">历史导入</span>
+                          <span v-if="record.status === 'cancelled'" class="u-badge is-danger">已取消</span>
+                        </div>
+                        <div class="u-list-sub">
+                          服务 {{ formatDate(record.serviceFrom) }} → {{ formatDate(record.serviceTo) }} · 收款
+                          {{ formatDate(record.paidAt) }}
+                        </div>
+                      </div>
+                      <div v-if="record.source === 'manual' && record.status !== 'cancelled'" class="u-list-actions">
+                        <button
+                          v-if="record.verificationStatus === 'unverified'"
+                          class="u-btn u-btn-xs is-soft"
+                          type="button"
+                          @click="openVerifyModal(record)"
+                        >
+                          核验
+                        </button>
+                        <button class="u-btn u-btn-xs is-danger" type="button" @click="cancelRecord(record)">取消</button>
+                      </div>
+                    </div>
+                  </div>
+                  <p v-else class="u-hint u-px">暂无收费记录；首次收费请使用下方「首笔订单」。</p>
+                </section>
+
+                <!-- 5. 首笔订单（无任何收费记录时） -->
+                <section v-if="detail.billingRecords.length === 0" class="u-dcard">
+                  <div class="u-dcard-head">
+                    <h3>首笔订单</h3>
+                    <span class="u-badge is-neutral">对应 Agent 同步的 Inbound 业务用户</span>
+                  </div>
+                  <div class="u-dcard-body">
+                    <div class="u-grid-2">
+                      <div class="u-field">
+                        <span class="u-label">订单金额（CNY）<i class="u-req">*</i></span>
+                        <NInputNumber v-model:value="initialOrderForm.amount" :min="0" :max="100000000" :precision="2" size="small" />
+                      </div>
+                      <div class="u-field">
+                        <span class="u-label">实际收款日期 <i class="u-req">*</i></span>
+                        <NDatePicker v-model:formatted-value="initialOrderForm.paidAt" type="date" value-format="yyyy-MM-dd" size="small" />
+                      </div>
+                      <div class="u-field">
+                        <span class="u-label">服务开始日期 <i class="u-req">*</i></span>
+                        <NDatePicker
+                          v-model:formatted-value="initialOrderForm.serviceFrom"
+                          type="date"
+                          value-format="yyyy-MM-dd"
+                          size="small"
+                          placeholder="请选择服务开始日期"
+                        />
+                      </div>
+                      <div class="u-field">
+                        <span class="u-label">服务结束日期（Agent 同步）</span>
+                        <NDatePicker
+                          v-model:formatted-value="initialOrderForm.serviceTo"
+                          type="date"
+                          value-format="yyyy-MM-dd"
+                          size="small"
+                          disabled
+                          placeholder="Agent 尚未同步到期日"
+                        />
+                      </div>
+                    </div>
+                    <label class="u-field u-mt-12">
+                      <span class="u-label">订单备注</span>
+                      <input v-model="initialOrderForm.notes" class="u-input is-plain" maxlength="2000" placeholder="可选" />
+                    </label>
+                    <div class="u-form-actions">
+                      <button class="u-btn is-primary" type="button" :disabled="initialOrderSaving" @click="createInitialOrder">
+                        确认首笔订单
+                      </button>
+                    </div>
+                    <p class="u-hint">
+                      首笔订单对应 Agent 同步过来的线路机 Inbound 业务用户；服务开始日期请按真实业务填写，服务结束日期采用 Agent 同步的 Client 到期日。
+                    </p>
+                  </div>
+                </section>
+
+                <!-- 6. 用户路径 -->
+                <section id="u-sec-path" class="u-dcard">
+                  <div class="u-dcard-head">
+                    <h3>用户路径</h3>
+                    <span v-if="detail.path" class="u-badge" :class="detail.path.valid ? 'is-ok' : 'is-warn'">
+                      {{ detail.path.valid ? '有效' : '需检查' }}
+                    </span>
+                    <div class="u-right">
+                      <button class="u-btn u-btn-xs" type="button" :disabled="pathAssetsLoading" @click="loadPathAssets()">
+                        重新读取资源
+                      </button>
+                    </div>
+                  </div>
+                  <div class="u-dcard-body">
+                    <NAlert v-if="pathAssetsError" type="warning" :show-icon="true" class="u-alert">
+                      {{ pathAssetsError }}
+                    </NAlert>
+                    <div class="u-grid-2">
+                      <div class="u-field">
+                        <span class="u-label">线路机（自动）</span>
+                        <b>{{ detail.node.name || '未关联线路机' }}</b>
+                      </div>
+                      <div class="u-field">
+                        <span class="u-label">出口路径</span>
+                        <NSelect
+                          :value="pathMode"
+                          :options="pathModeOptions"
+                          size="small"
+                          :disabled="pathAssetsLoading"
+                          @update:value="handlePathModeChange"
+                        />
+                      </div>
+                      <div v-if="pathMode === 'landing'" class="u-field">
+                        <span class="u-label">落地机（执行节点）<i class="u-req">*</i></span>
+                        <NSelect
+                          :value="pathLandingNodeID"
+                          :options="pathLandingNodeOptions"
+                          size="small"
+                          filterable
+                          :loading="pathAssetsLoading"
+                          :disabled="pathAssetsLoading"
+                          placeholder="选择启用的落地机"
+                          @update:value="handlePathLandingNodeChange"
+                        />
+                      </div>
+                      <div v-if="pathMode === 'landing'" class="u-field">
+                        <span class="u-label">落地 Inbound（基础设施入口）<i class="u-req">*</i></span>
+                        <NSelect
+                          v-model:value="pathLandingInboundID"
+                          :options="pathInboundOptions"
+                          size="small"
+                          filterable
+                          :loading="pathLandingInboundsLoading"
+                          :disabled="pathAssetsLoading || !pathLandingNodeID"
+                          placeholder="选择该落地机已同步的 Inbound"
+                        />
+                      </div>
+                      <div class="u-field u-span-2">
+                        <span class="u-label">固定出口 IP</span>
+                        <NSelect
+                          v-model:value="pathExitIPIDs"
+                          :options="pathExitIpOptions"
+                          size="small"
+                          multiple
+                          filterable
+                          clearable
+                          max-tag-count="responsive"
+                          :loading="pathAssetsLoading"
+                          :disabled="pathAssetsLoading || !detail.node.id"
+                          placeholder="选择当前路径允许的出口 IP"
+                        />
+                      </div>
+                    </div>
+                    <p v-if="pathMode === 'landing' && pathAssets && !pathLandingNodeOptions.length" class="u-hint u-warn">
+                      暂无启用的落地机，请先在节点管理中添加并启用。
+                    </p>
+                    <p v-if="pathMode === 'landing' && pathLandingNodeID && !pathInboundOptions.length" class="u-hint u-warn">
+                      {{
+                        pathAssets?.landingNodes.find(node => node.id === pathLandingNodeID)?.inboundState === 'pending'
+                          ? '该落地机尚未完成首次 Agent 同步。'
+                          : '该落地机暂无启用的 Inbound。'
+                      }}
+                    </p>
+                    <label class="u-field u-mt-12">
+                      <span class="u-label">路径备注</span>
+                      <input v-model="pathNotes" class="u-input is-plain" maxlength="500" placeholder="可选" />
+                    </label>
+                    <p v-if="pathError" class="u-hint u-warn">{{ pathError }}</p>
+                    <div class="u-form-actions">
+                      <button
+                        class="u-btn is-primary"
+                        type="button"
+                        :disabled="
+                          pathSaving ||
+                          pathAssetsLoading ||
+                          (pathMode === 'landing' && (!pathLandingNodeID || !pathLandingInboundID)) ||
+                          !pathExitIPIDs.length
+                        "
+                        @click="savePathAssignment"
+                      >
+                        保存用户路径
+                      </button>
+                      <button v-if="detail.path" class="u-btn" type="button" :disabled="pathSaving" @click="confirmRemovePathAssignment">
+                        解除路径
+                      </button>
+                    </div>
+
+                    <div class="u-hr"></div>
+                    <div class="u-sub-title">当前生效路径</div>
+                    <div v-if="!detail.path" class="u-empty-small">尚未配置用户路径</div>
+                    <div v-else class="u-path-card">
+                      <div class="u-path-head">
+                        <b>{{ detail.path.relayNodeName || detail.node.name || '--' }} → {{ detail.path.landingNodeName || '线路机直出' }}</b>
+                        <span class="u-badge" :class="detail.path.valid ? 'is-ok' : 'is-warn'">
+                          {{ detail.path.valid ? '有效' : '需检查' }}
+                        </span>
+                      </div>
+                      <div class="u-path-meta">模式：{{ pathModeLabel(detail.path.mode) }}</div>
+                      <div class="u-path-meta">
+                        出口：{{ pathExitIPText(detail.path) }} · 归属：{{ detail.path.exitIpOwnerNodeName || '独立 S5' }}
+                      </div>
+                      <div v-if="detail.path.landingInboundTag || detail.path.landingInboundId" class="u-path-meta">
+                        落地 Inbound：{{ detail.path.landingInboundTag || detail.path.landingInboundId }}
+                      </div>
+                      <div v-if="detail.path.notes" class="u-path-meta">备注：{{ detail.path.notes }}</div>
+                    </div>
+
+                    <template v-if="detail.pathHistory.length">
+                      <div class="u-hr"></div>
+                      <div class="u-sub-title">路径历史</div>
+                      <div v-for="history in detail.pathHistory" :key="history.id" class="u-history-row">
+                        <span>{{ history.relayNodeName || '--' }} → {{ history.landingNodeName || '线路机直出' }} · {{ pathExitIPText(history) }}</span>
+                        <span class="u-dim u-num">
+                          {{ formatDate(history.activeFrom) }}{{ history.activeTo ? ` 至 ${formatDate(history.activeTo)}` : ' 至今' }}
+                        </span>
+                      </div>
+                    </template>
+                  </div>
+                </section>
+
+                <!-- 7. 设备与流量 -->
+                <section id="u-sec-device" class="u-dcard">
+                  <div class="u-dcard-head">
+                    <h3>设备 Client / Email</h3>
+                    <span class="u-badge is-neutral">只读</span>
+                    <div class="u-right u-dim">Email 仅作设备凭证，不参与用户身份</div>
+                  </div>
+                  <DeviceTable :devices="detail.clients" />
+                </section>
+
+                <section class="u-dcard">
+                  <div class="u-dcard-head">
+                    <h3>流量趋势</h3>
+                    <span class="u-badge is-neutral">只读</span>
+                  </div>
+                  <div class="u-dcard-body is-flush">
+                    <TrafficTrendChart :user-id="detail.id" />
+                  </div>
+                </section>
+
+                <!-- 8. X-Panel 快照 -->
+                <section class="u-dcard is-muted">
+                  <div class="u-dcard-head">
+                    <h3>X-Panel 快照</h3>
+                    <span class="u-badge is-neutral">只读 · 同步而来</span>
+                    <div class="u-right u-dim">上次同步 {{ formatDate(detail.inbound.lastSeenAt) }}</div>
+                  </div>
+                  <div class="u-kv">
+                    <div class="u-kv-row">
+                      <span>线路机</span>
+                      <b>{{ detail.node.name || '--' }}{{ detail.node.type ? `（${detail.node.type === 'relay' ? '线路机' : '落地机'}）` : '' }}</b>
+                    </div>
+                    <div class="u-kv-row">
+                      <span>Inbound</span>
+                      <b class="u-mono">{{ detail.inbound.tag || detail.inbound.remoteId || '--' }}</b>
+                    </div>
+                    <div class="u-kv-row">
+                      <span>协议 / 端口</span>
+                      <b class="u-mono">{{ detail.inbound.protocol || '--' }} / {{ detail.inbound.port || '--' }}</b>
+                    </div>
+                    <div class="u-kv-row">
+                      <span>启用状态</span>
+                      <span class="u-badge" :class="detail.inbound.enabled ? 'is-ok' : 'is-neutral'">
+                        {{ detail.inbound.enabled ? '启用' : '停用' }}
+                      </span>
+                    </div>
+                    <div class="u-kv-row">
+                      <span>X-Panel 累计流量</span>
+                      <TrafficValue :value="detail.inbound.allTime" />
+                    </div>
+                  </div>
+                </section>
+              </div>
+            </div>
+          </template>
+        </template>
+
+        <template #footer>
+          <div class="u-drawer-foot">
+            <span class="u-dim">只读字段来自 X-Panel 同步；保存只更新中央面板业务信息。</span>
+            <span class="u-spacer"></span>
+            <button class="u-btn" type="button" @click="closeDetail">关闭</button>
+          </div>
+        </template>
+      </NDrawerContent>
+    </NDrawer>
+
+    <!-- ===================== 弹窗：确认续费 ===================== -->
+    <NModal v-model:show="renewModalVisible" preset="card" title="确认续费" class="u-modal" :bordered="false" :style="{ width: '520px' }">
+      <div v-if="renewCandidate" class="u-modal-body">
+        <div class="u-callout is-danger u-callout-tight">
+          <SvgIcon icon="mdi:alert-outline" class="u-callout-ico" />
+          <div class="u-callout-main">
+            <div class="u-callout-head"><b>计入后不可修改</b></div>
+            <p class="u-callout-note">
+              确认后立即生成 1 条 agent_detected 收费记录，计入实收、服务期收入与续费统计；金额与服务期此后不可再改。
+            </p>
+          </div>
+        </div>
+        <div class="u-grid-2 u-mt-12">
+          <div class="u-field"><span class="u-label">用户</span><b>{{ detail?.displayName || selectedUserID }}</b></div>
+          <div class="u-field"><span class="u-label">来源</span><b>{{ detail?.node.name || '--' }} Client 到期延长</b></div>
+          <div class="u-field"><span class="u-label">服务开始</span><b class="u-num">{{ formatDate(renewCandidate.oldExpiryAt) }}</b></div>
+          <div class="u-field"><span class="u-label">服务结束</span><b class="u-num">{{ formatDate(renewCandidate.newExpiryAt) }}</b></div>
+          <div class="u-field">
+            <span class="u-label">金额（CNY）<i class="u-req">*</i></span>
+            <NInputNumber v-model:value="renewForm.amount" :min="0" :max="100000000" :precision="2" size="small" />
+          </div>
+          <div class="u-field">
+            <span class="u-label">实际收款日期 <i class="u-req">*</i></span>
+            <NDatePicker v-model:formatted-value="renewForm.paidAt" type="date" value-format="yyyy-MM-dd" size="small" />
+          </div>
+        </div>
+        <p class="u-hint">服务期按半开区间 [开始, 结束) 校验：与已有记录重叠会被拒绝，首尾相接允许；收款日期按本地时区计。</p>
       </div>
       <template #footer>
-        <NSpace justify="end">
-          <NButton @click="importModalVisible = false">关闭</NButton>
-          <NButton :loading="importLoading" @click="previewBillingImport">预览校验</NButton>
-          <NButton type="primary" :loading="importLoading" :disabled="!importPreview || importPreview.errors.length > 0" @click="submitBillingImport">
-            确认导入
-          </NButton>
-        </NSpace>
+        <div class="u-modal-foot">
+          <span class="u-dim u-mr-auto">确认后若发现错误，只能取消该记录（现金回退）。</span>
+          <button class="u-btn" type="button" @click="renewModalVisible = false">取消</button>
+          <button class="u-btn is-primary" type="button" :disabled="renewSaving" @click="submitRenewConfirm">
+            确认并计入财务
+          </button>
+        </div>
       </template>
     </NModal>
 
-    <NModal v-model:show="orderModalVisible" preset="card" title="新增订单" class="w-680px max-w-92vw">
-      <NForm label-placement="top">
-        <div class="grid gap-x-12px md:grid-cols-2">
-          <NFormItem label="订单类型" required>
+    <!-- ===================== 弹窗：新增订单 ===================== -->
+    <NModal v-model:show="orderModalVisible" preset="card" title="新增订单" class="u-modal" :bordered="false" :style="{ width: '680px' }">
+      <div class="u-modal-body">
+        <div class="u-grid-2">
+          <div class="u-field">
+            <span class="u-label">订单类型 <i class="u-req">*</i></span>
             <NSelect
               v-model:value="orderForm.orderType"
               :options="[
@@ -1274,809 +2195,1521 @@ onMounted(() => {
                 { label: '续费', value: 'renewal' },
                 { label: '逾期恢复', value: 'recovery' }
               ]"
-            />
-          </NFormItem>
-          <NFormItem label="收费周期" required>
-            <NSelect
-              v-model:value="orderForm.billingCycle"
-              :options="[
-                { label: '月付', value: 'monthly' },
-                { label: '年付', value: 'annual' }
-              ]"
-            />
-          </NFormItem>
-          <NFormItem label="订单金额（CNY）" required>
-            <NInputNumber v-model:value="orderForm.amount" :min="0" :max="100000000" :precision="2" class="w-full" />
-          </NFormItem>
-          <NFormItem label="实际收款日期" required>
-            <NDatePicker v-model:formatted-value="orderForm.paidAt" type="date" value-format="yyyy-MM-dd" class="w-full" />
-          </NFormItem>
-          <NFormItem label="服务开始时间" required>
-            <NDatePicker v-model:value="orderForm.serviceFrom" type="datetime" format="yyyy-MM-dd HH:mm:ss" class="w-full" />
-          </NFormItem>
-          <NFormItem label="服务结束时间" required>
-            <NDatePicker v-model:value="orderForm.serviceTo" type="datetime" format="yyyy-MM-dd HH:mm:ss" class="w-full" />
-          </NFormItem>
-        </div>
-        <p class="mb-12px text-12px text-gray-500">
-          服务时间按本地时区显示。开始时间默认接续上一笔未取消订单的结束时间，结束时间默认使用已同步的用户到期时间。
-        </p>
-        <NFormItem label="订单备注"><NInput v-model:value="orderForm.notes" maxlength="2000" /></NFormItem>
-      </NForm>
-      <template #footer>
-        <NSpace justify="end">
-          <NButton @click="orderModalVisible = false">取消</NButton>
-          <NButton type="primary" :loading="orderSaving" @click="createAdditionalOrder">保存订单</NButton>
-        </NSpace>
-      </template>
-    </NModal>
-
-    <NModal v-model:show="verifyModalVisible" preset="card" title="核验历史订单" class="w-520px max-w-92vw">
-      <NAlert type="warning" :show-icon="true" class="mb-12px">核验后该订单会计入实收、服务期收入和续费统计。</NAlert>
-      <NForm label-placement="top">
-        <NFormItem label="实际收款日期" required>
-          <NDatePicker v-model:formatted-value="verifyPaidAt" type="date" value-format="yyyy-MM-dd" class="w-full" />
-        </NFormItem>
-        <NFormItem label="核验备注"><NInput v-model:value="verifyNotes" type="textarea" /></NFormItem>
-      </NForm>
-      <template #footer>
-        <NSpace justify="end">
-          <NButton @click="verifyModalVisible = false">取消</NButton>
-          <NButton type="primary" :loading="verifySaving" @click="submitVerifyRecord">确认核验</NButton>
-        </NSpace>
-      </template>
-    </NModal>
-
-    <NDrawer v-model:show="drawerVisible" :width="680" placement="right">
-      <NDrawerContent title="用户详情" closable>
-        <NSpin :show="detailLoading">
-          <NAlert v-if="detailError" type="error" class="mb-16px" :show-icon="true">
-            {{ detailError }}
-            <NButton class="ml-8px" size="small" @click="openDetail(selectedUserID)">重试</NButton>
-          </NAlert>
-          <template v-if="detail">
-            <div class="mb-16px flex items-center justify-between gap-12px">
-              <div>
-                <div class="text-18px font-600">{{ detail.displayName }}</div>
-                <div class="mt-4px text-12px text-gray-500">一个 Reality Inbound 对应一个业务用户</div>
-              </div>
-              <UserStatusTag :status="detail.status" :expires-at="detail.expiresAt" />
-            </div>
-
-            <NAlert type="info" :show-icon="true" class="mb-16px">
-              下列 Inbound、Client、流量和到期时间均来自 X-Panel 同步，只读展示；保存只会更新中央面板的业务信息。
-            </NAlert>
-
-            <NCard title="中央业务信息" size="small" :segmented="{ content: true }">
-              <NForm label-placement="top">
-                <div class="grid gap-x-12px md:grid-cols-2">
-                  <NFormItem label="业务用户名称" required>
-                    <NInput v-model:value="editForm.displayName" maxlength="120" show-count />
-                  </NFormItem>
-                  <NFormItem label="收费周期">
-                    <NSelect
-                      v-model:value="editForm.billingCycle"
-                      :options="[
-                        { label: '月付', value: 'monthly' },
-                        { label: '年付', value: 'annual' }
-                      ]"
-                    />
-                  </NFormItem>
-                  <NFormItem label="计费类型">
-                    <NSelect
-                      v-model:value="editForm.billingType"
-                      :options="[
-                        { label: '收费用户', value: 'paid' },
-                        { label: '免费用户', value: 'free' }
-                      ]"
-                    />
-                  </NFormItem>
-                  <NFormItem :label="editForm.billingCycle === 'annual' ? '年费（CNY）' : '月费（CNY）'">
-                    <NInputNumber
-                      v-model:value="editForm.billingAmount"
-                      :min="0"
-                      :max="100000000"
-                      :precision="2"
-                      class="w-full"
-                    />
-                    <div v-if="editForm.billingCycle === 'annual'" class="mt-4px text-12px text-gray-500">
-                      月均 {{ formatMoney((editForm.billingAmount || 0) / 12) }}
-                    </div>
-                  </NFormItem>
-                </div>
-                <NFormItem v-if="editForm.billingType === 'free'" label="免费原因">
-                  <NInput v-model:value="editForm.freeReason" maxlength="200" placeholder="例如：朋友体验、内部测试" />
-                </NFormItem>
-                <NFormItem label="备注">
-                  <NInput
-                    v-model:value="editForm.notes"
-                    type="textarea"
-                    maxlength="2000"
-                    show-count
-                    :autosize="{ minRows: 3, maxRows: 6 }"
-                  />
-                </NFormItem>
-                <NButton type="primary" :loading="saving" @click="saveBusinessFields">保存业务信息</NButton>
-              </NForm>
-            </NCard>
-
-            <NCard v-if="detail.billingRecords.length === 0" title="首笔订单" size="small" class="mt-16px" :segmented="{ content: true }">
-              <NAlert type="info" :show-icon="true" class="mb-12px">
-                首笔订单对应 Agent 同步过来的线路机 Inbound
-                业务用户。服务开始日期请按真实业务手动填写，服务结束日期直接采用 Agent 同步的 Client 到期日。
-              </NAlert>
-              <NForm label-placement="top">
-                <div class="grid gap-x-12px md:grid-cols-2">
-                  <NFormItem label="订单金额（CNY）" required>
-                    <NInputNumber
-                      v-model:value="initialOrderForm.amount"
-                      :min="0"
-                      :max="100000000"
-                      :precision="2"
-                      class="w-full"
-                    />
-                  </NFormItem>
-                  <NFormItem label="实际收款日期" required>
-                    <NDatePicker
-                      v-model:formatted-value="initialOrderForm.paidAt"
-                      type="date"
-                      value-format="yyyy-MM-dd"
-                      class="w-full"
-                    />
-                  </NFormItem>
-                  <NFormItem label="服务开始日期" required>
-                    <NDatePicker
-                      v-model:formatted-value="initialOrderForm.serviceFrom"
-                      type="date"
-                      value-format="yyyy-MM-dd"
-                      placeholder="请选择服务开始日期"
-                      clearable
-                      class="w-full"
-                    />
-                  </NFormItem>
-                  <NFormItem label="服务结束日期（Agent 同步）" required>
-                    <NDatePicker
-                      v-model:formatted-value="initialOrderForm.serviceTo"
-                      type="date"
-                      value-format="yyyy-MM-dd"
-                      placeholder="Agent 尚未同步到期日"
-                      disabled
-                      class="w-full"
-                    />
-                  </NFormItem>
-                </div>
-                <NFormItem label="订单备注">
-                  <NInput v-model:value="initialOrderForm.notes" maxlength="2000" placeholder="可选" />
-                </NFormItem>
-                <NButton type="primary" :loading="initialOrderSaving" @click="createInitialOrder">确认首笔订单</NButton>
-              </NForm>
-            </NCard>
-
-            <NCard
-              v-if="detail.renewalCandidates.some(candidate => candidate.status === 'pending')"
-              title="待确认续费"
               size="small"
-              class="mt-16px"
-              :segmented="{ content: true }"
-            >
-              <div
-                v-for="candidate in detail.renewalCandidates.filter(item => item.status === 'pending')"
-                :key="candidate.id"
-                class="flex flex-wrap items-center justify-between gap-10px border-b border-gray-200 py-8px last:border-b-0 dark:border-gray-700"
-              >
-                <div>
-                  <div class="text-13px font-500">
-                    {{ cycleLabel(candidate.billingCycle) }} · {{ formatMoney(candidate.suggestedAmount) }}
-                  </div>
-                  <div class="mt-3px text-12px text-gray-500">
-                    {{ formatDate(candidate.oldExpiryAt) }} → {{ formatDate(candidate.newExpiryAt) }}
-                  </div>
-                </div>
-                <NSpace size="small">
-                  <NButton size="small" type="primary" @click="confirmRenewal(candidate)">确认续费</NButton>
-                  <NButton size="small" secondary @click="rejectRenewal(candidate)">非收费变更</NButton>
-                </NSpace>
-              </div>
-            </NCard>
+            />
+          </div>
+          <div class="u-field">
+            <span class="u-label">收费周期 <i class="u-req">*</i></span>
+            <NSelect v-model:value="orderForm.billingCycle" :options="billingCycleOptions" size="small" />
+          </div>
+          <div class="u-field">
+            <span class="u-label">订单金额（CNY）<i class="u-req">*</i></span>
+            <NInputNumber v-model:value="orderForm.amount" :min="0" :max="100000000" :precision="2" size="small" />
+          </div>
+          <div class="u-field">
+            <span class="u-label">实际收款日期 <i class="u-req">*</i></span>
+            <NDatePicker v-model:formatted-value="orderForm.paidAt" type="date" value-format="yyyy-MM-dd" size="small" />
+          </div>
+          <div class="u-field">
+            <span class="u-label">服务开始时间 <i class="u-req">*</i></span>
+            <NDatePicker v-model:value="orderForm.serviceFrom" type="datetime" format="yyyy-MM-dd HH:mm:ss" size="small" />
+          </div>
+          <div class="u-field">
+            <span class="u-label">服务结束时间 <i class="u-req">*</i></span>
+            <NDatePicker v-model:value="orderForm.serviceTo" type="datetime" format="yyyy-MM-dd HH:mm:ss" size="small" />
+          </div>
+        </div>
+        <label class="u-field u-mt-12">
+          <span class="u-label">订单备注</span>
+          <input v-model="orderForm.notes" class="u-input is-plain" maxlength="2000" />
+        </label>
+        <p class="u-hint">服务时间按本地时区显示。开始时间默认接续上一笔未取消订单的结束时间，结束时间默认使用已同步的用户到期时间。</p>
+      </div>
+      <template #footer>
+        <div class="u-modal-foot">
+          <button class="u-btn" type="button" @click="orderModalVisible = false">取消</button>
+          <button class="u-btn is-primary" type="button" :disabled="orderSaving" @click="createAdditionalOrder">保存订单</button>
+        </div>
+      </template>
+    </NModal>
 
-            <NCard v-if="detail.billingRecords.length > 0" title="收费记录" size="small" class="mt-16px">
-              <template #header-extra>
-                <NButton size="small" type="primary" secondary @click="openOrderModal">新增订单</NButton>
-              </template>
-              <div
-                v-for="record in detail.billingRecords"
-                :key="record.id"
-                class="flex flex-wrap items-center justify-between gap-8px border-b border-gray-200 py-7px last:border-b-0 dark:border-gray-700"
-              >
-                <div>
-                  <div class="text-12px">
-                    {{ orderTypeLabel(record.orderType) }} · {{ cycleLabel(record.billingCycle) }} ·
-                    {{ formatMoney(record.amount, record.currency) }}
-                    <NTag v-if="record.verificationStatus === 'unverified'" size="small" type="warning" class="ml-6px">待核实</NTag>
-                    <NTag v-else-if="record.origin === 'historical_import'" size="small" type="info" class="ml-6px">历史导入</NTag>
-                    <NTag v-if="record.status === 'cancelled'" size="small" type="error" class="ml-6px">已取消</NTag>
-                  </div>
-                  <div class="mt-3px text-12px text-gray-500">
-                    服务 {{ formatDate(record.serviceFrom) }} → {{ formatDate(record.serviceTo) }} · 收款
-                    {{ formatDate(record.paidAt) }}
-                  </div>
-                </div>
-                <NSpace v-if="record.source === 'manual' && record.status !== 'cancelled'" size="small">
-                  <NButton v-if="record.verificationStatus === 'unverified'" size="tiny" type="primary" @click="openVerifyModal(record)">核验</NButton>
-                  <NButton size="tiny" secondary type="error" @click="cancelRecord(record)">取消</NButton>
-                </NSpace>
-              </div>
-            </NCard>
+    <!-- ===================== 弹窗：核验历史订单 ===================== -->
+    <NModal v-model:show="verifyModalVisible" preset="card" title="核验历史订单" class="u-modal" :bordered="false" :style="{ width: '520px' }">
+      <div class="u-modal-body">
+        <div class="u-callout is-warn u-callout-tight">
+          <SvgIcon icon="mdi:alert-outline" class="u-callout-ico" />
+          <div class="u-callout-main">
+            <p class="u-callout-note">核验后该订单会计入实收、服务期收入和续费统计。</p>
+          </div>
+        </div>
+        <div class="u-field u-mt-12">
+          <span class="u-label">实际收款日期 <i class="u-req">*</i></span>
+          <NDatePicker v-model:formatted-value="verifyPaidAt" type="date" value-format="yyyy-MM-dd" size="small" />
+        </div>
+        <label class="u-field u-mt-12">
+          <span class="u-label">核验备注</span>
+          <textarea v-model="verifyNotes" class="u-input is-plain is-area" rows="3" maxlength="2000"></textarea>
+        </label>
+      </div>
+      <template #footer>
+        <div class="u-modal-foot">
+          <button class="u-btn" type="button" @click="verifyModalVisible = false">取消</button>
+          <button class="u-btn is-primary" type="button" :disabled="verifySaving" @click="submitVerifyRecord">确认核验</button>
+        </div>
+      </template>
+    </NModal>
 
-            <NCard title="X-Panel Inbound 快照（只读）" size="small" class="mt-16px">
-              <template #header-extra>
-                <NButton
-                  v-if="detail.inbound.id"
-                  size="small"
-                  type="warning"
-                  secondary
-                  :loading="resettingUser"
-                  @click="confirmReplaceCurrentUser"
-                >
-                  更换客户
-                </NButton>
-              </template>
-              <NDescriptions label-placement="left" :column="1" bordered size="small">
-                <NDescriptionsItem label="线路机">
-                  {{ detail.node.name || '--'
-                  }}{{ detail.node.type ? `（${detail.node.type === 'relay' ? '线路机' : '落地机'}）` : '' }}
-                </NDescriptionsItem>
-                <NDescriptionsItem label="Inbound">
-                  {{ detail.inbound.tag || detail.inbound.remoteId || '--' }}
-                </NDescriptionsItem>
-                <NDescriptionsItem label="协议 / 端口">
-                  {{ detail.inbound.protocol || '--' }} / {{ detail.inbound.port || '--' }}
-                </NDescriptionsItem>
-                <NDescriptionsItem label="启用状态">{{ detail.inbound.enabled ? '启用' : '停用' }}</NDescriptionsItem>
-                <NDescriptionsItem label="到期时间">
-                  {{ formatExpiry(detail.expiresAt, detail.status) }}
-                </NDescriptionsItem>
-                <NDescriptionsItem label="累计流量"><TrafficValue :value="detail.inbound.allTime" /></NDescriptionsItem>
-                <NDescriptionsItem label="上次同步">{{ formatDate(detail.inbound.lastSeenAt) }}</NDescriptionsItem>
-              </NDescriptions>
-            </NCard>
-
-            <NCard title="设备 Client / Email（只读）" size="small" class="mt-16px">
-              <DeviceTable :devices="detail.clients" />
-            </NCard>
-
-            <NCard title="流量趋势（只读）" size="small" class="mt-16px">
-              <TrafficTrendChart :user-id="detail.id" />
-            </NCard>
-
-            <NCard title="用户路径" size="small" class="mt-16px" :segmented="{ content: true }">
-              <NAlert v-if="pathAssetsError" type="warning" :show-icon="true" class="mb-12px">
-                {{ pathAssetsError }}
-                <NButton size="small" class="ml-8px" @click="() => loadPathAssets()">重试</NButton>
-              </NAlert>
-              <NForm label-placement="top">
-                <NFormItem label="线路机（自动）">
-                  <NInput :value="detail.node.name || '未关联线路机'" readonly />
-                </NFormItem>
-                <NFormItem label="出口路径">
-                  <NSelect
-                    :value="pathMode"
-                    :options="pathModeOptions"
-                    :disabled="pathAssetsLoading"
-                    @update:value="handlePathModeChange"
-                  />
-                </NFormItem>
-                <NFormItem v-if="pathMode === 'landing'" label="落地机（执行节点）" required>
-                  <NSelect
-                    :value="pathLandingNodeID"
-                    :options="pathLandingNodeOptions"
-                    :loading="pathAssetsLoading"
-                    :disabled="pathAssetsLoading"
-                    filterable
-                    placeholder="选择启用的落地机"
-                    @update:value="handlePathLandingNodeChange"
-                  />
-                  <div
-                    v-if="pathAssets && pathLandingNodeOptions.length === 0"
-                    class="mt-4px text-12px text-orange-500"
-                  >
-                    暂无启用的落地机，请先在节点管理中添加并启用。
-                  </div>
-                </NFormItem>
-                <NFormItem v-if="pathMode === 'landing'" label="落地 Inbound（基础设施入口）" required>
-                  <NSelect
-                    v-model:value="pathLandingInboundID"
-                    :options="pathInboundOptions"
-                    :loading="pathLandingInboundsLoading"
-                    :disabled="pathAssetsLoading || !pathLandingNodeID"
-                    filterable
-                    placeholder="选择该落地机已同步的 Inbound"
-                  />
-                  <div
-                    v-if="pathLandingNodeID && pathInboundOptions.length === 0"
-                    class="mt-4px text-12px text-orange-500"
-                  >
-                    {{
-                      pathAssets?.landingNodes.find(node => node.id === pathLandingNodeID)?.inboundState === 'pending'
-                        ? '该落地机尚未完成首次 Agent 同步。'
-                        : '该落地机暂无启用的 Inbound。'
-                    }}
-                  </div>
-                </NFormItem>
-                <NFormItem label="固定出口 IP">
-                  <NSelect
-                    v-model:value="pathExitIPIDs"
-                    :options="pathExitIpOptions"
-                    :loading="pathAssetsLoading"
-                    :disabled="pathAssetsLoading || !detail.node.id"
-                    multiple
-                    clearable
-                    filterable
-                    max-tag-count="responsive"
-                    placeholder="选择当前路径允许的出口 IP"
-                  />
-                </NFormItem>
-                <NFormItem label="路径备注">
-                  <NInput
-                    v-model:value="pathNotes"
-                    type="textarea"
-                    maxlength="500"
-                    show-count
-                    :autosize="{ minRows: 2, maxRows: 4 }"
-                    placeholder="可选"
-                  />
-                </NFormItem>
-                <NAlert v-if="pathError" type="error" :show-icon="true" class="mb-12px">{{ pathError }}</NAlert>
-                <NSpace>
-                  <NButton
-                    type="primary"
-                    :loading="pathSaving"
-                    :disabled="
-                      pathAssetsLoading ||
-                        (pathMode === 'landing' && (!pathLandingNodeID || !pathLandingInboundID)) ||
-                        !pathExitIPIDs.length
-                    "
-                    @click="savePathAssignment"
-                  >
-                    保存用户路径
-                  </NButton>
-                  <NButton v-if="detail.path" secondary :loading="pathSaving" @click="confirmRemovePathAssignment">
-                    解除路径
-                  </NButton>
-                </NSpace>
-              </NForm>
-
-              <div class="mt-16px border-t border-gray-200 pt-12px">
-                <div class="mb-8px text-13px font-500">当前生效路径</div>
-                <NEmpty v-if="!detail.path" description="尚未配置用户路径" size="small" />
-                <div v-else class="rounded-6px bg-gray-50 p-10px dark:bg-dark">
-                  <div class="flex items-center justify-between gap-8px">
-                    <span class="font-500">
-                      {{ detail.path.relayNodeName || detail.node.name || '--' }} →
-                      {{ detail.path.landingNodeName || '线路机直出' }}
-                    </span>
-                    <NTag size="small" :type="detail.path.valid ? 'success' : 'warning'">
-                      {{ detail.path.valid ? '有效' : '需检查' }}
-                    </NTag>
-                  </div>
-                  <div class="mt-4px text-12px text-gray-500">模式：{{ pathModeLabel(detail.path.mode) }}</div>
-                  <div class="mt-4px text-12px text-gray-500">
-                    出口：{{ pathExitIPText(detail.path) }} · 归属：{{ detail.path.exitIpOwnerNodeName || '独立 S5' }}
-                  </div>
-                  <div
-                    v-if="detail.path.landingInboundTag || detail.path.landingInboundId"
-                    class="mt-4px text-12px text-gray-500"
-                  >
-                    落地 Inbound：{{ detail.path.landingInboundTag || detail.path.landingInboundId }}
-                  </div>
-                  <div v-if="detail.path.notes" class="mt-4px text-12px text-gray-500">
-                    备注：{{ detail.path.notes }}
-                  </div>
-                </div>
-              </div>
-
-              <div v-if="detail.pathHistory.length > 0" class="mt-16px border-t border-gray-200 pt-12px">
-                <div class="mb-8px text-13px font-500">路径历史</div>
-                <div class="space-y-8px">
-                  <div
-                    v-for="history in detail.pathHistory"
-                    :key="history.id"
-                    class="rounded-6px border border-gray-200 p-8px dark:border-gray-700"
-                  >
-                    <div class="flex items-center justify-between gap-8px text-12px">
-                      <span>
-                        {{ history.relayNodeName || '--' }} → {{ history.landingNodeName || '线路机直出' }} ·
-                        {{ pathExitIPText(history) }}
-                      </span>
-                      <span class="text-gray-500">
-                        {{ formatDate(history.activeFrom)
-                        }}{{ history.activeTo ? ` 至 ${formatDate(history.activeTo)}` : ' 至今' }}
-                      </span>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </NCard>
-          </template>
-        </NSpin>
-      </NDrawerContent>
-    </NDrawer>
+    <!-- ===================== 弹窗：导入历史账单 ===================== -->
+    <NModal v-model:show="importModalVisible" preset="card" title="导入历史账单" class="u-modal" :bordered="false" :style="{ width: '900px', maxWidth: '92vw' }">
+      <div class="u-modal-body">
+        <div class="u-callout is-info u-callout-tight">
+          <SvgIcon icon="mdi:information-outline" class="u-callout-ico" />
+          <div class="u-callout-main">
+            <p class="u-callout-note">
+              每行一笔订单。表头支持：userId、nodeId、remoteInboundId、billingCycle、amount、serviceFrom、serviceTo、paidAt、orderType、verified、notes。
+              userId 与 nodeId + remoteInboundId 二选一；日期支持 YYYY-MM-DD。verified 填 false 的记录会进入待核实，不计入财务。
+            </p>
+          </div>
+        </div>
+        <textarea
+          v-model="importText"
+          class="u-input is-plain is-area u-mt-12"
+          rows="10"
+          placeholder="userId,billingCycle,amount,serviceFrom,serviceTo,paidAt,orderType,verified,notes&#10;用户ID,monthly,100,2026-03-01,2026-04-01,2026-03-01,initial,true,首购"
+        ></textarea>
+        <div v-if="importPreview" class="u-mt-12">
+          <NAlert :type="importPreview.errors.length ? 'error' : 'success'" :show-icon="true">
+            {{
+              importPreview.errors.length
+                ? `预览发现 ${importPreview.errors.length} 个错误，请修正后重新预览`
+                : `预览通过：${importPreview.records.length} 笔，其中 ${importPreview.unverified} 笔待核实`
+            }}
+          </NAlert>
+          <div v-if="importPreview.errors.length" class="u-import-errors">
+            <div v-for="item in importPreview.errors" :key="`${item.row}-${item.message}`">第 {{ item.row }} 行：{{ item.message }}</div>
+          </div>
+        </div>
+      </div>
+      <template #footer>
+        <div class="u-modal-foot">
+          <button class="u-btn" type="button" @click="importModalVisible = false">关闭</button>
+          <button class="u-btn" type="button" :disabled="importLoading" @click="previewBillingImport">预览校验</button>
+          <button
+            class="u-btn is-primary"
+            type="button"
+            :disabled="importLoading || !importPreview || importPreview.errors.length > 0"
+            @click="submitBillingImport"
+          >
+            确认导入
+          </button>
+        </div>
+      </template>
+    </NModal>
   </div>
 </template>
 
 <style scoped>
-.user-groups-grid {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr);
-  gap: 12px;
-}
+/* ============================================================
+   用户管理 · UI v2（对齐 design-preview/v2/users.html 与 kit-v2）
+   仅本页使用；颜色取自 ui-v2 / kit-v2 既有 token，不新增色值
+   ============================================================ */
 
-.users-page {
-  --users-canvas: #f8fafc;
-  --users-surface: #ffffff;
-  --users-elevated: #f8fafc;
-  --users-border: rgb(15 23 42 / 10%);
-  --users-border-soft: rgb(15 23 42 / 7%);
-  --users-text: #1f2937;
-  --users-muted: #64748b;
-  --users-faint: #94a3b8;
-  --users-primary: #4f46e5;
-  --users-active: #15803d;
-  --users-paid: #2563eb;
-  --users-free: #b45309;
-  --users-expiring: #b45309;
-}
+.u-page {
+  --u-card: #141519;
+  --u-card-hover: #191b20;
+  --u-line: #23262c;
+  --u-line-soft: #1c1f24;
+  --u-text-1: #f2f3f5;
+  --u-text-2: #bcc2cc;
+  --u-text-3: #9aa1ad;
+  --u-text-4: #868d99;
+  --u-brand: #4c6fff;
+  --u-brand-soft: rgba(76, 111, 255, 0.14);
+  --u-ok: #2ed47a;
+  --u-ok-soft: rgba(46, 212, 122, 0.14);
+  --u-warn: #f5b93d;
+  --u-warn-soft: rgba(245, 185, 61, 0.14);
+  --u-danger: #f3656f;
+  --u-danger-soft: rgba(243, 101, 111, 0.14);
+  --u-info: #5aa9f0;
+  --u-info-soft: rgba(90, 169, 240, 0.14);
+  --u-violet: #a78bfa;
+  --u-violet-soft: rgba(167, 139, 250, 0.14);
+  --u-radius: 14px;
 
-html.dark .users-page {
-  --users-canvas: #121212;
-  --users-surface: #1c1c1c;
-  --users-elevated: #202124;
-  --users-border: rgb(255 255 255 / 8%);
-  --users-border-soft: rgb(255 255 255 / 5%);
-  --users-text: #e0e0e0;
-  --users-muted: #8b929b;
-  --users-faint: #69717a;
-  --users-primary: #646cff;
-  --users-active: #63c174;
-  --users-paid: #80a9e8;
-  --users-free: #e0ae5c;
-  --users-expiring: #e0ae5c;
-}
-
-.users-page :deep(.n-card) {
-  border-radius: 8px;
-}
-
-.users-kpis {
   display: flex;
-  align-items: stretch;
+  flex-direction: column;
+  gap: 15px;
+  color: var(--u-text-1);
+  font-size: 13px;
+}
+
+/* ---------- 页头 ---------- */
+.u-head {
+  display: flex;
+  align-items: flex-end;
+  gap: 18px;
+}
+
+.u-head-main {
+  min-width: 0;
+}
+
+.u-eyebrow {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-bottom: 6px;
+  font-size: 12px;
+  color: var(--u-text-4);
+}
+
+.u-eyebrow-sep {
+  color: #545b64;
+}
+
+.u-title {
+  margin: 0;
+  font-size: 22px;
+  font-weight: 620;
+  line-height: 1.25;
+  color: #f6f7f9;
+}
+
+.u-desc {
+  max-width: 820px;
+  margin: 7px 0 0;
+  font-size: 12px;
+  line-height: 1.65;
+  color: var(--u-text-3);
+}
+
+.u-head-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+  flex: none;
+  padding-bottom: 2px;
+}
+
+/* ---------- 通用按钮 / 输入 ---------- */
+.u-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 34px;
+  padding: 0 13px;
+  border: 1px solid #2a2e35;
+  border-radius: 9px;
+  background: #1b1e24;
+  color: #e6e8ec;
+  font-size: 12.5px;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.u-btn:hover {
+  background: #232730;
+  border-color: #363b44;
+}
+
+.u-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.u-btn-ico {
+  width: 15px;
+  height: 15px;
+  flex: none;
+}
+
+.u-btn.is-primary {
+  border-color: var(--u-brand);
+  background: var(--u-brand);
+  color: #fff;
+}
+
+.u-btn.is-primary:hover {
+  background: #5d7cff;
+  border-color: #5d7cff;
+}
+
+.u-btn.is-soft {
+  border-color: rgba(76, 111, 255, 0.28);
+  background: rgba(76, 111, 255, 0.13);
+  color: #a8b8ff;
+}
+
+.u-btn.is-success {
+  border-color: rgba(46, 212, 122, 0.32);
+  background: rgba(46, 212, 122, 0.14);
+  color: #5ce49b;
+}
+
+.u-btn.is-danger {
+  border-color: rgba(243, 101, 111, 0.3);
+  background: rgba(243, 101, 111, 0.13);
+  color: #ff9ba2;
+}
+
+.u-btn-xs {
+  height: 28px;
+  padding: 0 10px;
+  font-size: 12px;
+  border-radius: 7px;
+}
+
+.u-btn-block {
+  width: 100%;
+}
+
+.u-icon-btn {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  background: transparent;
+  color: #9aa1ab;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.u-icon-btn:hover {
+  background: #1a1d22;
+  color: #e6e8ec;
+}
+
+.u-input {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 34px;
+  padding: 0 10px;
+  border: 1px solid #262a31;
+  border-radius: 9px;
+  background: #0e1013;
+}
+
+.u-input:focus-within {
+  border-color: rgba(76, 111, 255, 0.7);
+  box-shadow: 0 0 0 3px rgba(76, 111, 255, 0.18);
+}
+
+.u-input input,
+.u-input textarea {
+  min-width: 0;
+  flex: 1;
+  border: 0;
+  outline: none;
+  background: transparent;
+  color: var(--u-text-1);
+  font-size: 12.5px;
+  font-family: inherit;
+}
+
+.u-input input::placeholder,
+.u-input textarea::placeholder {
+  color: var(--u-text-4);
+}
+
+.u-input.is-plain {
+  width: 100%;
+}
+
+.u-input.is-plain input:disabled,
+.u-input.is-plain textarea:disabled {
+  color: var(--u-text-2);
+  -webkit-text-fill-color: var(--u-text-2);
+  cursor: default;
+}
+
+.u-input.is-area {
+  height: auto;
+  padding: 8px 10px;
+  align-items: flex-start;
+}
+
+.u-input.is-area textarea {
+  resize: vertical;
+  line-height: 1.65;
+}
+
+.u-input-ico {
+  width: 15px;
+  height: 15px;
+  flex: none;
+  color: var(--u-text-4);
+}
+
+.u-search {
+  width: 250px;
+  flex: none;
+}
+
+.u-select :deep(.n-base-selection) {
+  border-radius: 9px;
+}
+
+/* ---------- 卡片 ---------- */
+.u-card {
+  position: relative;
+  border: 1px solid var(--u-line);
+  border-radius: var(--u-radius);
+  background: var(--u-card);
+  min-width: 0;
+}
+
+.u-card-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--u-line-soft);
+}
+
+.u-card-head h3 {
+  margin: 0;
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--u-text-1);
+}
+
+.u-right {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* ---------- KPI ---------- */
+.u-kpis {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 12px;
 }
 
-.users-kpi {
-  flex: 1 1 0;
-  min-width: 0;
-  padding: 11px 16px;
-  border: 1px solid var(--users-border);
-  border-radius: 8px;
-  background: var(--users-surface);
+.u-kpi {
+  padding: 15px 16px 14px;
+  border: 1px solid var(--u-line);
+  border-radius: var(--u-radius);
+  background: var(--u-card);
+  transition: border-color 0.18s ease;
 }
 
-.users-kpi--clickable {
-  appearance: none;
-  color: inherit;
-  font: inherit;
+.u-kpi:hover {
+  border-color: #31353d;
+}
+
+.u-kpi.is-clickable {
+  cursor: pointer;
+}
+
+.u-kpi-top {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.u-kpi-label {
+  font-size: 12px;
+  color: var(--u-text-3);
+}
+
+.u-kpi-icon {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  margin-left: auto;
+  flex: none;
+  border-radius: 8px;
+  border: 1px solid #2a2e35;
+  background: #1d2026;
+  color: #a8adb8;
+}
+
+.u-kpi-icon :deep(.svg-icon) {
+  width: 13px;
+  height: 13px;
+}
+
+.u-kpi-icon.is-blue {
+  border-color: rgba(76, 111, 255, 0.36);
+  background: rgba(76, 111, 255, 0.16);
+  color: #8fa8ff;
+}
+
+.u-kpi-icon.is-green {
+  border-color: rgba(46, 212, 122, 0.34);
+  background: rgba(46, 212, 122, 0.14);
+  color: #5ce49b;
+}
+
+.u-kpi-icon.is-amber {
+  border-color: rgba(245, 185, 61, 0.34);
+  background: rgba(245, 185, 61, 0.14);
+  color: #f7ca6b;
+}
+
+.u-kpi-icon.is-red {
+  border-color: rgba(243, 101, 111, 0.34);
+  background: rgba(243, 101, 111, 0.14);
+  color: #ff9ba2;
+}
+
+.u-kpi-value {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  font-size: 25px;
+  font-weight: 620;
+  line-height: 1.15;
+  letter-spacing: -0.015em;
+  font-variant-numeric: tabular-nums;
+  color: #fff;
+}
+
+.u-kpi-unit {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--u-text-3);
+}
+
+.u-kpi-foot {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 9px;
+  font-size: 12px;
+  color: var(--u-text-4);
+}
+
+.u-kpi-foot-text {
+  color: var(--u-text-4);
+}
+
+/* ---------- 工具条 ---------- */
+.u-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 12px 14px;
+  border: 1px solid var(--u-line);
+  border-radius: var(--u-radius);
+  background: var(--u-card);
+}
+
+.u-spacer {
+  flex: 1;
+}
+
+.u-seg {
+  display: inline-flex;
+  gap: 2px;
+  padding: 3px;
+  border: 1px solid #24272e;
+  border-radius: 9px;
+  background: #14161a;
+}
+
+.u-seg button {
+  height: 26px;
+  padding: 0 11px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--u-text-3);
+  font-size: 12px;
+  cursor: pointer;
+  transition: background 0.14s ease, color 0.14s ease;
+}
+
+.u-seg button:hover {
+  color: var(--u-text-1);
+}
+
+.u-seg button.is-active {
+  background: #2b3038;
+  color: #fff;
+}
+
+/* ---------- 主体：分面 + 宽表 ---------- */
+.u-split {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.u-facet {
+  width: 216px;
+  flex: none;
+}
+
+.u-facet-body {
+  padding: 6px 8px 12px;
+}
+
+.u-facet-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  height: 33px;
+  padding: 0 9px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--u-text-2);
+  font-size: 12.5px;
   text-align: left;
   cursor: pointer;
-  transition: border-color 0.2s ease, background 0.2s ease, box-shadow 0.2s ease;
+  transition: background 0.14s ease, color 0.14s ease;
 }
 
-.users-kpi--clickable:hover {
-  border-color: color-mix(in srgb, var(--users-expiring) 65%, var(--users-border));
-  background: color-mix(in srgb, var(--users-expiring) 7%, var(--users-surface));
-  box-shadow: 0 2px 8px rgb(0 0 0 / 16%);
+.u-facet-item:hover {
+  background: #1a1c21;
+  color: var(--u-text-1);
 }
 
-.users-kpi--clickable:focus-visible {
-  outline: 2px solid var(--users-expiring);
-  outline-offset: 2px;
+.u-facet-item.is-active {
+  background: var(--u-brand-soft);
+  color: #fff;
+  box-shadow: inset 2px 0 0 var(--u-brand);
 }
 
-.users-kpi > span {
-  display: block;
-  color: var(--users-muted);
-  font-size: 12px;
-}
-
-.users-kpi > strong {
-  display: block;
-  margin-top: 5px;
-  color: var(--users-text);
-  font-size: 24px;
-  font-weight: 650;
-  line-height: 1;
-}
-
-@media (max-width: 767px) {
-  .users-kpis {
-    flex-wrap: wrap;
-  }
-
-  .users-kpi {
-    flex-basis: calc(50% - 6px);
-  }
-}
-
-@media (max-width: 480px) {
-  .users-kpis {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr);
-  }
-
-  .users-kpi {
-    flex-basis: auto;
-  }
-}
-
-.user-group-card {
-  overflow: hidden;
+.u-facet-name {
   min-width: 0;
-  border: 1px solid var(--users-border);
-  border-radius: 8px;
-  background: var(--users-surface);
-  box-shadow: 0 1px 3px rgb(0 0 0 / 14%);
-  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.user-group-card:hover {
-  border-color: color-mix(in srgb, var(--users-primary) 52%, var(--users-border));
-  box-shadow: 0 3px 10px rgb(0 0 0 / 20%);
+.u-dot {
+  width: 7px;
+  height: 7px;
+  flex: none;
+  border-radius: 50%;
+  background: #545b64;
 }
 
-.user-group-card--expanded {
-  border-color: color-mix(in srgb, var(--users-primary) 58%, var(--users-border));
+.u-dot.is-ok {
+  background: var(--u-ok);
+  box-shadow: 0 0 7px rgba(46, 212, 122, 0.5);
 }
 
-.user-group-card__header {
-  width: 100%;
-  border: 0;
-  appearance: none;
+.u-dot.is-warn {
+  background: var(--u-warn);
+  box-shadow: 0 0 7px rgba(245, 185, 61, 0.45);
+}
+
+.u-dot.is-danger {
+  background: var(--u-danger);
+  box-shadow: 0 0 7px rgba(243, 101, 111, 0.45);
+}
+
+.u-dot.is-brand {
+  background: var(--u-brand);
+  box-shadow: 0 0 7px rgba(76, 111, 255, 0.5);
+}
+
+.u-facet-title {
+  padding: 2px 9px 8px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  color: #7f8792;
+}
+
+.u-dist {
+  padding: 0 9px 9px;
+}
+
+.u-dist-top {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
-  padding: 12px 16px 9px;
-  color: inherit;
+  font-size: 12px;
+}
+
+.u-bar {
+  position: relative;
+  height: 5px;
+  margin-top: 5px;
+  border-radius: 99px;
+  background: #24272e;
+  overflow: hidden;
+}
+
+.u-bar > span {
+  position: absolute;
+  inset: 0 auto 0 0;
+  border-radius: 99px;
+  background: var(--u-brand);
+}
+
+.u-bar > span.is-ok {
+  background: var(--u-ok);
+}
+
+.u-bar > span.is-warn {
+  background: var(--u-warn);
+}
+
+.u-bar > span.is-danger {
+  background: var(--u-danger);
+}
+
+.u-bar > span.is-neutral {
+  background: #545b64;
+}
+
+.u-hr {
+  height: 1px;
+  margin: 10px 8px;
+  background: var(--u-line-soft);
+}
+
+.u-hint {
+  margin: 8px 0 0;
+  padding: 0 9px;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--u-text-4);
+}
+
+.u-warn {
+  color: var(--u-warn);
+}
+
+/* ---------- 表格 ---------- */
+.u-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.u-table-wrap {
+  overflow-x: auto;
+}
+
+.u-table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: 13px;
+}
+
+.u-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  padding: 9px 12px;
+  border-bottom: 1px solid var(--u-line);
+  background: var(--u-card);
+  color: var(--u-text-3);
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
   text-align: left;
-  background: var(--users-elevated);
+  white-space: nowrap;
+}
+
+.u-table thead th.is-num {
+  text-align: right;
+}
+
+.u-table tbody td {
+  height: 46px;
+  padding: 7px 12px;
+  border-bottom: 1px solid var(--u-line-soft);
+  color: var(--u-text-2);
+  vertical-align: middle;
+  white-space: nowrap;
+}
+
+.u-table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.u-row {
+  cursor: pointer;
+  transition: background 0.12s ease;
+}
+
+.u-row:hover td {
+  background: var(--u-card-hover);
+}
+
+.u-td-strong {
+  color: var(--u-text-1);
+}
+
+.u-name {
+  display: block;
+  font-weight: 500;
+  color: var(--u-text-1);
+}
+
+.u-sub {
+  display: block;
+  margin-top: 1px;
+  font-size: 12px;
+  color: var(--u-text-4);
+}
+
+.u-sub.u-warn {
+  color: var(--u-warn);
+}
+
+.u-num {
+  font-variant-numeric: tabular-nums;
+}
+
+.u-table td.is-num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  color: var(--u-text-1);
+}
+
+.u-strong {
+  color: var(--u-text-1);
+  font-weight: 500;
+}
+
+.u-mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  letter-spacing: -0.01em;
+}
+
+.u-dim {
+  color: var(--u-text-4);
+}
+
+.u-star {
+  color: var(--u-warn);
+}
+
+.u-td-actions {
+  width: 1%;
+  white-space: nowrap;
+}
+
+.u-td-actions > * + * {
+  margin-left: 4px;
+}
+
+.u-table.is-compact tbody td {
+  height: 42px;
+}
+
+.u-empty,
+.u-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 46px 0;
+  color: var(--u-text-4);
+  font-size: 12.5px;
+}
+
+.u-table-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 11px 18px;
+  border-top: 1px solid var(--u-line-soft);
+}
+
+/* ---------- 分段视图切换 ---------- */
+.u-grouped {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.u-grouped-tools {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.u-group {
+  overflow: hidden;
+}
+
+.u-group-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 13px 18px;
+  border: 0;
+  border-bottom: 1px solid transparent;
+  background: transparent;
+  color: var(--u-text-1);
+  text-align: left;
+  cursor: pointer;
+  user-select: none;
+}
+
+.u-group.is-open .u-group-head {
+  border-bottom-color: var(--u-line-soft);
+}
+
+.u-group-chev {
+  width: 16px;
+  height: 16px;
+  flex: none;
+  color: var(--u-text-3);
+  transition: transform 0.18s ease;
+}
+
+.u-group.is-open .u-group-chev {
+  transform: rotate(90deg);
+  color: #8fa8ff;
+}
+
+.u-group-name {
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.u-group-summary {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+}
+
+.u-group-traffic {
+  flex: none;
+  font-size: 12px;
+}
+
+.u-group-sync {
+  margin-left: auto;
+  font-size: 12px;
+  flex: none;
+}
+
+.u-group-toggle {
+  flex: none;
+  font-size: 12px;
+  color: #8fa8ff;
+}
+
+.u-group-body {
+  padding: 0 12px 12px;
+}
+
+.u-group-body .u-table thead th {
+  background: var(--u-card);
+}
+
+.u-group-body .u-table-foot {
+  padding: 10px 6px 0;
+  border-top: 1px solid var(--u-line-soft);
+}
+
+.u-empty-card {
+  padding: 40px 0;
+  text-align: center;
+  font-size: 12.5px;
+  color: var(--u-text-4);
+}
+
+/* ---------- 徽标 ---------- */
+.u-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 21px;
+  padding: 0 7px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 550;
+  white-space: nowrap;
+}
+
+.u-badge-dot {
+  width: 5px;
+  height: 5px;
+  flex: none;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.u-badge.is-ok {
+  border-color: rgba(46, 212, 122, 0.32);
+  background: rgba(46, 212, 122, 0.15);
+  color: #5ce49b;
+}
+
+.u-badge.is-warn {
+  border-color: rgba(245, 185, 61, 0.32);
+  background: rgba(245, 185, 61, 0.15);
+  color: #f7ca6b;
+}
+
+.u-badge.is-danger {
+  border-color: rgba(243, 101, 111, 0.32);
+  background: rgba(243, 101, 111, 0.15);
+  color: #ff9ba2;
+}
+
+.u-badge.is-info {
+  border-color: rgba(90, 169, 240, 0.32);
+  background: rgba(90, 169, 240, 0.15);
+  color: #8cc4f7;
+}
+
+.u-badge.is-brand {
+  border-color: rgba(76, 111, 255, 0.34);
+  background: rgba(76, 111, 255, 0.16);
+  color: #9db2ff;
+}
+
+.u-badge.is-violet {
+  border-color: rgba(167, 139, 250, 0.34);
+  background: rgba(167, 139, 250, 0.16);
+  color: #c0a9ff;
+}
+
+.u-badge.is-neutral {
+  border-color: #2a2e35;
+  background: #1d2026;
+  color: #9aa1ab;
+}
+
+/* ---------- 提示条 ---------- */
+.u-callout {
+  display: flex;
+  gap: 10px;
+  padding: 13px 15px;
+  border: 1px solid #24272e;
+  border-radius: 11px;
+  background: #15171b;
+  line-height: 1.7;
+}
+
+.u-callout.is-warn {
+  border-color: rgba(245, 185, 61, 0.24);
+  background: rgba(245, 185, 61, 0.08);
+}
+
+.u-callout.is-danger {
+  border-color: rgba(243, 101, 111, 0.24);
+  background: rgba(243, 101, 111, 0.08);
+}
+
+.u-callout.is-info {
+  border-color: rgba(90, 169, 240, 0.22);
+  background: rgba(90, 169, 240, 0.08);
+}
+
+.u-callout-tight {
+  padding: 10px 12px;
+}
+
+.u-callout-ico {
+  width: 17px;
+  height: 17px;
+  flex: none;
+  margin-top: 2px;
+  color: #f7ca6b;
+}
+
+.u-callout.is-danger .u-callout-ico {
+  color: #ff9ba2;
+}
+
+.u-callout.is-info .u-callout-ico {
+  color: #8cc4f7;
+}
+
+.u-callout-main {
+  min-width: 0;
+  flex: 1;
+}
+
+.u-callout-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.u-callout-head b {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--u-text-1);
+}
+
+.u-callout-note {
+  margin: 6px 0 0;
+  font-size: 12px;
+  line-height: 1.65;
+  color: var(--u-text-3);
+}
+
+/* ---------- 抽屉 ---------- */
+.u-dhead {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding-right: 4px;
+}
+
+.u-avatar {
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  flex: none;
+  border-radius: 50%;
+  background: #2a2f38;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.08) inset;
+  color: #e8eaee;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.u-dhead-main {
+  min-width: 0;
+}
+
+.u-dhead-title {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex-wrap: wrap;
+}
+
+.u-dhead-title h2 {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--u-text-1);
+}
+
+.u-dhead-sub {
+  margin: 4px 0 0;
+  font-size: 12px;
+  color: var(--u-text-4);
+}
+
+.u-dhead-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+  flex: none;
+}
+
+.u-dtabs {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  display: flex;
+  gap: 22px;
+  padding: 0 20px;
+  border-bottom: 1px solid var(--u-line-soft);
+  background: #141519;
+}
+
+.u-dtabs button {
+  position: relative;
+  height: 42px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--u-text-3);
+  font-size: 12.5px;
   cursor: pointer;
 }
 
-.user-group-card__heading {
-  min-width: 0;
-  display: flex;
-  flex: 1;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 3px;
+.u-dtabs button:hover {
+  color: var(--u-text-1);
 }
 
-.user-group-card__chevron {
-  flex: none;
-  width: 18px;
-  height: 18px;
-  color: var(--users-muted);
-  font-size: 18px;
-  transition: transform 0.2s ease, color 0.2s ease;
-}
-
-.user-group-card__header:hover .user-group-card__chevron {
-  color: var(--users-primary);
-}
-
-.user-group-card__chevron.is-expanded {
-  color: var(--users-primary);
-  transform: rotate(90deg);
-}
-
-.user-group-card__title {
-  min-width: 0;
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 7px;
-}
-
-.user-group-card__name {
-  overflow: hidden;
-  color: var(--users-text);
-  font-size: 16px;
-  font-weight: 650;
-  line-height: 22px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.user-group-card__status {
-  display: inline-flex;
-  align-items: center;
-  min-height: 20px;
-  padding: 1px 7px;
-  border: 1px solid var(--users-border);
-  border-radius: 4px;
-  color: var(--users-muted);
-  font-size: 11px;
-  line-height: 16px;
-}
-
-.user-group-card__status::before {
-  width: 5px;
-  height: 5px;
-  margin-right: 5px;
-  border-radius: 50%;
-  background: currentcolor;
-  content: '';
-}
-
-.user-group-card__status--success,
-.user-group-card__status--online {
-  border-color: rgb(99 193 116 / 32%);
-  color: var(--users-active);
-  background: rgb(99 193 116 / 8%);
-}
-
-.user-group-card__status--sync {
-  border-color: rgb(100 108 255 / 36%);
-  color: #8d94ff;
-  background: rgb(100 108 255 / 9%);
-}
-
-.user-group-card__status--warning {
-  border-color: rgb(224 174 92 / 34%);
-  color: var(--users-expiring);
-  background: rgb(224 174 92 / 8%);
-}
-
-.user-group-card__status--error {
-  border-color: rgb(226 125 134 / 34%);
-  color: #e27d86;
-  background: rgb(226 125 134 / 8%);
-}
-
-.user-group-card__sync-time {
-  color: var(--users-faint);
-  font-size: 11px;
-  line-height: 16px;
-}
-
-.user-group-card__action {
-  flex: none;
-  align-self: center;
-  color: #8d94ff;
-  font-size: 12px;
-  font-weight: 500;
-  white-space: nowrap;
-}
-
-.user-group-card__header:focus-visible {
-  outline: 2px solid var(--users-primary);
-  outline-offset: -2px;
-}
-
-.user-group-card__header:active {
-  background: color-mix(in srgb, var(--users-elevated) 90%, var(--users-primary));
-}
-
-.user-group-card__body {
-  padding: 0 16px 14px;
-}
-
-.user-group-card__metrics {
-  display: grid;
-  grid-template-columns: repeat(6, minmax(0, 1fr));
-  border-bottom: 1px solid var(--users-border-soft);
-}
-
-.user-group-card__metric {
-  display: flex;
-  min-width: 0;
-  flex-direction: column;
-  align-items: flex-start;
-  justify-content: center;
-  gap: 2px;
-  min-height: 56px;
-  padding: 8px 12px;
-  border-right: 1px solid var(--users-border-soft);
-  color: var(--users-muted);
-  font-size: 11px;
-  line-height: 16px;
-}
-
-.user-group-card__metric:first-child {
-  padding-left: 0;
-}
-
-.user-group-card__metric:last-child {
-  padding-right: 0;
-  border-right: 0;
-}
-
-.user-group-card__metric strong {
-  overflow: hidden;
-  color: var(--users-text);
-  font-size: 16px;
-  font-weight: 650;
-  line-height: 20px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.user-group-card__metric .users-value--active { color: var(--users-active); }
-.user-group-card__metric .users-value--paid { color: var(--users-paid); }
-.user-group-card__metric .users-value--free,
-.user-group-card__metric .users-value--expiring { color: var(--users-free); }
-
-.user-group-card__metric--traffic strong {
-  font-size: 14px;
+.u-dtabs button.is-active {
+  color: #fff;
   font-weight: 550;
 }
 
-.user-group-card__users {
-  margin-top: 12px;
+.u-dtabs button.is-active::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -1px;
+  height: 2px;
+  border-radius: 2px 2px 0 0;
+  background: var(--u-brand);
+}
+
+.u-dbody {
+  padding: 14px 20px 24px;
+}
+
+.u-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.u-drawer-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 260px;
+}
+
+.u-drawer-alert {
+  margin: 14px 20px 0;
+}
+
+.u-drawer-foot {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 12px;
+}
+
+.u-dcard {
+  border: 1px solid var(--u-line);
+  border-radius: var(--u-radius);
+  background: var(--u-card);
   overflow: hidden;
-  border: 1px solid var(--users-border);
-  border-radius: 6px;
-  background: var(--users-canvas);
 }
 
-.user-group-card__users :deep(.n-data-table) {
-  background: transparent;
+.u-dcard.is-muted {
+  opacity: 0.92;
 }
 
-.user-group-card__users :deep(.n-data-table-th) {
-  color: var(--users-muted);
+.u-dcard-head {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 13px 15px;
+  border-bottom: 1px solid var(--u-line-soft);
+}
+
+.u-dcard-head h3 {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.u-dcard-body {
+  padding: 14px 15px 15px;
+}
+
+.u-dcard-body.is-flush {
+  padding: 0;
+}
+
+.u-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.u-field > .u-badge {
+  align-self: flex-start;
+}
+
+.u-label {
   font-size: 12px;
+  color: var(--u-text-3);
+}
+
+.u-req {
+  color: var(--u-danger);
+  font-style: normal;
+}
+
+.u-grid-2 {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.u-grid-3 {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px 12px;
+}
+
+.u-span-2 {
+  grid-column: span 2;
+}
+
+.u-mt-12 {
+  margin-top: 12px;
+}
+
+.u-ml-auto {
+  margin-left: auto;
+}
+
+.u-mr-auto {
+  margin-right: auto;
+}
+
+.u-px {
+  padding: 0 15px;
+}
+
+.u-form-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.u-sub-title {
+  margin-bottom: 8px;
+  font-size: 12.5px;
+  font-weight: 550;
+  color: var(--u-text-2);
+}
+
+.u-empty-small {
+  padding: 14px 0;
+  font-size: 12px;
+  color: var(--u-text-4);
+}
+
+/* 待确认续费行 */
+.u-cand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px dashed rgba(245, 185, 61, 0.22);
+}
+
+.u-cand-info {
+  min-width: 0;
+  flex: 1;
+}
+
+.u-cand-info b {
+  display: block;
+  font-size: 12.5px;
+  font-weight: 550;
+  color: var(--u-text-1);
+}
+
+.u-cand-sub {
+  display: block;
+  margin-top: 2px;
+  font-size: 12px;
+  color: var(--u-text-4);
+}
+
+.u-cand-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: none;
+}
+
+/* 收费记录 */
+.u-list {
+  display: flex;
+  flex-direction: column;
+}
+
+.u-list-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 15px;
+  border-bottom: 1px solid var(--u-line-soft);
+}
+
+.u-list-row:last-child {
+  border-bottom: none;
+}
+
+.u-list-main {
+  min-width: 0;
+  flex: 1;
+}
+
+.u-list-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  font-size: 12.5px;
+}
+
+.u-list-sub {
+  margin-top: 2px;
+  font-size: 12px;
+  color: var(--u-text-4);
+}
+
+.u-list-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+}
+
+/* 路径 */
+.u-path-card {
+  padding: 10px 12px;
+  border: 1px solid var(--u-line-soft);
+  border-radius: 10px;
+  background: #111317;
+}
+
+.u-path-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 12.5px;
+}
+
+.u-path-meta {
+  margin-top: 3px;
+  font-size: 12px;
+  color: var(--u-text-3);
+}
+
+.u-history-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 10px;
+  margin-top: 6px;
+  border: 1px solid var(--u-line-soft);
+  border-radius: 9px;
+  font-size: 12px;
+  color: var(--u-text-3);
+}
+
+/* X-Panel 快照 */
+.u-kv {
+  display: flex;
+  flex-direction: column;
+}
+
+.u-kv-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 15px;
+  border-bottom: 1px solid var(--u-line-soft);
+  font-size: 12.5px;
+}
+
+.u-kv-row:last-child {
+  border-bottom: none;
+}
+
+.u-kv-row > span:first-child {
+  width: 128px;
+  flex: none;
+  font-size: 12px;
+  color: var(--u-text-4);
+}
+
+.u-kv-row b {
   font-weight: 500;
+  color: var(--u-text-1);
 }
 
-.user-group-card__users :deep(.n-data-table-td) {
-  color: var(--users-text);
+/* ---------- 弹窗 ---------- */
+.u-modal :deep(.n-card-header__main) {
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.u-modal-body {
+  font-size: 13px;
+}
+
+.u-modal-foot {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.u-alert {
+  margin: 12px 15px 0;
+}
+
+.u-inline-error {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 12px 15px 0;
+  padding: 9px 12px;
+  border: 1px solid rgba(245, 185, 61, 0.24);
+  border-radius: 9px;
+  background: rgba(245, 185, 61, 0.08);
+  font-size: 12.5px;
+  color: #f7ca6b;
+}
+
+.u-import-errors {
+  max-height: 160px;
+  margin-top: 8px;
+  overflow: auto;
   font-size: 12px;
+  line-height: 1.7;
+  color: #ff9ba2;
 }
 
-.user-group-card__users :deep(.n-data-table-tbody tr:hover td) {
-  background: rgb(100 108 255 / 7%);
+/* ---------- 脚注 ---------- */
+.u-footnote {
+  margin: 0 2px;
+  font-size: 12px;
+  line-height: 1.7;
+  color: var(--u-text-4);
 }
 
-.user-group-card__users :deep(.n-pagination) {
-  padding: 8px 12px;
+/* ---------- 响应式 ---------- */
+@media (max-width: 1440px) {
+  .u-kpis {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }
 
-/* Keep the old helper classes from changing the semantic colors above. */
-.users-value--active { color: var(--users-active) !important; }
-.users-value--paid { color: var(--users-paid) !important; }
-.users-value--free { color: var(--users-free) !important; }
-.users-value--expiring { color: var(--users-expiring) !important; }
+@media (max-width: 1180px) {
+  .u-split {
+    flex-direction: column;
+  }
 
-/* Replace legacy card spacing below 900px without changing the data order. */
-@media (max-width: 900px) {
-  .user-group-card__metrics { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-  .user-group-card__metric:nth-child(3n) { border-right: 0; }
-  .user-group-card__metric:nth-child(n + 4) { border-top: 1px solid var(--users-border-soft); }
-  .user-group-card__metric:nth-child(4) { padding-left: 0; }
-  .user-group-card__metric:nth-child(6) { padding-right: 0; }
-}
+  .u-facet {
+    width: 100%;
+  }
 
-@media (max-width: 560px) {
-  .user-group-card__header { align-items: flex-start; padding: 11px 12px 9px; }
-  .user-group-card__body { padding: 0 12px 12px; }
-  .user-group-card__metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .user-group-card__metric:nth-child(3n) { border-right: 1px solid var(--users-border-soft); }
-  .user-group-card__metric:nth-child(2n) { border-right: 0; }
-  .user-group-card__metric:nth-child(n + 3) { border-top: 1px solid var(--users-border-soft); }
-  .user-group-card__metric:nth-child(3),
-  .user-group-card__metric:nth-child(5) { padding-left: 0; }
-  .user-group-card__metric:nth-child(4),
-  .user-group-card__metric:nth-child(6) { padding-right: 0; }
+  .u-search {
+    width: 100%;
+  }
 }
 </style>
