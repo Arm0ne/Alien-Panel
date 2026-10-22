@@ -329,6 +329,26 @@ function pathModeLabel(mode?: Api.Central.UserSummary['pathMode']) {
 }
 
 /** 状态文案统一（有效 → 启用中） */
+function formatQuota(value?: number | null) {
+  if (value === undefined || value === null || !Number.isFinite(value) || value <= 0) return '--';
+  const units = ['B', 'KB', 'MB', 'GB', 'TB', 'PB'];
+  let amount = value;
+  let index = 0;
+  while (amount >= 1024 && index < units.length - 1) {
+    amount /= 1024;
+    index += 1;
+  }
+  return `${amount.toFixed(amount >= 100 ? 0 : amount >= 10 ? 1 : 2)} ${units[index]}`;
+}
+
+function quotaUsageHint(row: Api.Central.UserSummary) {
+  const quota = Number(row.quotaBytes || 0);
+  if (!quota) return '';
+  const used = Number(row.trafficBytes || 0);
+  const percent = Math.min(999, Math.round((used / quota) * 100));
+  return `已用 ${percent}%`;
+}
+
 function billingHint(row: Api.Central.UserSummary) {
   if (row.billingType === 'free') {
     return row.billingAmount ? `免费 · 参考 ¥${Number(row.billingAmount).toFixed(2)}` : '免费用户';
@@ -1492,7 +1512,8 @@ onMounted(() => {
                 </td>
                 <td>
                   <TrafficValue :value="row.trafficBytes" />
-                  <span class="u-dim"> / --</span>
+                  <span class="u-dim"> / {{ row.quotaBytes ? formatQuota(row.quotaBytes) : '--' }}</span>
+                  <span v-if="row.quotaBytes" class="u-sub">{{ quotaUsageHint(row) }}</span>
                 </td>
                 <td><span class="u-badge is-neutral">{{ row.nodeName || '未关联' }}</span></td>
                 <td>
@@ -1645,8 +1666,8 @@ onMounted(() => {
     </div>
 
     <p class="u-footnote">
-      * 「计费」列展示中央维护的月费与周期（<span class="u-mono">billingAmount</span> /
-      <span class="u-mono">billingCycle</span>）；「用量 / 配额」的配额字段仍需后端补充套餐能力，当前只显示累计流量（相对流量基线的增量），配额以 <span class="u-mono">--</span> 占位。
+      * 「用量 / 配额」的用量为相对流量基线的增量，配额来自 Agent 上报的 X-Panel Client
+      <span class="u-mono">totalGB</span>（未上报时显示 <span class="u-mono">--</span>）；「计费」列展示中央维护的月费与周期（<span class="u-mono">billingAmount</span> / <span class="u-mono">billingCycle</span>）。
     </p>
 
     <!-- ===================== 详情抽屉 ===================== -->

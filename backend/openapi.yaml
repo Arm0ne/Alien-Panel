@@ -1939,6 +1939,7 @@ components:
         down: { type: integer, format: int64 }
         all_time: { type: integer, format: int64 }
         last_online: { type: integer, format: int64 }
+        total_gb: { type: number, description: X-Panel per-client traffic quota in GB; omitted or 0 means unknown/unlimited. }
     AgentInbound:
       type: object
       required: [remote_id]

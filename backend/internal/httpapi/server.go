@@ -437,6 +437,7 @@ COALESCE(i.node_id, ''), COALESCE(n.name, ''), COALESCE(i.tag, ''),
 COALESCE((SELECT r.name FROM user_routes ur JOIN routes r ON r.id = ur.route_id
  WHERE ur.user_id = u.id AND ur.is_primary = 1 AND ur.active_to IS NULL ORDER BY ur.active_from DESC LIMIT 1), ''),
 COALESCE(i.client_count, 0),
+COALESCE((SELECT MAX(c.quota_bytes) FROM clients c WHERE c.inbound_id = i.id), 0),
 (CASE WHEN COALESCE(i.up, 0) > COALESCE(i.traffic_baseline_up, 0) THEN COALESCE(i.up, 0) - COALESCE(i.traffic_baseline_up, 0) ELSE 0 END
  + CASE WHEN COALESCE(i.down, 0) > COALESCE(i.traffic_baseline_down, 0) THEN COALESCE(i.down, 0) - COALESCE(i.traffic_baseline_down, 0) ELSE 0 END),
 COALESCE((SELECT MAX(NULLIF(c.last_online, '')) FROM clients c WHERE c.inbound_id = i.id), ''),
@@ -457,15 +458,16 @@ ORDER BY CASE WHEN u.expiry_time IS NULL THEN 1 ELSE 0 END, u.expiry_time ASC LI
 	for rows.Next() {
 		var id, name, status, billingType, billingCycle, expiry, nodeID, nodeName, inboundTag, routeName, lastActivity, landingName, landingInboundTag, exitIP, exitOwner, pathMode, pathID string
 		var clientCount int
+		var quota int64
 		var billingAmount float64
 		var traffic int64
-		if err := rows.Scan(&id, &name, &status, &billingType, &billingCycle, &billingAmount, &expiry, &nodeID, &nodeName, &inboundTag, &routeName, &clientCount, &traffic, &lastActivity, &landingName, &landingInboundTag, &exitIP, &exitOwner, &pathMode, &pathID); err != nil {
+		if err := rows.Scan(&id, &name, &status, &billingType, &billingCycle, &billingAmount, &expiry, &nodeID, &nodeName, &inboundTag, &routeName, &clientCount, &quota, &traffic, &lastActivity, &landingName, &landingInboundTag, &exitIP, &exitOwner, &pathMode, &pathID); err != nil {
 			writeFailure(w, http.StatusInternalServerError, internalErrorCode, "could not decode users")
 			return
 		}
 		items = append(items, map[string]any{
 			"id": id, "name": name, "nodeId": nodeID, "nodeName": nodeName, "inboundTag": inboundTag, "routeName": nullableString(routeName),
-			"status": status, "billingType": billingType, "billingCycle": billingCycle, "billingAmount": billingAmount, "expiresAt": nullableString(expiry), "clientCount": clientCount,
+			"status": status, "billingType": billingType, "billingCycle": billingCycle, "billingAmount": billingAmount, "expiresAt": nullableString(expiry), "clientCount": clientCount, "quotaBytes": quota,
 			"trafficBytes": traffic, "lastActivityAt": nullableString(lastActivity),
 			"landingNodeName": nullableString(landingName), "landingInboundTag": nullableString(landingInboundTag), "exitIpAddress": nullableString(exitIP),
 			"exitIpOwnerNodeName": nullableString(exitOwner), "pathMode": nullableString(pathMode),

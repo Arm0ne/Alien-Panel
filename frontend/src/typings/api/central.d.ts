@@ -57,6 +57,7 @@ declare namespace Api {
       expiresAt?: string;
       clientCount: number;
       trafficBytes: number;
+      quotaBytes?: number;
       lastActivityAt?: string;
       dataAt?: string | null;
     }
