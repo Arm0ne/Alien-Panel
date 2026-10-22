@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, h, onMounted, reactive, ref } from 'vue';
+import { computed, h, onMounted, reactive, ref, watch } from 'vue';
 import { NDropdown, NInput, NPagination, NSelect } from 'naive-ui';
 import { useRouter } from 'vue-router';
 import { createNode, deleteNode, fetchNodes, requestNodeSync, updateNode } from '@/service/api';
@@ -208,6 +208,14 @@ function syncAutoFields() {
   xpanelUrl.value = parsed?.url || '';
   nodeForm.panelBasePath = parsed?.basePath || '/';
 }
+
+// 与原实现一致：输入管理地址时实时解析地址与路径，而不是等失焦
+watch(
+  () => nodeForm.managementUrl,
+  () => {
+    syncAutoFields();
+  }
+);
 
 function addExitIpInput() {
   if (exitIpInputs.value.length >= 100) {
@@ -774,6 +782,10 @@ onMounted(() => {
                 <span class="n-label">X-Panel 地址（自动解析）</span>
                 <NInput :value="xpanelUrl || '--'" readonly disabled />
               </div>
+              <div class="n-field">
+                <span class="n-label">X-Panel API 路径（自动解析）</span>
+                <NInput :value="nodeForm.panelBasePath || '--'" readonly disabled />
+              </div>
               <div class="n-field n-field-wide">
                 <span class="n-label">管理地址 <span class="n-req">*</span></span>
                 <NInput
@@ -782,7 +794,10 @@ onMounted(() => {
                   placeholder="例如 https://server.example.com:18086/Alien/"
                   @blur="syncAutoFields"
                 />
-                <span class="n-help">保存后会同时写入 managementUrl 与 panelBasePath</span>
+                <span class="n-help">
+                  地址部分写入 managementUrl，端口后的路径写入 panelBasePath；例如 https://host:18086/Alien/ 会解析为
+                  <code>https://host:18086</code> + <code>/Alien</code>
+                </span>
               </div>
               <div class="n-field n-field-wide">
                 <span class="n-label">节点出口 IP（可选，可添加多个）</span>
