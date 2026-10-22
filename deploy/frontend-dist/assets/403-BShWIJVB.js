@@ -1,0 +1,1 @@
+import{Li as e,ji as t,qi as n}from"./router-D4R7miHv.js";import{t as r}from"./exception-base-xdnRTB2x.js";var i=e({name:`403`,__name:`index`,setup(e){return(e,i)=>{let a=r;return n(),t(a,{type:`403`})}}});export{i as default};

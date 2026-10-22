@@ -233,8 +233,12 @@ body {
 
 /* ---------- 侧栏 ---------- */
 .v2-sider {
+  margin: 10px;
+  height: calc(100% - 20px);
+  border: 1px solid var(--ui2-line);
+  border-radius: 16px;
   background: var(--ui2-panel);
-  border-right: 1px solid var(--ui2-line);
+  overflow: hidden;
 }
 
 .v2-sider-head {
@@ -447,7 +451,7 @@ body {
 .v2-header {
   height: 100%;
   padding: 0 18px 0 20px;
-  background: var(--ui2-panel);
+  background: transparent;
   border-bottom: 1px solid var(--ui2-line-soft);
   gap: 14px;
 }
@@ -475,14 +479,11 @@ body {
 
 /* ---------- 标签页 ---------- */
 .v2-tabbar {
-  background: var(--ui2-panel);
+  background: transparent;
   border-bottom: 1px solid var(--ui2-line-soft);
   padding: 0 14px;
   gap: 6px;
-}
-
-.tabbar-spacer {
-  flex: 1;
+  overflow: hidden;
 }
 
 /* button 模式标签：当前项带品牌色 */

@@ -224,7 +224,6 @@ init();
         </div>
       </BetterScroll>
     </div>
-    <span class="tabbar-spacer"></span>
   </div>
   <ContextMenu
     :visible="dropdown.visible"
