@@ -353,6 +353,7 @@ onMounted(loadDashboard);
 
     <NSpin :show="loading">
       <template v-if="dashboard">
+        <div class="dash-body">
         <!-- KPI -->
         <section class="dash-kpis">
           <div class="dash-kpi">
@@ -596,6 +597,7 @@ onMounted(loadDashboard);
             </div>
           </section>
         </div>
+        </div>
       </template>
 
       <div v-else-if="!loading" class="dash-empty">
@@ -609,7 +611,13 @@ onMounted(loadDashboard);
 .dash {
   display: flex;
   flex-direction: column;
-  gap: 18px;
+  gap: 15px;
+}
+
+.dash-body {
+  display: flex;
+  flex-direction: column;
+  gap: 15px;
 }
 
 /* ---------- 页头 ---------- */
@@ -709,7 +717,7 @@ onMounted(loadDashboard);
 }
 
 .dash-kpi {
-  padding: 15px 16px 14px;
+  padding: 13px 14px 12px;
   border: 1px solid #23262c;
   border-radius: 14px;
   background: #141519;
@@ -724,6 +732,7 @@ onMounted(loadDashboard);
 
 .dash-kpi-label {
   font-size: 12.5px;
+  line-height: 1.4;
   color: #b0b6c1;
   white-space: nowrap;
   overflow: hidden;
@@ -784,8 +793,9 @@ onMounted(loadDashboard);
   display: flex;
   align-items: baseline;
   gap: 5px;
-  margin-top: 10px;
+  margin-top: 8px;
   font-size: 22px;
+  line-height: 1.2;
   font-weight: 620;
   letter-spacing: -0.01em;
   font-variant-numeric: tabular-nums;
@@ -799,7 +809,7 @@ onMounted(loadDashboard);
 }
 
 .dash-kpi-foot {
-  margin-top: 8px;
+  margin-top: 7px;
   font-size: 12px;
   line-height: 1.5;
   color: #98a0ab;
@@ -860,7 +870,7 @@ onMounted(loadDashboard);
 .dash-split {
   display: grid;
   grid-template-columns: minmax(0, 1.62fr) minmax(0, 1fr);
-  gap: 18px;
+  gap: 15px;
 }
 
 .dash-card-chart {
@@ -1096,7 +1106,7 @@ onMounted(loadDashboard);
 .dash-three {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 18px;
+  gap: 15px;
 }
 
 .dash-expiry-row {
