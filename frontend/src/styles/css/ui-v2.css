@@ -238,6 +238,10 @@ body {
   gap: 6px;
 }
 
+.tabbar-spacer {
+  flex: 1;
+}
+
 /* button 模式标签：当前项带品牌色 */
 .v2-tabbar .n-tabs .n-tabs-tab.n-tabs-tab--active {
   background: rgba(76, 111, 255, 0.18);

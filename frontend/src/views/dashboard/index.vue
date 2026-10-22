@@ -349,7 +349,7 @@ onMounted(loadDashboard);
               <span class="dash-kpi-icon is-blue"><SvgIcon icon="mdi:chart-line" /></span>
             </div>
             <div class="dash-kpi-value"><TrafficValue :value="dashboard.traffic.todayBytes" /></div>
-            <div class="dash-kpi-foot">线路机用户 Inbound · {{ trendSubtitle }}</div>
+            <div class="dash-kpi-foot">线路机用户 Inbound</div>
           </div>
 
           <div class="dash-kpi">
@@ -358,7 +358,7 @@ onMounted(loadDashboard);
               <span class="dash-kpi-icon is-cyan"><SvgIcon icon="mdi:layers-outline" /></span>
             </div>
             <div class="dash-kpi-value"><TrafficValue :value="dashboard.traffic.monthBytes" /></div>
-            <div class="dash-kpi-foot">截至 {{ formatDate(dashboard.dataAt) }}</div>
+            <div class="dash-kpi-foot">按最近同步时间统计</div>
           </div>
 
           <div class="dash-kpi">

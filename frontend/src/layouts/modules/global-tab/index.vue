@@ -3,7 +3,6 @@ import { nextTick, reactive, ref, watch } from 'vue';
 import { useRoute } from 'vue-router';
 import { useElementBounding } from '@vueuse/core';
 import { PageTab } from '@sa/materials';
-import { useAppStore } from '@/store/modules/app';
 import { useThemeStore } from '@/store/modules/theme';
 import { useTabStore } from '@/store/modules/tab';
 import { isPC } from '@/utils/agent';
@@ -16,7 +15,6 @@ defineOptions({
 });
 
 const route = useRoute();
-const appStore = useAppStore();
 const themeStore = useThemeStore();
 const tabStore = useTabStore();
 
@@ -117,10 +115,6 @@ function switchTab(e: MouseEvent, tab: App.Global.Tab) {
   if ([MIDDLE_MOUSE_BUTTON, RIGHT_MOUSE_BUTTON].includes(e.button)) return;
 
   tabStore.switchRouteByTab(tab);
-}
-
-async function refresh() {
-  appStore.reloadPage(500);
 }
 
 interface DropdownConfig {
@@ -230,8 +224,7 @@ init();
         </div>
       </BetterScroll>
     </div>
-    <ReloadButton :loading="!appStore.reloadFlag" @click="refresh" />
-    <FullScreen :full="appStore.fullContent" @click="appStore.toggleFullContent" />
+    <span class="tabbar-spacer"></span>
   </div>
   <ContextMenu
     :visible="dropdown.visible"
