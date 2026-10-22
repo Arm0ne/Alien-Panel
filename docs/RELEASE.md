@@ -2,10 +2,10 @@
 
 ## 当前版本
 
-- 产品：Alien-Panel `v1.0.0`。
+- 产品：Alien-Panel `v2.0.0`。
 - Agent：`v1.0.3`。
 - 目标：Linux amd64。
-- 数据库迁移：`001`–`026`。
+- 数据库迁移：`001`–`027`。
 - 源码提交：以 `RELEASE_MANIFEST.json` 中的 `sourceCommit` 为准。
 
 ## 发布前门禁
