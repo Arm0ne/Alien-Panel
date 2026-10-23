@@ -1314,10 +1314,6 @@ onMounted(() => {
                 </table>
                 <div v-if="!nodeCosts.length" class="fin-empty-small">本期没有生效的节点成本记录</div>
               </div>
-              <p class="fin-card-note">
-                成本时态不可回写：修改金额请新增一条记录；编辑时不可修改生效日期，变更生效日会被拒绝（409）。
-                出口 IP 月租合计 {{ formatMoney(ipCostTotal, summary.currency) }}，由「出口 IP」台账维护，本页不重复维护。
-              </p>
             </section>
 
             <section class="fin-card">
@@ -1355,9 +1351,6 @@ onMounted(() => {
                 </table>
                 <div v-if="!otherCosts.length" class="fin-empty-small">本期没有其它成本记录</div>
               </div>
-              <p class="fin-card-note">
-                其它成本来自 other_costs，仅参与财务汇总；当前版本没有创建 / 编辑接口，只能通过数据维护写入。
-              </p>
             </section>
           </div>
         </div>
