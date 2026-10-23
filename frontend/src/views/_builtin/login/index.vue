@@ -350,14 +350,16 @@ const activeModule = computed(() => moduleMap[props.module || 'pwd-login']);
   }
 
   .stage {
-    padding: 18px;
+    padding: 16px;
+    align-items: center;
   }
 
   .login-card {
     grid-template-columns: 1fr;
     width: 100%;
-    max-width: 440px;
+    max-width: 420px;
     height: auto;
+    border-radius: 16px;
   }
 
   /* 允许 grid/flex 子项收缩，避免长内容把卡片撑破 */
@@ -365,25 +367,14 @@ const activeModule = computed(() => moduleMap[props.module || 'pwd-login']);
     min-width: 0;
   }
 
+  /* 移动端隐藏左侧品牌视觉：竖排时它只占高度，信息由右侧表单承担 */
   .brand-panel {
-    min-height: 208px;
-  }
-
-  .brand-content {
-    padding: 24px 24px 26px;
-  }
-
-  .brand-copy h2 {
-    font-size: 22px;
-    margin-bottom: 0;
-  }
-
-  .brand-copy p {
     display: none;
   }
 
   .form-panel {
-    padding: 32px 24px 34px;
+    padding: 36px 24px 30px;
+    border-radius: 16px;
   }
 
   .form-inner {
@@ -392,16 +383,20 @@ const activeModule = computed(() => moduleMap[props.module || 'pwd-login']);
 
   .form-head {
     gap: 12px;
-    margin-bottom: 30px;
+    margin-bottom: 28px;
   }
 
   .form-mark svg {
-    width: 44px;
-    height: 44px;
+    width: 42px;
+    height: 42px;
+  }
+
+  .form-sub {
+    font-size: 12px;
   }
 
   .form-foot {
-    margin-top: 24px;
+    margin-top: 22px;
   }
 }
 

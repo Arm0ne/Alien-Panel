@@ -63,7 +63,7 @@ function handleMobileMaskClick() {
       <main :id="LAYOUT_SCROLL_EL_ID" class="shell-content">
         <GlobalContent />
       </main>
-      <GlobalFooter v-if="themeStore.footer.visible" />
+      <GlobalFooter v-if="themeStore.footer.visible && !appStore.isMobile" />
     </section>
   </div>
 </template>
@@ -150,12 +150,19 @@ function handleMobileMaskClick() {
 }
 
 .shell.is-mobile {
-  padding: 8px;
+  padding: 0;
   gap: 0;
 }
 
+/* 移动端不再使用浮动面板，内容铺满视口，最大化可用宽度 */
 .shell.is-mobile .shell-main {
-  border-radius: 14px;
+  border: 0;
+  border-radius: 0;
+  background: var(--ui2-bg);
+}
+
+.shell.is-mobile .shell-header {
+  height: 54px;
 }
 </style>
 
