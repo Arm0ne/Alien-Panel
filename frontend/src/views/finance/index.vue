@@ -757,10 +757,6 @@ onMounted(() => {
           财务 · 成本与收入 <span class="fin-dim">·</span> 财务月份按北京时间（UTC+8）统计
         </div>
         <h1 class="fin-title">成本与收入</h1>
-        <p class="fin-desc">
-          服务期收入按服务期与月份交集按秒分摊（应计口径），现金收款按 paid_at 归属月份（收付实现口径）；两者不可互相抵扣。
-          成本按当期生效记录直接相加，<b>不做用户均摊</b>。
-        </p>
       </div>
       <div class="fin-head-actions">
         <DataFreshness :data-at="summary?.dataAt" compact />
@@ -793,8 +789,7 @@ onMounted(() => {
           <div class="fin-callout is-info">
             <SvgIcon icon="mdi:information-outline" class="fin-callout-ico" />
             <div class="fin-callout-text">
-              <b>服务期收入 = 服务期与月份交集按秒分摊；现金收款 = paid_at 归属月份；两者不可互相抵扣。</b>
-              毛利 = 服务期收入 − 本月成本；现金余额 = 现金收款 − 本月成本。
+              服务期收入按服务期分摊、现金收款按 paid_at 归属，两者不可互相抵扣；毛利 = 服务期收入 − 本月成本，现金余额 = 现金收款 − 本月成本。
             </div>
           </div>
 
