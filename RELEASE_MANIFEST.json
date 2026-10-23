@@ -1,9 +1,9 @@
 {
   "product": "Alien-Panel",
-  "productVersion": "v2.0.5",
+  "productVersion": "v2.0.6",
   "releaseType": "ui-v2-major",
   "sourceRepository": "https://github.com/Arm0ne/Alien-Panel",
-  "sourceCommit": "82a92198f931021bee5e23822cccc38504d1fdb4",
+  "sourceCommit": "66caeb44a78585799dc4f28ff48430384954dd39",
   "agentVersion": "v1.0.4",
   "target": "linux/amd64",
   "databaseMigration": "027_client_quota.sql",
@@ -23,7 +23,7 @@
     "frontendBuild": "pnpm.cmd build",
     "bundleBuild": "deploy/build-bundle.ps1"
   },
-  "frontendCommit": "82a92198f931021bee5e23822cccc38504d1fdb4",
+  "frontendCommit": "66caeb44a78585799dc4f28ff48430384954dd39",
   "checksums": {
     "release": "checksums/release.sha256",
     "source": "checksums/source-files.sha256"
