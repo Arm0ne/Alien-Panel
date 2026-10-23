@@ -42,7 +42,6 @@ const activeModule = computed(() => moduleMap[props.module || 'pwd-login']);
             <div class="brand-mark">
               <svg viewBox="0 0 28 28" fill="none" aria-hidden="true">
                 <path d="M14 3.4 L25.4 24.6 H19.4 L14 13.6 L8.6 24.6 H2.6 Z" fill="currentColor" />
-                <rect x="11.4" y="17.6" width="5.2" height="2.4" rx="1.2" fill="#0a1c2e" />
               </svg>
               <span class="brand-word">Alien Panel</span>
             </div>
