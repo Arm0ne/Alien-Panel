@@ -1342,4 +1342,23 @@ onMounted(() => {
   .e-search { width: 100%; }
   .e-grid-2 { grid-template-columns: minmax(0, 1fr); }
 }
+
+
+@media (max-width: 900px) {
+  .e-head {
+    flex-wrap: wrap;
+    align-items: flex-start;
+    gap: 12px;
+  }
+
+  .e-head-main {
+    flex: 1 1 100%;
+  }
+
+  .e-head-actions {
+    margin-left: 0;
+    flex-wrap: wrap;
+    padding-bottom: 0;
+  }
+}
 </style>

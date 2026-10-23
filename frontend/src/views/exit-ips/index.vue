@@ -1385,4 +1385,23 @@ onMounted(() => {
   .e-modal-foot { flex-wrap: wrap; }
   .e-modal-foot .e-foot-right { margin-left: 0; width: 100%; justify-content: flex-end; }
 }
+
+
+@media (max-width: 900px) {
+  .e-head {
+    flex-wrap: wrap;
+    align-items: flex-start;
+    gap: 12px;
+  }
+
+  .e-head-main {
+    flex: 1 1 100%;
+  }
+
+  .e-head-actions {
+    margin-left: 0;
+    flex-wrap: wrap;
+    padding-bottom: 0;
+  }
+}
 </style>

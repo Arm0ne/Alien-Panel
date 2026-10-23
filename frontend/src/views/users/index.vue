@@ -3731,4 +3731,19 @@ onMounted(() => {
     width: 100%;
   }
 }
+
+
+@media (max-width: 900px) {
+  .u-head {
+    flex-wrap: wrap;
+    align-items: flex-start;
+    gap: 12px;
+  }
+
+  .u-head-actions {
+    margin-left: 0;
+    flex-wrap: wrap;
+    padding-bottom: 0;
+  }
+}
 </style>

@@ -1154,4 +1154,23 @@ onMounted(() => {
   .n-form-grid { grid-template-columns: minmax(0, 1fr); }
   .n-search { width: 100%; }
 }
+
+
+@media (max-width: 900px) {
+  .n-head {
+    flex-wrap: wrap;
+    align-items: flex-start;
+    gap: 12px;
+  }
+
+  .n-head-main {
+    flex: 1 1 100%;
+  }
+
+  .n-head-actions {
+    margin-left: 0;
+    flex-wrap: wrap;
+    padding-bottom: 0;
+  }
+}
 </style>

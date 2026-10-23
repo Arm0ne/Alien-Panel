@@ -1669,4 +1669,23 @@ onMounted(() => void loadNode());
   .d-kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .d-form-grid, .d-detail-grid { grid-template-columns: minmax(0, 1fr); }
 }
+
+
+@media (max-width: 900px) {
+  .d-head {
+    flex-wrap: wrap;
+    align-items: flex-start;
+    gap: 12px;
+  }
+
+  .d-head-main {
+    flex: 1 1 100%;
+  }
+
+  .d-head-actions {
+    margin-left: 0;
+    flex-wrap: wrap;
+    padding-bottom: 0;
+  }
+}
 </style>

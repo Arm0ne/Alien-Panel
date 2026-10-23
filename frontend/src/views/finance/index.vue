@@ -2473,4 +2473,23 @@ onMounted(() => {
     width: 100%;
   }
 }
+
+
+@media (max-width: 900px) {
+  .fin-head {
+    flex-wrap: wrap;
+    align-items: flex-start;
+    gap: 12px;
+  }
+
+  .fin-head-main {
+    flex: 1 1 100%;
+  }
+
+  .fin-head-actions {
+    margin-left: 0;
+    flex-wrap: wrap;
+    padding-bottom: 0;
+  }
+}
 </style>

@@ -862,4 +862,13 @@ onMounted(() => {
     width: 100%;
   }
 }
+
+
+@media (max-width: 900px) {
+  .b-head {
+    flex-wrap: wrap;
+    align-items: flex-start;
+    gap: 12px;
+  }
+}
 </style>
