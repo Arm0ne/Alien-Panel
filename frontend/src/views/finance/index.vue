@@ -1002,8 +1002,8 @@ onMounted(() => {
                         </span>
                       </td>
                       <td class="is-num">{{ formatMoney(order.amount, order.currency) }}</td>
-                      <td class="is-num">{{ formatDateTime(order.paidAt) }}</td>
-                      <td class="is-num">{{ formatDay(order.serviceFrom) }} → {{ formatDay(order.serviceTo) }}</td>
+                      <td class="is-date">{{ formatDateTime(order.paidAt) }}</td>
+                      <td class="is-date">{{ formatDay(order.serviceFrom) }} → {{ formatDay(order.serviceTo) }}</td>
                       <td>
                         <span class="fin-badge" :class="sourceBadge(order.source)">
                           {{ sourceLabel(order.source) }}
@@ -1086,8 +1086,8 @@ onMounted(() => {
                     </td>
                     <td class="fin-dim">{{ cycleLabel(order.billingCycle) }}</td>
                     <td class="is-num">{{ formatMoney(order.amount, order.currency) }}</td>
-                    <td class="is-num">{{ formatDateTime(order.paidAt) }}</td>
-                    <td class="is-num">{{ formatDay(order.serviceFrom) }} → {{ formatDay(order.serviceTo) }}</td>
+                    <td class="is-date">{{ formatDateTime(order.paidAt) }}</td>
+                    <td class="is-date">{{ formatDay(order.serviceFrom) }} → {{ formatDay(order.serviceTo) }}</td>
                     <td>
                       <span class="fin-badge" :class="sourceBadge(order.source)">
                         {{ sourceLabel(order.source) }}
@@ -1761,7 +1761,9 @@ onMounted(() => {
 .fin-badge {
   display: inline-flex;
   align-items: center;
+  justify-content: center;
   gap: 5px;
+  vertical-align: middle;
   height: 22px;
   padding: 0 9px;
   border: 1px solid #2a2e35;
@@ -2252,6 +2254,12 @@ onMounted(() => {
   border-top: 1px solid var(--fin-line);
   border-bottom: 0;
   background: #111317;
+}
+
+.fin-table .is-date {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  text-align: left;
 }
 
 .fin-table .is-num {
