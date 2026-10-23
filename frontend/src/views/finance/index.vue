@@ -785,14 +785,6 @@ onMounted(() => {
     <NSpin :show="loading">
       <template v-if="summary">
         <div class="fin-body">
-          <!-- 口径提示条 -->
-          <div class="fin-callout is-info">
-            <SvgIcon icon="mdi:information-outline" class="fin-callout-ico" />
-            <div class="fin-callout-text">
-              服务期收入按服务期分摊、现金收款按 paid_at 归属，两者不可互相抵扣；毛利 = 服务期收入 − 本月成本，现金余额 = 现金收款 − 本月成本。
-            </div>
-          </div>
-
           <!-- 7 KPI -->
           <section class="fin-kpis">
             <div class="fin-kpi">
