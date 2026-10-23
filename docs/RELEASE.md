@@ -2,7 +2,7 @@
 
 ## 当前版本
 
-- 产品：Alien-Panel `v2.0.2`。
+- 产品：Alien-Panel `v2.0.3`。
 - Agent：`v1.0.4`。
 - 目标：Linux amd64。
 - 数据库迁移：`001`–`027`。
