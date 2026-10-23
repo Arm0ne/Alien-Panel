@@ -366,14 +366,53 @@ const activeModule = computed(() => moduleMap[props.module || 'pwd-login']);
     min-width: 0;
   }
 
-  /* 移动端隐藏左侧品牌视觉：竖排时它只占高度，信息由右侧表单承担 */
+  /* 移动端：品牌图保留为顶部横幅，压缩高度让整卡更紧凑 */
   .brand-panel {
+    min-height: 0;
+    height: 168px;
+    background-position: center 30%;
+  }
+
+  .brand-panel::after {
+    background: linear-gradient(
+      180deg,
+      rgba(2, 4, 11, 0.1) 0%,
+      rgba(2, 4, 11, 0.05) 40%,
+      rgba(2, 4, 11, 0.55) 100%
+    );
+  }
+
+  .brand-content {
+    padding: 16px 20px 18px;
+    justify-content: space-between;
+  }
+
+  .brand-mark {
+    gap: 8px;
+  }
+
+  .brand-mark svg {
+    width: 20px;
+    height: 20px;
+  }
+
+  .brand-word {
+    font-size: 12px;
+    letter-spacing: 0.1em;
+  }
+
+  .brand-copy h2 {
+    margin: 0;
+    font-size: 19px;
+    line-height: 1.3;
+  }
+
+  .brand-copy p {
     display: none;
   }
 
   .form-panel {
-    padding: 36px 24px 30px;
-    border-radius: 16px;
+    padding: 28px 22px 26px;
   }
 
   .form-inner {
@@ -381,13 +420,13 @@ const activeModule = computed(() => moduleMap[props.module || 'pwd-login']);
   }
 
   .form-head {
-    gap: 12px;
-    margin-bottom: 28px;
+    gap: 11px;
+    margin-bottom: 24px;
   }
 
   .form-mark svg {
-    width: 42px;
-    height: 42px;
+    width: 40px;
+    height: 40px;
   }
 
   .form-sub {
@@ -395,7 +434,7 @@ const activeModule = computed(() => moduleMap[props.module || 'pwd-login']);
   }
 
   .form-foot {
-    margin-top: 22px;
+    margin-top: 20px;
   }
 }
 
@@ -404,13 +443,21 @@ const activeModule = computed(() => moduleMap[props.module || 'pwd-login']);
     padding: 12px;
   }
 
+  .brand-panel {
+    height: 148px;
+  }
+
+  .brand-copy h2 {
+    font-size: 17px;
+  }
+
   .form-panel {
-    padding: 28px 18px 30px;
+    padding: 24px 18px 24px;
   }
 
   .form-mark svg {
-    width: 40px;
-    height: 40px;
+    width: 38px;
+    height: 38px;
   }
 }
 

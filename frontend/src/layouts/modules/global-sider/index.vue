@@ -120,7 +120,7 @@ onUnmounted(() => {
       </div>
       <div v-show="!appStore.siderCollapse" class="v2-sider-brand">
         <strong>Alien Panel</strong>
-        <span>中央运营控制台 · v2.0.5</span>
+        <span>中央运营控制台 · v2.0.6</span>
       </div>
     </div>
 
