@@ -893,7 +893,7 @@ onMounted(() => void loadNode());
           <table class="d-table">
             <thead>
               <tr>
-                <th>Tag / Remark</th>
+                <th>用户 / Inbound</th>
                 <th>协议 / 端口</th>
                 <th>类型</th>
                 <th class="is-num">设备数</th>
@@ -906,8 +906,8 @@ onMounted(() => void loadNode());
             <tbody>
               <tr v-for="inbound in detail.inbounds" :key="inbound.id || inbound.remoteId">
                 <td>
-                  <b class="d-strong">{{ inbound.tag || inbound.remoteId }}</b>
-                  <span class="d-sub">{{ inbound.remark || '--' }}</span>
+                  <b class="d-strong">{{ inbound.remark || inbound.tag || inbound.remoteId }}</b>
+                  <span v-if="inbound.remark" class="d-sub">{{ inbound.tag || inbound.remoteId }}</span>
                 </td>
                 <td class="d-mono">{{ inbound.protocol || '--' }} / {{ inbound.port || '--' }}</td>
                 <td><span class="d-badge" :class="inboundPurposeTone(inbound)">{{ inboundPurposeLabel(inbound) }}</span></td>
