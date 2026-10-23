@@ -996,7 +996,7 @@ onMounted(() => {
                         {{ order.userName || '未命名用户' }}
                         <span class="fin-sub">{{ order.nodeName || '--' }} · {{ order.inboundTag || '--' }}</span>
                       </td>
-                      <td>
+                      <td class="is-tag">
                         <span class="fin-badge" :class="orderTypeBadge(order.orderType)">
                           {{ orderTypeLabel(order.orderType) }}
                         </span>
@@ -1004,7 +1004,7 @@ onMounted(() => {
                       <td class="is-num">{{ formatMoney(order.amount, order.currency) }}</td>
                       <td class="is-date">{{ formatDateTime(order.paidAt) }}</td>
                       <td class="is-date">{{ formatDay(order.serviceFrom) }} → {{ formatDay(order.serviceTo) }}</td>
-                      <td>
+                      <td class="is-tag">
                         <span class="fin-badge" :class="sourceBadge(order.source)">
                           {{ sourceLabel(order.source) }}
                         </span>
@@ -1079,7 +1079,7 @@ onMounted(() => {
                       <span class="fin-sub">{{ order.nodeName || '--' }} · {{ order.inboundTag || '--' }}</span>
                     </td>
                     <td class="fin-mono">{{ order.orderNo || order.id.slice(0, 12) }}</td>
-                    <td>
+                    <td class="is-tag">
                       <span class="fin-badge" :class="orderTypeBadge(order.orderType)">
                         {{ orderTypeLabel(order.orderType) }}
                       </span>
@@ -1088,12 +1088,12 @@ onMounted(() => {
                     <td class="is-num">{{ formatMoney(order.amount, order.currency) }}</td>
                     <td class="is-date">{{ formatDateTime(order.paidAt) }}</td>
                     <td class="is-date">{{ formatDay(order.serviceFrom) }} → {{ formatDay(order.serviceTo) }}</td>
-                    <td>
+                    <td class="is-tag">
                       <span class="fin-badge" :class="sourceBadge(order.source)">
                         {{ sourceLabel(order.source) }}
                       </span>
                     </td>
-                    <td>
+                    <td class="is-tag">
                       <span class="fin-badge" :class="orderStatusBadge(order)">{{ orderStatusLabel(order) }}</span>
                     </td>
                     <td class="is-num">
@@ -2254,6 +2254,10 @@ onMounted(() => {
   border-top: 1px solid var(--fin-line);
   border-bottom: 0;
   background: #111317;
+}
+
+.fin-table td.is-tag {
+  padding-left: 5px;
 }
 
 .fin-table .is-date {
