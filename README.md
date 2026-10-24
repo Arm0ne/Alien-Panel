@@ -2,7 +2,7 @@
 
 多节点 X-Panel 运营控制台。中央服务以只读方式采集各节点 X-Panel 的业务数据，统一呈现用户、节点、出口 IP、财务与事件，**不向 X-Panel / Xray 写入任何配置**。
 
-当前版本 **v2.0.7**，节点 Agent **v1.0.4**。
+当前版本 **v2.0.8**，节点 Agent **v1.0.4**。
 
 ![总览](design/screens/dashboard.png)
 
@@ -180,9 +180,9 @@ Vue 前端渲染
 要求：Linux amd64（Ubuntu/Debian 22.04+），root 权限。服务器不需要 Go / Node.js / pnpm。
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Arm0ne/Alien-Panel/v2.0.7/install.sh | sudo bash -s -- \
+curl -fsSL https://raw.githubusercontent.com/Arm0ne/Alien-Panel/v2.0.8/install.sh | sudo bash -s -- \
   --repo https://github.com/Arm0ne/Alien-Panel.git \
-  --ref v2.0.7 \
+  --ref v2.0.8 \
   --domain panel.example.com
 ```
 
@@ -202,8 +202,8 @@ curl -fsSL https://raw.githubusercontent.com/Arm0ne/Alien-Panel/v2.0.7/install.s
 重跑同一条命令并更换 `--ref`，`.env` 与 Docker 数据卷保留：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Arm0ne/Alien-Panel/v2.0.7/install.sh | sudo bash -s -- \
-  --repo https://github.com/Arm0ne/Alien-Panel.git --ref v2.0.7 --domain panel.example.com
+curl -fsSL https://raw.githubusercontent.com/Arm0ne/Alien-Panel/v2.0.8/install.sh | sudo bash -s -- \
+  --repo https://github.com/Arm0ne/Alien-Panel.git --ref v2.0.8 --domain panel.example.com
 ```
 
 > 不要执行 `docker compose down -v`，该命令会删除数据卷。
@@ -294,7 +294,7 @@ xpanel-agent --version
 
 ## 版本
 
-- 产品版本：**v2.0.7**（`VERSION`）
+- 产品版本：**v2.0.8**（`VERSION`）
 - Agent 版本：**v1.0.4**（`agent/VERSION`）
 - 数据库迁移：`001_initial.sql` → `027_client_quota.sql`
 - 目标平台：linux/amd64
