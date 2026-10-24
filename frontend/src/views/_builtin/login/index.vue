@@ -343,121 +343,156 @@ const activeModule = computed(() => moduleMap[props.module || 'pwd-login']);
 
 /* ---------- 响应式 ---------- */
 
+/* ============ 移动端：全屏版式，不再使用浮动卡片 ============ */
 @media (max-width: 900px) {
   .login-page {
-    overflow: auto;
+    overflow-y: auto;
   }
 
   .stage {
-    padding: 16px;
-    align-items: center;
+    width: 100%;
+    padding: 0;
+    align-items: stretch;
+    min-height: 100dvh;
   }
 
   .login-card {
-    grid-template-columns: 1fr;
+    display: flex;
+    flex-direction: column;
     width: 100%;
-    max-width: 420px;
+    max-width: none;
+    min-height: 100dvh;
     height: auto;
-    border-radius: 16px;
+    border: 0;
+    border-radius: 0;
+    box-shadow: none;
+    background: transparent;
+    animation: none;
   }
 
-  /* 允许 grid/flex 子项收缩，避免长内容把卡片撑破 */
   .login-card > * {
     min-width: 0;
   }
 
-  /* 移动端：品牌图保留为顶部横幅，压缩高度让整卡更紧凑 */
+  /* 品牌图：顶部主视觉，占屏幕约 1/3 */
   .brand-panel {
-    min-height: 0;
-    height: 168px;
-    background-position: center 30%;
+    flex: none;
+    width: 100%;
+    height: 36vh;
+    min-height: 210px;
+    max-height: 320px;
+    background-position: center 35%;
   }
 
   .brand-panel::after {
     background: linear-gradient(
       180deg,
-      rgba(2, 4, 11, 0.1) 0%,
-      rgba(2, 4, 11, 0.05) 40%,
-      rgba(2, 4, 11, 0.55) 100%
+      rgba(2, 4, 11, 0.16) 0%,
+      rgba(2, 4, 11, 0.04) 38%,
+      rgba(18, 19, 34, 0.55) 78%,
+      #121322 100%
     );
   }
 
   .brand-content {
-    padding: 16px 20px 18px;
+    padding: 20px 24px 22px;
     justify-content: space-between;
   }
 
   .brand-mark {
-    gap: 8px;
+    gap: 9px;
   }
 
   .brand-mark svg {
-    width: 20px;
-    height: 20px;
+    width: 21px;
+    height: 21px;
   }
 
   .brand-word {
     font-size: 12px;
-    letter-spacing: 0.1em;
+    letter-spacing: 0.11em;
   }
 
   .brand-copy h2 {
     margin: 0;
-    font-size: 19px;
-    line-height: 1.3;
+    font-size: 21px;
+    line-height: 1.32;
   }
 
   .brand-copy p {
     display: none;
   }
 
+  /* 表单区：填满剩余高度并垂直居中 */
   .form-panel {
-    padding: 28px 22px 26px;
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 30px 24px calc(24px + env(safe-area-inset-bottom, 0px));
+    border-radius: 0;
+    background: linear-gradient(180deg, #121322 0%, #0d0f1b 100%);
   }
 
   .form-inner {
-    max-width: none;
+    width: 100%;
+    max-width: 400px;
+    margin: 0 auto;
   }
 
   .form-head {
-    gap: 11px;
-    margin-bottom: 24px;
+    gap: 12px;
+    margin-bottom: 28px;
   }
 
   .form-mark svg {
-    width: 40px;
-    height: 40px;
+    width: 42px;
+    height: 42px;
   }
 
   .form-sub {
-    font-size: 12px;
+    font-size: 12.5px;
   }
 
   .form-foot {
-    margin-top: 20px;
+    margin-top: 24px;
+  }
+}
+
+/* 矮屏（横屏手机 / 小屏）压缩主视觉，避免表单被挤出视口 */
+@media (max-width: 900px) and (max-height: 700px) {
+  .brand-panel {
+    height: 26vh;
+    min-height: 150px;
+    max-height: 200px;
+  }
+
+  .brand-copy h2 {
+    font-size: 18px;
+  }
+
+  .form-panel {
+    padding: 24px 22px calc(22px + env(safe-area-inset-bottom, 0px));
+  }
+
+  .form-head {
+    margin-bottom: 22px;
+  }
+
+  .form-mark svg {
+    width: 36px;
+    height: 36px;
   }
 }
 
 @media (max-width: 380px) {
-  .stage {
-    padding: 12px;
-  }
-
   .brand-panel {
-    height: 148px;
-  }
-
-  .brand-copy h2 {
-    font-size: 17px;
+    height: 32vh;
+    min-height: 180px;
   }
 
   .form-panel {
-    padding: 24px 18px 24px;
-  }
-
-  .form-mark svg {
-    width: 38px;
-    height: 38px;
+    padding: 28px 18px calc(22px + env(safe-area-inset-bottom, 0px));
   }
 }
 
