@@ -2,7 +2,7 @@
 
 多节点 X-Panel 运营控制台。中央服务以只读方式采集各节点 X-Panel 的业务数据，统一呈现用户、节点、出口 IP、财务与事件，**不向 X-Panel / Xray 写入任何配置**。
 
-当前版本 **v2.0.8**，节点 Agent **v1.0.4**。
+当前版本 **v2.0.9**，节点 Agent **v1.0.4**。
 
 ![总览](design/screens/dashboard.png)
 
@@ -294,7 +294,7 @@ xpanel-agent --version
 
 ## 版本
 
-- 产品版本：**v2.0.8**（`VERSION`）
+- 产品版本：**v2.0.9**（`VERSION`）
 - Agent 版本：**v1.0.4**（`agent/VERSION`）
 - 数据库迁移：`001_initial.sql` → `027_client_quota.sql`
 - 目标平台：linux/amd64
