@@ -207,9 +207,9 @@ function openUser(userID: string) {
 }
 
 function eventIcon(severity: string) {
-  if (severity === 'error') return 'i-carbon:warning-alt';
-  if (severity === 'warning') return 'i-carbon:warning';
-  return 'i-carbon:information';
+  if (severity === 'error') return 'mdi:alert-circle-outline';
+  if (severity === 'warning') return 'mdi:alert-outline';
+  return 'mdi:information-outline';
 }
 
 function buildTrafficOptions(): ECOption {
