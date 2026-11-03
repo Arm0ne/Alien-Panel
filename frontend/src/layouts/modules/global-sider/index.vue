@@ -24,6 +24,8 @@ const nodesOnline = ref(0);
 const nodesTotal = ref(0);
 const lastSyncAt = ref<string | null>(null);
 
+const appVersion = APP_VERSION;
+
 const groups = computed<Array<{ title: string; items: NavItem[] }>>(() => [
   {
     title: '运营',
@@ -120,7 +122,7 @@ onUnmounted(() => {
       </div>
       <div v-show="!appStore.siderCollapse" class="v2-sider-brand">
         <strong>Alien Panel</strong>
-        <span>中央运营控制台 · v2.0.8</span>
+        <span>中央运营控制台 · {{ appVersion }}</span>
       </div>
     </div>
 

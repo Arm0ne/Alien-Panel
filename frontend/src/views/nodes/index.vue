@@ -1071,7 +1071,7 @@ onMounted(() => {
 .n-add-inner span { font-size: 12px; line-height: 1.7; }
 
 /* ---------- 加载 / 空 / 错误 / 分页 ---------- */
-.n-loading, .n-empty { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; min-height: 220px; padding: 24px; border: 1px solid var(--n-line); border-radius: var(--n-radius); background: var(--n-card); color: var(--n-text-4); font-size: 12.5px; }
+.n-loading, .n-empty { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; min-height: 128px; padding: 20px; border: 1px solid var(--n-line); border-radius: var(--n-radius); background: var(--n-card); color: var(--n-text-4); font-size: 12.5px; }
 .n-empty-title { font-size: 14px; color: var(--n-text-1); }
 .n-empty-desc { margin: 0; color: var(--n-text-4); }
 .n-alert { padding: 10px 13px; border: 1px solid rgba(243, 101, 111, 0.32); border-radius: 10px; background: rgba(243, 101, 111, 0.1); color: #ffb3b9; font-size: 12.5px; }

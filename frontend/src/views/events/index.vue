@@ -1294,7 +1294,7 @@ onMounted(() => {
 
 /* ---------- 提示 / 空 / 加载 ---------- */
 .e-alert { margin: 14px 16px; padding: 10px 13px; border: 1px solid rgba(243, 101, 111, 0.32); border-radius: 10px; background: rgba(243, 101, 111, 0.1); color: #ffb3b9; font-size: 12px; }
-.e-loading, .e-empty { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; min-height: 220px; padding: 24px; color: var(--e-text-4); font-size: 12px; }
+.e-loading, .e-empty { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; min-height: 128px; padding: 20px; color: var(--e-text-4); font-size: 12px; }
 .e-empty-title { font-size: 14px; color: var(--e-text-1); }
 .e-empty-desc { margin: 0; color: var(--e-text-4); }
 

@@ -3117,7 +3117,7 @@ ORDER BY datetime(b.paid_at) DESC, b.created_at DESC LIMIT 500`, start, end)
 	result.CostDetails = make([]map[string]any, 0)
 	rows, err = s.db.Query(`SELECT c.id, 'node', COALESCE(n.name, ''), c.category, c.monthly_amount, c.currency, c.effective_from, COALESCE(c.effective_to, ''), COALESCE(c.notes, '') FROM node_costs c LEFT JOIN nodes n ON n.id = c.node_id WHERE c.currency = 'CNY' AND date(c.effective_from) < date(?) AND (c.effective_to IS NULL OR date(c.effective_to) >= date(?))
 UNION ALL SELECT c.id, 'other', c.name, c.category, c.monthly_amount, c.currency, c.effective_from, COALESCE(c.effective_to, ''), COALESCE(c.notes, '') FROM other_costs c WHERE c.currency = 'CNY' AND date(c.effective_from) < date(?) AND (c.effective_to IS NULL OR date(c.effective_to) >= date(?) )
-UNION ALL SELECT e.id, 'ip', e.ip, 'exit_ip', e.monthly_cost, e.currency, COALESCE(e.valid_from, '1970-01-01'), COALESCE(e.valid_to, ''), COALESCE(e.notes, '') FROM exit_ips e WHERE e.currency = 'CNY' AND e.enabled = 1 AND (e.valid_from IS NULL OR date(e.valid_from) < date(?)) AND (e.valid_to IS NULL OR date(e.valid_to) >= date(?))
+UNION ALL SELECT e.id, 'ip', e.ip, 'exit_ip', e.monthly_cost, e.currency, COALESCE(e.valid_from, ''), COALESCE(e.valid_to, ''), COALESCE(e.notes, '') FROM exit_ips e WHERE e.currency = 'CNY' AND e.enabled = 1 AND (e.valid_from IS NULL OR date(e.valid_from) < date(?)) AND (e.valid_to IS NULL OR date(e.valid_to) >= date(?))
 ORDER BY effective_from DESC`, endDate, startDate, endDate, startDate, endDate, startDate)
 	if err != nil {
 		return err

@@ -936,8 +936,8 @@ onMounted(() => {
                   <div v-if="largestCost" class="fin-largest">
                     <span class="fin-badge is-warn">最大单项</span>
                     <span class="fin-dim">
-                      {{ largestCost.name }} {{ formatMoney(largestCost.amount, largestCost.currency) }} ·
-                      {{ formatDay(largestCost.effectiveFrom) }} 起
+                      {{ largestCost.name }} {{ formatMoney(largestCost.amount, largestCost.currency) }}
+                      <template v-if="largestCost.effectiveFrom">· {{ formatDay(largestCost.effectiveFrom) }} 起</template>
                     </span>
                   </div>
                   <p class="fin-note">

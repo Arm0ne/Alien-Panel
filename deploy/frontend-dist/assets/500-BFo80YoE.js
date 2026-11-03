@@ -1,1 +1,0 @@
-import{Gi as e,ta as t,zi as n}from"./router-DXSa1IfP.js";import{t as r}from"./exception-base-BZ7-KaO3.js";var i=e({name:`500`,__name:`index`,setup(e){return(e,i)=>{let a=r;return t(),n(a,{type:`500`})}}});export{i as default};

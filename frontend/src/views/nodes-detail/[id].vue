@@ -1651,7 +1651,7 @@ onMounted(() => void loadNode());
 .d-code-actions { display: flex; align-items: center; gap: 8px; margin-top: 8px; font-size: 11.5px; }
 
 /* ---------- 加载 / 空态 / 错误 ---------- */
-.d-loading, .d-empty { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; min-height: 220px; padding: 24px; border: 1px solid var(--d-line); border-radius: var(--d-radius); background: var(--d-card); color: var(--d-text-4); font-size: 12.5px; }
+.d-loading, .d-empty { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; min-height: 128px; padding: 20px; border: 1px solid var(--d-line); border-radius: var(--d-radius); background: var(--d-card); color: var(--d-text-4); font-size: 12.5px; }
 .d-empty-title { font-size: 14px; color: var(--d-text-1); }
 .d-empty-desc { margin: 0; color: var(--d-text-4); }
 .d-alert { padding: 10px 13px; border: 1px solid rgba(243, 101, 111, 0.32); border-radius: 10px; background: rgba(243, 101, 111, 0.1); color: #ffb3b9; font-size: 12.5px; }
