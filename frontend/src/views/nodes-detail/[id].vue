@@ -217,12 +217,14 @@ function inboundPurposeTone(row: Api.Central.NodeInboundDetail) {
 function inboundStatusLabel(status: Api.Central.NodeInboundStatus) {
   if (status === 'active') return '启用';
   if (status === 'disabled') return '停用';
+  if (status === 'missing') return '缺失中';
   return '已归档';
 }
 
 function inboundStatusTone(status: Api.Central.NodeInboundStatus) {
   if (status === 'active') return 'is-ok';
   if (status === 'disabled') return 'is-neutral';
+  if (status === 'missing') return 'is-warn';
   return 'is-warn';
 }
 
@@ -915,7 +917,9 @@ onMounted(() => void loadNode());
                 <td class="is-num"><TrafficValue :value="inbound.allTime" /></td>
                 <td class="d-num">{{ formatDate(inbound.expiresAt) }}</td>
                 <td>
-                  <span class="d-badge" :class="inboundStatusTone(inbound.status)">{{ inboundStatusLabel(inbound.status) }}</span>
+                  <span class="d-badge" :class="inboundStatusTone(inbound.status)">
+                    {{ inboundStatusLabel(inbound.status) }}<template v-if="inbound.status === 'missing'"> {{ inbound.missingSyncCount || 0 }}/3</template>
+                  </span>
                 </td>
                 <td class="d-num d-dim">{{ formatDate(inbound.lastSeenAt) }}</td>
               </tr>

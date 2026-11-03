@@ -1325,8 +1325,26 @@ func TestNodeDetailAndManualSyncRequest(t *testing.T) {
 		t.Fatalf("node detail response: %#v", detail)
 	}
 	detailData := detail["data"].(map[string]any)
-	if detailData["name"] != "东京落地机" || len(detailData["inbounds"].([]any)) != 1 || len(detailData["exitIps"].([]any)) != 1 {
+	// 缺失中的 Inbound 仍然返回并标记 pendingArchive，避免出现
+	// 「入站从节点消失、用户却还在」的不一致状态。
+	if detailData["name"] != "东京落地机" || len(detailData["inbounds"].([]any)) != 2 || len(detailData["exitIps"].([]any)) != 1 {
 		t.Fatalf("unexpected node detail: %#v", detailData)
+	}
+	var activeInbounds, missingInbounds int
+	for _, item := range detailData["inbounds"].([]any) {
+		inbound := item.(map[string]any)
+		switch inbound["status"] {
+		case "active":
+			activeInbounds++
+		case "missing":
+			missingInbounds++
+			if inbound["pendingArchive"] != true {
+				t.Fatalf("missing inbound has pendingArchive=%v, want true", inbound["pendingArchive"])
+			}
+		}
+	}
+	if activeInbounds != 1 || missingInbounds != 1 {
+		t.Fatalf("inbound status split active=%d missing=%d, want 1/1", activeInbounds, missingInbounds)
 	}
 	if _, present := detailData["xpanelVersion"]; present {
 		t.Fatalf("node detail still exposes removed xpanelVersion field: %#v", detailData)

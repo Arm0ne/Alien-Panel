@@ -402,7 +402,7 @@ declare namespace Api {
       panelBasePath?: string;
     }
 
-    type NodeInboundStatus = 'active' | 'disabled' | 'archived';
+    type NodeInboundStatus = 'active' | 'disabled' | 'archived' | 'missing';
     type NodeSyncRunStatus = 'queued' | 'running' | 'success' | 'failed';
 
     type InboundPurpose = 'business' | 'infrastructure';
@@ -426,6 +426,11 @@ declare namespace Api {
       allTime: number;
       lastSeenAt: string | null;
       deletedAt: string | null;
+      /** Agent 最近一次成功同步未包含该 Inbound 的起始时间 */
+      missingSince?: string | null;
+      /** 连续缺失次数，达到 3 次后归档 */
+      missingSyncCount?: number;
+      pendingArchive?: boolean;
     }
 
     interface NodeExitIpDetail {

@@ -781,8 +781,9 @@ FROM inbounds i LEFT JOIN users u ON u.id = i.user_id WHERE i.id = ?`, inboundID
 	if userID == "" {
 		userID = newID()
 		newUserCreated = true
-		if _, err := tx.Exec(`INSERT INTO users (id, display_name, status, expiry_time, created_at, updated_at)
-VALUES (?, ?, ?, ?, ?, ?)`, userID, inboundDisplayName(inbound, remoteInboundID), state.Status, expiry, now, now); err != nil {
+		autoName := inboundDisplayName(inbound, remoteInboundID)
+		if _, err := tx.Exec(`INSERT INTO users (id, display_name, display_name_auto, status, expiry_time, created_at, updated_at)
+VALUES (?, ?, ?, ?, ?, ?, ?)`, userID, autoName, autoName, state.Status, expiry, now, now); err != nil {
 			return fmt.Errorf("create business user: %w", err)
 		}
 		if _, err := tx.Exec(`UPDATE inbounds SET user_id = ?, kind = 'user' WHERE id = ?`, userID, inboundID); err != nil {
@@ -852,9 +853,31 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'CNY', 'pending')`, newID(), userID, inboundID, 
 				}
 			}
 		}
+		// 名称跟随规则：只有当 users.display_name 仍等于上一次 Agent 写入的
+		// 基准（display_name_auto）时，才认为运营没有改过名称，可以跟随
+		// X-Panel 的 Inbound 改名；否则视为人工命名，加锁并不再覆盖。
+		newName := inboundDisplayName(inbound, remoteInboundID)
 		if _, err := tx.Exec(`UPDATE users
-SET expiry_time = ?, status = ?, updated_at = ?
-WHERE id = ?`, expiry, state.Status, now, userID); err != nil {
+SET expiry_time = ?, status = ?,
+display_name = CASE
+  WHEN display_name_locked = 1 THEN display_name
+  WHEN display_name <> display_name_auto THEN display_name
+  WHEN ? <> '' THEN ?
+  ELSE display_name
+END,
+display_name_locked = CASE
+  WHEN display_name_locked = 1 THEN 1
+  WHEN display_name <> display_name_auto THEN 1
+  ELSE 0
+END,
+display_name_auto = CASE
+  WHEN display_name_locked = 1 THEN display_name_auto
+  WHEN display_name <> display_name_auto THEN display_name_auto
+  WHEN ? <> '' THEN ?
+  ELSE display_name_auto
+END,
+updated_at = ?
+WHERE id = ?`, expiry, state.Status, newName, newName, newName, newName, now, userID); err != nil {
 			return fmt.Errorf("refresh business user state: %w", err)
 		}
 	}

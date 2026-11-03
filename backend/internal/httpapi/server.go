@@ -927,7 +927,9 @@ func (s *Server) updateUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer tx.Rollback()
-	if _, err := tx.Exec(`UPDATE users SET display_name = ?, monthly_fee = ?, billing_cycle = ?, billing_amount = ?, currency = ?, notes = ?, billing_type = ?, free_reason = ?, updated_at = ? WHERE id = ? AND deleted_at IS NULL`, displayName, monthlyFee, billingCycle, billingAmount, currency, nullableDBString(notes), billingType, nullableDBString(freeReason), now, id); err != nil {
+	if _, err := tx.Exec(`UPDATE users SET display_name = ?, monthly_fee = ?, billing_cycle = ?, billing_amount = ?, currency = ?, notes = ?, billing_type = ?, free_reason = ?,
+display_name_locked = CASE WHEN ? <> display_name THEN 1 ELSE display_name_locked END,
+updated_at = ? WHERE id = ? AND deleted_at IS NULL`, displayName, monthlyFee, billingCycle, billingAmount, currency, nullableDBString(notes), billingType, nullableDBString(freeReason), displayName, now, id); err != nil {
 		s.logger.Error("update user business fields", "user_id", id, "error", err)
 		writeFailure(w, http.StatusInternalServerError, internalErrorCode, "could not update user")
 		return
@@ -1327,18 +1329,18 @@ COALESCE(i.expiry_time, ''), COALESCE(i.client_count, 0),
 CASE WHEN COALESCE(i.up, 0) > COALESCE(i.traffic_baseline_up, 0) THEN COALESCE(i.up, 0) - COALESCE(i.traffic_baseline_up, 0) ELSE 0 END,
 CASE WHEN COALESCE(i.down, 0) > COALESCE(i.traffic_baseline_down, 0) THEN COALESCE(i.down, 0) - COALESCE(i.traffic_baseline_down, 0) ELSE 0 END,
 CASE WHEN COALESCE(i.all_time, 0) > COALESCE(i.traffic_baseline_all_time, 0) THEN COALESCE(i.all_time, 0) - COALESCE(i.traffic_baseline_all_time, 0) ELSE 0 END,
-COALESCE(i.last_seen_at, ''), COALESCE(i.deleted_at, '')
-FROM inbounds i WHERE i.node_id = ? AND i.deleted_at IS NULL AND i.missing_since IS NULL ORDER BY i.tag ASC, i.remote_inbound_id ASC`, id)
+COALESCE(i.last_seen_at, ''), COALESCE(i.deleted_at, ''), COALESCE(i.missing_since, ''), COALESCE(i.missing_sync_count, 0)
+FROM inbounds i WHERE i.node_id = ? AND i.deleted_at IS NULL ORDER BY i.missing_since IS NOT NULL, i.tag ASC, i.remote_inbound_id ASC`, id)
 	if err != nil {
 		writeFailure(w, http.StatusInternalServerError, internalErrorCode, "could not read node inbounds")
 		return
 	}
 	for rows.Next() {
-		var inboundID, remoteID, tag, remark, kind, protocol, listen, expiry, lastInboundSeen, deletedAt string
-		var port, enabledInbound, clientCount int
+		var inboundID, remoteID, tag, remark, kind, protocol, listen, expiry, lastInboundSeen, deletedAt, missingSince string
+		var port, enabledInbound, clientCount, missingSyncCount int
 		var up, down, allTime int64
 		if err := rows.Scan(&inboundID, &remoteID, &tag, &remark, &kind, &protocol, &port, &listen, &enabledInbound,
-			&expiry, &clientCount, &up, &down, &allTime, &lastInboundSeen, &deletedAt); err != nil {
+			&expiry, &clientCount, &up, &down, &allTime, &lastInboundSeen, &deletedAt, &missingSince, &missingSyncCount); err != nil {
 			_ = rows.Close()
 			writeFailure(w, http.StatusInternalServerError, internalErrorCode, "could not decode node inbounds")
 			return
@@ -1346,6 +1348,8 @@ FROM inbounds i WHERE i.node_id = ? AND i.deleted_at IS NULL AND i.missing_since
 		inboundStatus := "active"
 		if deletedAt != "" {
 			inboundStatus = "archived"
+		} else if missingSince != "" {
+			inboundStatus = "missing"
 		} else if enabledInbound != 1 {
 			inboundStatus = "disabled"
 		}
@@ -1355,6 +1359,8 @@ FROM inbounds i WHERE i.node_id = ? AND i.deleted_at IS NULL AND i.missing_since
 			"enabled": enabledInbound == 1, "status": inboundStatus, "expiresAt": nullableString(expiry),
 			"clientCount": clientCount, "up": up, "down": down, "allTime": allTime,
 			"lastSeenAt": nullableString(lastInboundSeen), "deletedAt": nullableString(deletedAt),
+			"missingSince": nullableString(missingSince), "missingSyncCount": missingSyncCount,
+			"pendingArchive": missingSince != "",
 		})
 	}
 	if err := rows.Err(); err != nil {
