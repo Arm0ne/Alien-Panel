@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"os"
@@ -15,7 +16,32 @@ import (
 const (
 	backupFileNamePrefix = "panel-"
 	backupFileNameSuffix = ".sqlite3"
+
+	// 整库 VACUUM INTO 与恢复的耗时随数据库大小线性增长。http.Server 的
+	// WriteTimeout（默认 30s）和反向代理的 proxy_read_timeout（默认 35s）
+	// 都会在大库上提前切断请求，所以这些接口单独放宽连接级超时。
+	backupOperationTimeout = 30 * time.Minute
 )
+
+// extendOperationDeadlines 放宽当前连接的读写截止时间，避免大库操作被
+// http.Server 的全局超时切断。ResponseController 在底层连接不支持时返回
+// 错误，此处忽略：那说明没有设置全局超时，无需放宽。
+func extendOperationDeadlines(w http.ResponseWriter, readTimeout, writeTimeout time.Duration) {
+	controller := http.NewResponseController(w)
+	now := time.Now()
+	if readTimeout > 0 {
+		_ = controller.SetReadDeadline(now.Add(readTimeout))
+	}
+	if writeTimeout > 0 {
+		_ = controller.SetWriteDeadline(now.Add(writeTimeout))
+	}
+}
+
+// detachedOperationContext 让备份/恢复在客户端断开后仍能跑完，避免留下
+// 半成品文件；同时用一个总超时兜底，防止永久占用连接。
+func detachedOperationContext(r *http.Request) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.WithoutCancel(r.Context()), backupOperationTimeout)
+}
 
 // backupEntry is the operator-facing description of one server-side backup.
 type backupEntry struct {
@@ -62,10 +88,14 @@ func (s *Server) createBackup(w http.ResponseWriter, r *http.Request) {
 		writeFailure(w, http.StatusInternalServerError, internalErrorCode, "无法创建备份目录")
 		return
 	}
-	result, err := db.Backup(r.Context(), db.BackupOptions{
+	extendOperationDeadlines(w, 0, backupOperationTimeout)
+	ctx, cancel := detachedOperationContext(r)
+	defer cancel()
+	result, err := db.Backup(ctx, db.BackupOptions{
 		DatabasePath:   s.cfg.DatabasePath,
 		DestinationDir: directory,
-		Retention:      0,
+		// 0 表示沿用默认保留策略（最近 14 份），与页面说明保持一致。
+		Retention: 0,
 	})
 	if err != nil {
 		s.logger.Error("create manual backup", "error", err)
@@ -91,7 +121,10 @@ func (s *Server) verifyBackup(w http.ResponseWriter, r *http.Request) {
 		writeFailure(w, http.StatusBadRequest, validationCode, err.Error())
 		return
 	}
-	if err := db.Verify(r.Context(), path); err != nil {
+	extendOperationDeadlines(w, 0, backupOperationTimeout)
+	ctx, cancel := detachedOperationContext(r)
+	defer cancel()
+	if err := db.Verify(ctx, path); err != nil {
 		writeSuccess(w, map[string]any{"ok": false, "message": err.Error()})
 		return
 	}

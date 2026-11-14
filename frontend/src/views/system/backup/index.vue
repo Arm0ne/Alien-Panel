@@ -142,13 +142,19 @@ async function loadBackups() {
   latestBackup.value = data.latest;
 }
 
+// 把后端返回的 msg 透出来，避免大库备份失败时只看到笼统提示
+function backendMessage(error: unknown, fallback: string) {
+  const axiosError = error as { response?: { data?: { msg?: string } }; message?: string } | null;
+  return axiosError?.response?.data?.msg || fallback;
+}
+
 async function createBackupOnServer() {
   if (creatingBackup.value) return;
   creatingBackup.value = true;
   const { error } = await createServerBackup();
   creatingBackup.value = false;
   if (error) {
-    window.$message?.error('创建备份失败，请稍后重试');
+    window.$message?.error(backendMessage(error, '创建备份失败，请稍后重试'));
     return;
   }
   window.$message?.success('备份已生成并保存在服务器');
@@ -161,7 +167,7 @@ async function verifyBackup(entry: Api.Central.BackupEntry) {
   const { data, error } = await verifyServerBackup(entry.name);
   verifyingBackup.value = '';
   if (error || !data) {
-    window.$message?.error('校验请求失败，请稍后重试');
+    window.$message?.error(backendMessage(error, '校验请求失败，请稍后重试'));
     return;
   }
   if (data.ok) {
@@ -188,7 +194,7 @@ function deleteBackup(entry: Api.Central.BackupEntry) {
       const { error } = await deleteServerBackup(entry.name);
       deletingBackup.value = '';
       if (error) {
-        window.$message?.error('删除备份失败，请稍后重试');
+        window.$message?.error(backendMessage(error, '删除备份失败，请稍后重试'));
         return;
       }
       window.$message?.success('备份已删除');
@@ -263,7 +269,9 @@ onMounted(() => {
               <SvgIcon icon="mdi:content-save-outline" class="b-btn-ico" />
               {{ creatingBackup ? '生成中…' : '备份到服务器' }}
             </button>
-            <span class="b-dim">「下载」不留在服务器；「备份到服务器」会出现在下方备份记录里</span>
+            <span class="b-dim">
+              「下载」不留在服务器；「备份到服务器」会出现在下方备份记录里，数据库较大时可能需要数分钟
+            </span>
           </div>
         </div>
       </section>
@@ -369,6 +377,7 @@ onMounted(() => {
         </table>
         <div class="b-help-note">
           备份文件位于服务器数据库同级的 <code>backups</code> 目录；「最新一份」不可删除，避免误删后没有可恢复快照。
+          服务器最多保留最近 14 份，更早的会在新建备份时自动清理。
         </div>
       </div>
     </section>

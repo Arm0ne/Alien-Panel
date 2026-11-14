@@ -14,7 +14,7 @@ import (
 	"xpanel-central/backend/internal/db"
 )
 
-const maxRestoreUploadSize int64 = 512 << 20
+const maxRestoreUploadSize int64 = 4 << 30
 
 func (s *Server) backupDirectory() string {
 	return filepath.Join(filepath.Dir(s.cfg.DatabasePath), "backups")
@@ -43,7 +43,10 @@ func (s *Server) downloadBackup(w http.ResponseWriter, r *http.Request) {
 	_ = os.Remove(temporaryPath)
 	defer os.Remove(temporaryPath)
 
-	result, err := db.BackupTo(r.Context(), s.cfg.DatabasePath, temporaryPath)
+	extendOperationDeadlines(w, 0, backupOperationTimeout)
+	ctx, cancel := detachedOperationContext(r)
+	defer cancel()
+	result, err := db.BackupTo(ctx, s.cfg.DatabasePath, temporaryPath)
 	if err != nil {
 		s.logger.Error("create downloadable backup", "error", err)
 		writeFailure(w, http.StatusInternalServerError, internalErrorCode, "生成备份失败")
@@ -68,8 +71,10 @@ func (s *Server) restoreBackup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, maxRestoreUploadSize+1)
-	if err := r.ParseMultipartForm(maxRestoreUploadSize + 1); err != nil {
-		writeFailure(w, http.StatusRequestEntityTooLarge, validationCode, "备份文件超过 512 MB 限制")
+	extendOperationDeadlines(w, backupOperationTimeout, backupOperationTimeout)
+	// 只把 32 MB 留在内存，其余由标准库落到临时文件；硬上限交给 MaxBytesReader。
+	if err := r.ParseMultipartForm(32 << 20); err != nil {
+		writeFailure(w, http.StatusRequestEntityTooLarge, validationCode, "备份文件超过 4 GB 限制")
 		return
 	}
 	file, header, err := r.FormFile("file")
@@ -79,7 +84,7 @@ func (s *Server) restoreBackup(w http.ResponseWriter, r *http.Request) {
 	}
 	defer file.Close()
 	if header.Size > maxRestoreUploadSize {
-		writeFailure(w, http.StatusRequestEntityTooLarge, validationCode, "备份文件超过 512 MB 限制")
+		writeFailure(w, http.StatusRequestEntityTooLarge, validationCode, "备份文件超过 4 GB 限制")
 		return
 	}
 	if err := os.MkdirAll(s.backupDirectory(), 0o750); err != nil {
@@ -106,20 +111,22 @@ func (s *Server) restoreBackup(w http.ResponseWriter, r *http.Request) {
 	}
 	if copied > maxRestoreUploadSize {
 		_ = temporary.Close()
-		writeFailure(w, http.StatusRequestEntityTooLarge, validationCode, "备份文件超过 512 MB 限制")
+		writeFailure(w, http.StatusRequestEntityTooLarge, validationCode, "备份文件超过 4 GB 限制")
 		return
 	}
 	if err := temporary.Close(); err != nil {
 		writeFailure(w, http.StatusBadRequest, validationCode, "保存备份文件失败")
 		return
 	}
-	if err := db.Verify(r.Context(), temporaryPath); err != nil {
+	ctx, cancel := detachedOperationContext(r)
+	defer cancel()
+	if err := db.Verify(ctx, temporaryPath); err != nil {
 		writeFailure(w, http.StatusBadRequest, validationCode, "备份文件校验失败，请选择有效的 SQLite 备份")
 		return
 	}
 
 	s.dbMu.Lock()
-	result, err := s.restoreDatabaseLocked(r.Context(), temporaryPath)
+	result, err := s.restoreDatabaseLocked(ctx, temporaryPath)
 	s.dbMu.Unlock()
 	if err != nil {
 		s.logger.Error("restore database", "error", err)

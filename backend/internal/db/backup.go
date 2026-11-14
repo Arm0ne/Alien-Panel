@@ -139,6 +139,9 @@ func backupTo(ctx context.Context, databasePath, destination string) (BackupResu
 	}
 	statement := "VACUUM INTO " + quoteSQLiteString(destinationAbs)
 	if _, err := database.ExecContext(ctx, statement); err != nil {
+		// VACUUM INTO 中断（磁盘不足、超时、连接断开）会留下半成品文件。
+		// 清掉它，避免备份列表里出现永远校验失败的记录。
+		_ = os.Remove(destinationAbs)
 		return BackupResult{}, fmt.Errorf("vacuum database into backup: %w", err)
 	}
 	if err := Verify(ctx, destinationAbs); err != nil {

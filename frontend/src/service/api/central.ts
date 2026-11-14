@@ -69,7 +69,8 @@ export function fetchBackups() {
 
 /** Create a manual backup stored on the server (not downloaded). */
 export function createServerBackup() {
-  return request<{ name: string; size: number }>({ url: '/system/backups', method: 'post' });
+  // 整库 VACUUM INTO 的耗时随数据库增长，大库可能需要数分钟
+  return request<{ name: string; size: number }>({ url: '/system/backups', method: 'post', timeout: 900_000 });
 }
 
 /** Run a SQLite integrity check against one stored backup. */
@@ -77,7 +78,8 @@ export function verifyServerBackup(name: string) {
   return request<{ ok: boolean; message?: string }>({
     url: '/system/backups/verify',
     method: 'post',
-    data: { name }
+    data: { name },
+    timeout: 900_000
   });
 }
 
