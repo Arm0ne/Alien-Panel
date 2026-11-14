@@ -518,6 +518,12 @@ ON CONFLICT(node_id, inbound_id, remote_client_id) DO UPDATE SET email = exclude
 			return
 		}
 	}
+	// 主入站已停用或归档的用户无法继续「完善资料」，对应的待办事件要一并关闭，
+	// 否则事件中心会一直挂着一条点进去就报错的记录。
+	if _, err := dismissUnusableNewUserProfileEventsTx(tx, observedAt); err != nil {
+		s.failSync(w, tx, syncRunID, err)
+		return
+	}
 	var previousHealth, previousSyncState string
 	_ = tx.QueryRow(`SELECT health_status, sync_status FROM nodes WHERE id = ?`, principal.NodeID).Scan(&previousHealth, &previousSyncState)
 	newHealth := healthStatus(payload.Status.XrayRunning)
@@ -879,6 +885,12 @@ END,
 updated_at = ?
 WHERE id = ?`, expiry, state.Status, newName, newName, newName, newName, now, userID); err != nil {
 			return fmt.Errorf("refresh business user state: %w", err)
+		}
+		if err := refreshNewUserProfileEventTx(tx, inboundID, userID, newName); err != nil {
+			return err
+		}
+		if err := reopenDismissedNewUserProfileEventTx(tx, inboundID, userID, newName, observedAt); err != nil {
+			return err
 		}
 	}
 	if _, err := tx.Exec(`INSERT OR IGNORE INTO user_inbounds (id, user_id, inbound_id, is_primary, active_from)

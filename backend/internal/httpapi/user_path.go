@@ -103,7 +103,7 @@ WHERE ui.user_id = ? AND ui.is_primary = 1 AND ui.active_to IS NULL
   AND i.deleted_at IS NULL AND i.enable = 1 AND i.kind = 'user'
   AND n.type = 'relay' AND n.deleted_at IS NULL`, userID).Scan(&relayNodeID, &relayType, &relayEnabled)
 	if errors.Is(err, sql.ErrNoRows) {
-		writeFailure(w, http.StatusConflict, validationCode, "user has no active primary inbound")
+		writeFailure(w, http.StatusConflict, validationCode, "该用户没有可用的主入站（可能已在 X-Panel 停用或删除），请检查线路机的 Inbound 状态")
 		return
 	}
 	if err != nil {
@@ -111,7 +111,7 @@ WHERE ui.user_id = ? AND ui.is_primary = 1 AND ui.active_to IS NULL
 		return
 	}
 	if relayType != "relay" || relayEnabled != 1 {
-		writeFailure(w, http.StatusConflict, validationCode, "user's primary inbound node is not an enabled relay")
+		writeFailure(w, http.StatusConflict, validationCode, "该用户主入站所在的节点不是启用中的线路机")
 		return
 	}
 

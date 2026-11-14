@@ -782,6 +782,14 @@ onMounted(() => {
                     <button class="e-btn e-btn-xs is-primary" type="button" @click="completeNewUserProfile(row)">
                       完善资料
                     </button>
+                    <button
+                      class="e-btn e-btn-xs is-ghost"
+                      type="button"
+                      :disabled="actionLoading === row.id"
+                      @click="resolve(row)"
+                    >
+                      忽略
+                    </button>
                   </template>
                   <template v-else-if="isClientReplacement(row)">
                     <button

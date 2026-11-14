@@ -200,6 +200,100 @@ WHERE event_type = 'new_user_profile_required' AND resource_type = 'user' AND re
 	return err
 }
 
+// refreshNewUserProfileEventTx 在 Inbound 改名或用户重命名后同步事件文案，
+// 避免事件中心一直显示旧名称。
+func refreshNewUserProfileEventTx(tx *sql.Tx, inboundID, userID, userName string) error {
+	var nodeID, inboundName string
+	if err := tx.QueryRow(`SELECT i.node_id,
+COALESCE(NULLIF(i.remark, ''), NULLIF(i.tag, ''), i.remote_inbound_id)
+FROM inbounds i WHERE i.id = ?`, inboundID).Scan(&nodeID, &inboundName); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil
+		}
+		return fmt.Errorf("read profile event context: %w", err)
+	}
+	if strings.TrimSpace(userName) == "" {
+		userName = inboundName
+	}
+	payload, err := json.Marshal(map[string]any{
+		"userId": userID, "userName": userName,
+		"inboundId": inboundID, "inboundName": inboundName,
+	})
+	if err != nil {
+		return fmt.Errorf("encode profile event payload: %w", err)
+	}
+	message := fmt.Sprintf("线路机新增用户「%s」（Inbound「%s」），请完善收费类型、金额和业务资料。", userName, inboundName)
+	if _, err := tx.Exec(`UPDATE node_events
+SET node_id = ?, message = ?, payload_json = ?
+WHERE event_type = 'new_user_profile_required' AND resource_type = 'user' AND resource_id = ?
+  AND COALESCE(event_status, 'open') NOT IN ('resolved', 'dismissed')`,
+		nullableDBString(nodeID), message, string(payload), userID); err != nil {
+		return fmt.Errorf("refresh new user profile event: %w", err)
+	}
+	return nil
+}
+
+// dismissUnusableNewUserProfileEventsTx 关闭「主入站已不可用」的待办事件。
+//
+// 之前这些事件只有等用户因失去全部节点关联被回收时才关闭：如果 Inbound 只是
+// 被停用、或者用户还挂着路径，用户不会被回收，事件就会永久停在待处理，点进去
+// 还会因为「没有可用的主 Inbound」而报错。此处在每次同步后统一收敛，
+// 并清空 dedupe_key，使 Inbound 恢复可用后仍能重新提醒。
+func dismissUnusableNewUserProfileEventsTx(tx *sql.Tx, occurredAt time.Time) (int64, error) {
+	nowText := occurredAt.UTC().Format(time.RFC3339Nano)
+	result, err := tx.Exec(`UPDATE node_events
+SET requires_action = 0, event_status = 'dismissed', acknowledged = 1,
+    read_at = COALESCE(read_at, ?), resolved_at = COALESCE(resolved_at, ?),
+    dedupe_key = NULL,
+    message = message || '（主入站已停用或删除，事件已自动关闭）'
+WHERE event_type = 'new_user_profile_required' AND resource_type = 'user'
+  AND COALESCE(event_status, 'open') NOT IN ('resolved', 'dismissed')
+  AND NOT EXISTS (
+    SELECT 1
+    FROM users u
+    JOIN user_inbounds ui ON ui.user_id = u.id AND ui.is_primary = 1 AND ui.active_to IS NULL
+    JOIN inbounds i ON i.id = ui.inbound_id AND i.deleted_at IS NULL AND i.enable = 1 AND i.kind = 'user'
+    JOIN nodes n ON n.id = i.node_id AND n.deleted_at IS NULL AND n.enabled = 1 AND n.type = 'relay'
+    WHERE u.id = node_events.resource_id AND u.deleted_at IS NULL
+  )`, nowText, nowText)
+	if err != nil {
+		return 0, fmt.Errorf("dismiss unusable new user profile events: %w", err)
+	}
+	affected, _ := result.RowsAffected()
+	return affected, nil
+}
+
+// reopenDismissedNewUserProfileEventTx 在 Inbound 恢复可用后重新提醒。
+// 只针对此前被系统因「主入站不可用」而关闭的事件，且用户仍未定价。
+func reopenDismissedNewUserProfileEventTx(tx *sql.Tx, inboundID, userID, userName string, occurredAt time.Time) error {
+	var dismissed int
+	if err := tx.QueryRow(`SELECT COUNT(*) FROM node_events
+WHERE event_type = 'new_user_profile_required' AND resource_type = 'user' AND resource_id = ?
+  AND COALESCE(event_status, 'open') = 'dismissed' AND dedupe_key IS NULL`, userID).Scan(&dismissed); err != nil {
+		return fmt.Errorf("read dismissed profile event: %w", err)
+	}
+	if dismissed == 0 {
+		return nil
+	}
+	var unpriced int
+	if err := tx.QueryRow(`SELECT COUNT(*) FROM users u
+WHERE u.id = ? AND u.deleted_at IS NULL
+  AND COALESCE(u.billing_type, 'paid') = 'paid'
+  AND COALESCE(u.billing_amount, u.monthly_fee, 0) <= 0
+  AND NOT EXISTS (SELECT 1 FROM user_billing_records b WHERE b.user_id = u.id)
+  AND NOT EXISTS (
+    SELECT 1 FROM node_events e
+    WHERE e.event_type = 'new_user_profile_required' AND e.resource_type = 'user' AND e.resource_id = u.id
+      AND COALESCE(e.event_status, 'open') NOT IN ('resolved', 'dismissed')
+  )`, userID).Scan(&unpriced); err != nil {
+		return fmt.Errorf("check unpriced user: %w", err)
+	}
+	if unpriced == 0 {
+		return nil
+	}
+	return insertNewUserProfileEventTx(tx, inboundID, userID, userName, occurredAt)
+}
+
 func resolveRenewalEventTx(tx *sql.Tx, candidateID, eventType string, payload any, occurredAt time.Time, resolvedBy string) error {
 	now := occurredAt.UTC().Format(time.RFC3339Nano)
 	if _, err := tx.Exec(`UPDATE node_events
