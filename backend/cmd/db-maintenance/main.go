@@ -23,7 +23,7 @@ func main() {
 
 func run(args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: db-maintenance <backup|verify|restore|migrate|traffic-rollup> [flags]")
+		return errors.New("usage: db-maintenance <backup|verify|restore|migrate|traffic-rollup|prune|vacuum> [flags]")
 	}
 	ctx := context.Background()
 	switch args[0] {
@@ -31,7 +31,7 @@ func run(args []string) error {
 		flags := flag.NewFlagSet("backup", flag.ContinueOnError)
 		database := flags.String("database", envOr("XPANEL_DATABASE", "./data/panel.db"), "SQLite database path")
 		backupDir := flags.String("backup-dir", envOr("XPANEL_BACKUP_DIR", "./data/backups"), "backup directory")
-		retention := flags.Int("retention", 14, "number of generated backups to retain")
+		retention := flags.Int("retention", 3, "number of generated backups to retain")
 		if err := flags.Parse(args[1:]); err != nil {
 			return err
 		}
@@ -92,7 +92,7 @@ func run(args []string) error {
 		}
 		if !*noBackup {
 			if _, err := os.Stat(*database); err == nil {
-				result, err := db.Backup(ctx, db.BackupOptions{DatabasePath: *database, DestinationDir: *backupDir, Retention: 14})
+				result, err := db.Backup(ctx, db.BackupOptions{DatabasePath: *database, DestinationDir: *backupDir, Retention: 3})
 				if err != nil {
 					return fmt.Errorf("create pre-migration backup: %w", err)
 				}
@@ -137,8 +137,60 @@ func run(args []string) error {
 		fmt.Printf("traffic hourly rollups are ready: %s\n", filepath.Clean(*database))
 		return nil
 
+	case "prune":
+		flags := flag.NewFlagSet("prune", flag.ContinueOnError)
+		database := flags.String("database", envOr("XPANEL_DATABASE", "./data/panel.db"), "SQLite database path")
+		snapshotDays := flags.Int("snapshot-days", 90, "retain raw traffic snapshots for N days (0 = keep forever)")
+		syncRunDays := flags.Int("sync-run-days", 30, "retain Agent sync runs for N days (0 = keep forever)")
+		eventDays := flags.Int("event-days", 180, "retain resolved events for N days (0 = keep forever)")
+		withVacuum := flags.Bool("vacuum", false, "rebuild the database file after pruning to reclaim disk space")
+		if err := flags.Parse(args[1:]); err != nil {
+			return err
+		}
+		databaseHandle, err := db.Open(*database)
+		if err != nil {
+			return err
+		}
+		defer databaseHandle.Close()
+		result, err := db.PruneHistoricalData(ctx, databaseHandle, db.RetentionOptions{
+			SnapshotDays: *snapshotDays,
+			SyncRunDays:  *syncRunDays,
+			EventDays:    *eventDays,
+		})
+		if err != nil {
+			return err
+		}
+		fmt.Printf("pruned rows: traffic_snapshots=%d sync_runs=%d node_events=%d\n",
+			result.Snapshots, result.SyncRuns, result.Events)
+		if *withVacuum {
+			started := time.Now()
+			if err := db.Vacuum(ctx, databaseHandle); err != nil {
+				return err
+			}
+			fmt.Printf("vacuum complete in %s\n", time.Since(started).Round(time.Second))
+		}
+		return nil
+
+	case "vacuum":
+		flags := flag.NewFlagSet("vacuum", flag.ContinueOnError)
+		database := flags.String("database", envOr("XPANEL_DATABASE", "./data/panel.db"), "SQLite database path")
+		if err := flags.Parse(args[1:]); err != nil {
+			return err
+		}
+		databaseHandle, err := db.Open(*database)
+		if err != nil {
+			return err
+		}
+		defer databaseHandle.Close()
+		started := time.Now()
+		if err := db.Vacuum(ctx, databaseHandle); err != nil {
+			return err
+		}
+		fmt.Printf("vacuum complete in %s: %s\n", time.Since(started).Round(time.Second), filepath.Clean(*database))
+		return nil
+
 	default:
-		return fmt.Errorf("unknown command %q; use backup, verify, restore, migrate or traffic-rollup", args[0])
+		return fmt.Errorf("unknown command %q; use backup, verify, restore, migrate, traffic-rollup, prune or vacuum", args[0])
 	}
 }
 

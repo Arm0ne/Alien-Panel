@@ -215,7 +215,7 @@ curl -fsSL https://raw.githubusercontent.com/Arm0ne/Alien-Panel/v2.0.11/install.
 docker run --rm -v alien-panel_central-data:/data \
   -v /opt/alien-panel/release/xpanel-db-maintenance:/usr/local/bin/xpanel-db-maintenance:ro \
   alpine:3.22 /usr/local/bin/xpanel-db-maintenance backup \
-  --database /data/panel.db --backup-dir /data/backups --retention 14
+  --database /data/panel.db --backup-dir /data/backups --retention 3
 
 # 恢复（先停服务）
 docker run --rm -v alien-panel_central-data:/data \

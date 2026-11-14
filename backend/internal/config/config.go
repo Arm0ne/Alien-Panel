@@ -16,8 +16,13 @@ type Config struct {
 	AgentRegistrationToken string
 	SessionTTL             time.Duration
 	MaintenanceInterval    time.Duration
-	CorsOrigins            []string
-	AllowInsecureCookie    bool
+	// 历史数据保留窗口，0 表示永久保留。默认值见 Load。
+	RetentionSnapshotDays int
+	RetentionSyncRunDays  int
+	RetentionEventDays    int
+	RetentionInterval     time.Duration
+	CorsOrigins           []string
+	AllowInsecureCookie   bool
 }
 
 func Load() (Config, error) {
@@ -29,6 +34,10 @@ func Load() (Config, error) {
 		AgentRegistrationToken: os.Getenv("XPANEL_AGENT_REGISTRATION_TOKEN"),
 		SessionTTL:             durationOrDefault("XPANEL_SESSION_TTL", 24*time.Hour),
 		MaintenanceInterval:    durationOrDefault("XPANEL_MAINTENANCE_INTERVAL", time.Minute),
+		RetentionSnapshotDays:  intOrDefault("XPANEL_RETENTION_SNAPSHOT_DAYS", 90),
+		RetentionSyncRunDays:   intOrDefault("XPANEL_RETENTION_SYNC_RUN_DAYS", 30),
+		RetentionEventDays:     intOrDefault("XPANEL_RETENTION_EVENT_DAYS", 180),
+		RetentionInterval:      durationOrDefault("XPANEL_RETENTION_INTERVAL", 24*time.Hour),
 		CorsOrigins:            splitCSV(envOrDefault("XPANEL_CORS_ORIGINS", "http://localhost:9527,http://127.0.0.1:9527")),
 		AllowInsecureCookie:    boolOrDefault("XPANEL_ALLOW_INSECURE_COOKIE", true),
 	}
@@ -59,6 +68,19 @@ func durationOrDefault(key string, fallback time.Duration) time.Duration {
 		return fallback
 	}
 	return duration
+}
+
+// intOrDefault 读取非负整数配置；负数或非法值回退到默认值。
+func intOrDefault(key string, fallback int) int {
+	value := strings.TrimSpace(os.Getenv(key))
+	if value == "" {
+		return fallback
+	}
+	parsed, err := strconv.Atoi(value)
+	if err != nil || parsed < 0 {
+		return fallback
+	}
+	return parsed
 }
 
 func boolOrDefault(key string, fallback bool) bool {

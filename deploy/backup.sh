@@ -5,7 +5,7 @@ set -Eeuo pipefail
 # release as the central service; it uses SQLite VACUUM INTO and handles WAL.
 database="${XPANEL_DATABASE:-/var/lib/xpanel-central/panel.db}"
 backup_dir="${XPANEL_BACKUP_DIR:-/var/backups/xpanel-central}"
-retention="${XPANEL_BACKUP_RETENTION:-14}"
+retention="${XPANEL_BACKUP_RETENTION:-3}"
 binary="${XPANEL_DB_MAINTENANCE_BIN:-/usr/local/bin/xpanel-db-maintenance}"
 
 if [[ ! -x "$binary" ]]; then

@@ -3,6 +3,8 @@ package httpapi
 import (
 	"context"
 	"time"
+
+	centraldb "xpanel-central/backend/internal/db"
 )
 
 const (
@@ -19,7 +21,9 @@ func (s *Server) RunMaintenance(ctx context.Context, interval time.Duration) {
 		interval = time.Minute
 	}
 	run := func() {
-		s.refreshOperationalStatuses(time.Now().UTC())
+		now := time.Now().UTC()
+		s.refreshOperationalStatuses(now)
+		s.runRetentionPrune(ctx, now)
 	}
 	run()
 	ticker := time.NewTicker(interval)
@@ -93,4 +97,49 @@ WHERE deleted_at IS NULL AND enabled = 1 AND last_seen_at IS NOT NULL AND last_s
 	if err := tx.Commit(); err != nil {
 		s.logger.Warn("commit node health refresh", "error", err)
 	}
+}
+
+// runRetentionPrune 按保留窗口清理历史数据，默认每天执行一次。
+// 清理只删除过期行，不影响小时级汇总，趋势与统计口径保持不变。
+func (s *Server) runRetentionPrune(ctx context.Context, now time.Time) {
+	interval := s.cfg.RetentionInterval
+	if interval <= 0 {
+		interval = 24 * time.Hour
+	}
+
+	s.retentionMu.Lock()
+	if !s.lastRetention.IsZero() && now.Sub(s.lastRetention) < interval {
+		s.retentionMu.Unlock()
+		return
+	}
+	s.lastRetention = now
+	s.retentionMu.Unlock()
+
+	if s.cfg.RetentionSnapshotDays == 0 && s.cfg.RetentionSyncRunDays == 0 && s.cfg.RetentionEventDays == 0 {
+		return
+	}
+
+	s.dbMu.RLock()
+	result, err := centraldb.PruneHistoricalData(ctx, s.db, centraldb.RetentionOptions{
+		SnapshotDays: s.cfg.RetentionSnapshotDays,
+		SyncRunDays:  s.cfg.RetentionSyncRunDays,
+		EventDays:    s.cfg.RetentionEventDays,
+		Now:          now,
+	})
+	s.dbMu.RUnlock()
+	if err != nil {
+		s.logger.Warn("prune historical data", "error", err)
+		return
+	}
+	if !result.Pruned() {
+		return
+	}
+	s.logger.Info("pruned historical data",
+		"traffic_snapshots", result.Snapshots,
+		"sync_runs", result.SyncRuns,
+		"node_events", result.Events,
+		"snapshot_days", s.cfg.RetentionSnapshotDays,
+		"sync_run_days", s.cfg.RetentionSyncRunDays,
+		"event_days", s.cfg.RetentionEventDays,
+	)
 }

@@ -43,6 +43,9 @@ type Server struct {
 	dashboardCache    map[string]dashboardCacheEntry
 	dashboardFlightMu sync.Mutex
 	dashboardFlights  map[string]*dashboardFlight
+	// 保留策略按天执行，记录上一次运行时间避免每分钟重复扫描。
+	retentionMu   sync.Mutex
+	lastRetention time.Time
 }
 
 const dashboardCacheTTL = 20 * time.Second

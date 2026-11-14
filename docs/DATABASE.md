@@ -44,12 +44,38 @@ sudo docker compose -p alien-panel -f /opt/alien-panel/deploy/docker-compose.yml
   -v /opt/alien-panel/release/xpanel-db-maintenance:/usr/local/bin/xpanel-db-maintenance:ro \
   -v /var/backups/alien-panel:/backups \
   --entrypoint /usr/local/bin/xpanel-db-maintenance central backup \
-  --database /var/lib/xpanel-central/panel.db --backup-dir /backups --retention 14
+  --database /var/lib/xpanel-central/panel.db --backup-dir /backups --retention 3
 ```
 
 `backup` 使用 SQLite `VACUUM INTO`，包含已提交的 WAL 数据，不需要直接复制 `.db-wal` 或 `.db-shm`。`verify` 会执行 `integrity_check` 和 `foreign_key_check`。
 
-## 4. 升级迁移
+## 4. 历史数据保留
+
+数据库里增长最快的是原始流量快照：每个 Inbound 每次 Agent 同步写一行。小时级汇总
+（`traffic_hourly_rollups`）已经覆盖趋势与统计口径，所以原始快照只需要覆盖页面能
+查询的时间范围。
+
+服务端默认每天清理一次，保留窗口可通过环境变量调整（`0` 表示永久保留）：
+
+| 变量 | 默认 | 说明 |
+|---|---|---|
+| `XPANEL_RETENTION_SNAPSHOT_DAYS` | `90` | 原始流量快照保留天数 |
+| `XPANEL_RETENTION_SYNC_RUN_DAYS` | `30` | Agent 同步运行记录保留天数 |
+| `XPANEL_RETENTION_EVENT_DAYS` | `180` | 已处理事件保留天数（未处理事件永不清理） |
+| `XPANEL_RETENTION_INTERVAL` | `24h` | 清理任务的执行间隔 |
+
+手工执行同样的清理，并可顺带回收磁盘：
+
+```bash
+xpanel-db-maintenance prune --database ./data/panel.db \
+  --snapshot-days 90 --sync-run-days 30 --event-days 180 --vacuum
+```
+
+注意：`DELETE` 只把页归还给 SQLite 复用，文件本身不会变小；数据库大小会在达到稳态
+后停止增长。需要真正回收磁盘空间时执行 `VACUUM`（`prune --vacuum` 或
+`xpanel-db-maintenance vacuum`），它会重建文件，期间需要约等于数据库大小的临时空间。
+
+## 5. 升级迁移
 
 Docker 升级重新执行一键脚本即可；它不会覆盖 `/opt/alien-panel/.env` 或 `central-data` volume。服务启动时会自动执行尚未应用的 SQLite 迁移，包括客户生命周期迁移 `024_client_lifecycle.sql` 和流量小时汇总迁移 `025_traffic_hourly_rollups.sql`。现有分钟快照不会删除；中央服务启动后会在后台分批回填汇总，并在日志中输出处理进度和完成标记。回填期间服务保持可用，7/30 天仍走原始数据查询；出现 `traffic hourly rollups ready` 后才切换到汇总查询。手动 systemd 部署时先备份，再执行：
 
@@ -69,13 +95,13 @@ XPANEL_DATABASE=/var/lib/xpanel-central/panel.db \
 /usr/local/bin/xpanel-db-maintenance traffic-rollup
 ```
 
-## 5. 管理页面备份与恢复
+## 6. 管理页面备份与恢复
 
 登录管理页面后打开“数据备份”，点击“创建并下载备份”即可生成一致性 SQLite 文件。下载接口只允许管理员访问，备份生成在临时目录，响应完成后自动删除临时文件。
 
 恢复时选择本系统生成的 `.sqlite3` 文件并确认。服务会先校验 SQLite 完整性和外键，再创建恢复前安全快照，原子替换数据库并重新打开连接；任何失败都会保留当前数据。恢复成功后所有旧管理员会话失效，需要重新登录。备份文件包含用户、节点、入站、出口 IP、账单、流量、事件和审计历史，请离线妥善保管。
 
-## 6. 恢复
+## 7. 恢复
 
 恢复前停止中央服务并确认备份来源：
 

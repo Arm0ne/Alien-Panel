@@ -51,9 +51,9 @@ const cliCommands = [
   },
   {
     key: 'backup',
-    title: '手动备份（保留 14 份）',
+    title: '手动备份（保留 3 份）',
     desc: '在服务外生成一份带保留策略的备份，适合脚本化定时任务。',
-    command: 'xpanel-central-db backup --database ./data/panel.db --backup-dir ./data/backups --retention 14'
+    command: 'xpanel-central-db backup --database ./data/panel.db --backup-dir ./data/backups --retention 3'
   }
 ];
 
@@ -377,7 +377,7 @@ onMounted(() => {
         </table>
         <div class="b-help-note">
           备份文件位于服务器数据库同级的 <code>backups</code> 目录；「最新一份」不可删除，避免误删后没有可恢复快照。
-          服务器最多保留最近 14 份，更早的会在新建备份时自动清理。
+          服务器最多保留最近 3 份，更早的会在新建备份时自动清理。
         </div>
       </div>
     </section>

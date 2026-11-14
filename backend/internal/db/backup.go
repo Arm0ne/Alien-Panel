@@ -17,7 +17,7 @@ import (
 )
 
 const (
-	DefaultBackupRetention = 14
+	DefaultBackupRetention = 3
 	backupPrefix           = "panel-"
 	backupSuffix           = ".sqlite3"
 )
