@@ -157,6 +157,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /api/costs/summary", s.requireAuth(http.HandlerFunc(s.finance)))
 	mux.Handle("GET /api/events/summary", s.requireAuth(http.HandlerFunc(s.eventSummary)))
 	mux.Handle("POST /api/events/read-all", s.requireAuth(http.HandlerFunc(s.markAllEventsRead)))
+	mux.Handle("POST /api/events/prune", s.requireAuth(http.HandlerFunc(s.pruneEvents)))
 	mux.Handle("POST /api/events/{id}/read", s.requireAuth(http.HandlerFunc(s.markEventRead)))
 	mux.Handle("POST /api/events/{id}/reset-user", s.requireAuth(http.HandlerFunc(s.resetUserFromReplacementEvent)))
 	mux.Handle("POST /api/events/{id}/resolve", s.requireAuth(http.HandlerFunc(s.resolveEvent)))

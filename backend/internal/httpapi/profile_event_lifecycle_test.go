@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 // profileEventCounts 返回指定用户的待办/已关闭事件数量。
@@ -202,5 +203,117 @@ WHERE event_type = 'new_user_profile_required' AND resource_id = ?
 	}
 	if strings.Contains(message, "改名前") {
 		t.Fatalf("event message still shows the old name: %q", message)
+	}
+}
+
+// TestDismissedProfileEventIsNotRecreatedWhileInboundUnusable 防止回退：
+// 入站停用时，事件关闭后不得在下次同步重新创建，否则会形成每分钟一条的循环。
+func TestDismissedProfileEventIsNotRecreatedWhileInboundUnusable(t *testing.T) {
+	server, database := testServer(t)
+	ts := httptest.NewServer(server.Handler())
+	defer ts.Close()
+
+	login := doJSON(t, ts.Client(), http.MethodPost, ts.URL+"/api/auth/login", "", map[string]string{
+		"userName": "admin", "password": "test-password",
+	})
+	token := login["data"].(map[string]any)["token"].(string)
+
+	created := doJSON(t, ts.Client(), http.MethodPost, ts.URL+"/api/nodes", token, map[string]any{
+		"name": "循环复现线路机", "type": "relay",
+	})
+	nodeData := created["data"].(map[string]any)
+	nodeKey := nodeData["nodeKey"].(string)
+	agentToken := nodeData["token"].(string)
+
+	syncDisabled := func(syncID, observedAt string) {
+		payload := map[string]any{
+			"node_key":    nodeKey,
+			"sync_id":     syncID,
+			"observed_at": observedAt,
+			"status":      map[string]any{"agent_version": "v1.0.4", "xray_running": true},
+			"inbounds": []any{map[string]any{
+				"remote_id": 8810, "tag": "loop-test", "remark": "循环测试入站",
+				"protocol": "vless", "port": 443, "listen": "0.0.0.0", "enable": false,
+				"expiry_time": 1900000000, "up": 1, "down": 2, "all_time": 3,
+				"clients": []any{map[string]any{
+					"remote_id": "loop-client", "email": "loop@example.com", "enable": false,
+					"expiry_time": 1900000000, "up": 1, "down": 2, "all_time": 3,
+				}},
+			}},
+		}
+		if result := doJSON(t, ts.Client(), http.MethodPost, ts.URL+"/api/agent/v1/sync", agentToken, payload); result["code"] != successCode {
+			t.Fatalf("agent sync %s = %#v", syncID, result)
+		}
+	}
+
+	// 连续三次同步：入站始终停用，事件应最多只保留历史 1 条且没有待处理
+	syncDisabled("loop-sync-1", "2026-10-04T00:00:00Z")
+	syncDisabled("loop-sync-2", "2026-10-04T00:01:00Z")
+	syncDisabled("loop-sync-3", "2026-10-04T00:02:00Z")
+
+	var total, open int
+	if err := database.QueryRow(`SELECT COUNT(*) FROM node_events WHERE event_type = 'new_user_profile_required'`).Scan(&total); err != nil {
+		t.Fatalf("count events: %v", err)
+	}
+	if err := database.QueryRow(`SELECT COUNT(*) FROM node_events
+WHERE event_type = 'new_user_profile_required' AND COALESCE(event_status, 'open') NOT IN ('resolved', 'dismissed')`).Scan(&open); err != nil {
+		t.Fatalf("count open events: %v", err)
+	}
+	if total > 1 {
+		t.Fatalf("dismissed event recreated %d times while inbound disabled", total)
+	}
+	if open != 0 {
+		t.Fatalf("open events = %d while inbound disabled, want 0", open)
+	}
+}
+
+// TestPruneEventsEndpointDeletesSettledHistory 校验运营可主动清理已处理事件，
+// 且待处理事件不会被删除。
+func TestPruneEventsEndpointDeletesSettledHistory(t *testing.T) {
+	server, database := testServer(t)
+	ts := httptest.NewServer(server.Handler())
+	defer ts.Close()
+
+	login := doJSON(t, ts.Client(), http.MethodPost, ts.URL+"/api/auth/login", "", map[string]string{
+		"userName": "admin", "password": "test-password",
+	})
+	token := login["data"].(map[string]any)["token"].(string)
+
+	// 用相对当前时间的日期，避免测试随着时间推移失效
+	old := time.Now().UTC().AddDate(0, 0, -100).Format(time.RFC3339Nano)
+	recent := time.Now().UTC().AddDate(0, 0, -1).Format(time.RFC3339Nano)
+	for _, item := range []struct{ id, status, createdAt string }{
+		{"old-resolved", "resolved", old},
+		{"old-dismissed", "dismissed", old},
+		{"old-open", "open", old},
+		{"recent-resolved", "resolved", recent},
+	} {
+		if _, err := database.Exec(`INSERT INTO node_events (id, event_type, severity, message, created_at, event_status)
+VALUES (?, 'sync_failed', 'warning', '清理测试', ?, ?)`, item.id, item.createdAt, item.status); err != nil {
+			t.Fatalf("seed event %s: %v", item.id, err)
+		}
+	}
+
+	pruned := doJSON(t, ts.Client(), http.MethodPost, ts.URL+"/api/events/prune", token, map[string]any{"olderThanDays": 30})
+	if pruned["code"] != successCode {
+		t.Fatalf("prune response = %#v", pruned)
+	}
+	deleted, _ := pruned["data"].(map[string]any)["deleted"].(float64)
+	if deleted < 2 {
+		t.Fatalf("deleted = %v, want at least 2", pruned["data"])
+	}
+	var remaining int
+	if err := database.QueryRow(`SELECT COUNT(*) FROM node_events`).Scan(&remaining); err != nil {
+		t.Fatal(err)
+	}
+	// 剩下：old-open（未处理必须保留）、recent-resolved（窗口内）
+	if remaining != 2 {
+		t.Fatalf("remaining events = %d, want 2", remaining)
+	}
+	if err := database.QueryRow(`SELECT COUNT(*) FROM node_events WHERE id = 'old-open'`).Scan(&remaining); err != nil {
+		t.Fatal(err)
+	}
+	if remaining != 1 {
+		t.Fatalf("pending event was pruned")
 	}
 }

@@ -64,6 +64,9 @@ sudo docker compose -p alien-panel -f /opt/alien-panel/deploy/docker-compose.yml
 | `XPANEL_RETENTION_EVENT_DAYS` | `180` | 已处理事件保留天数（未处理事件永不清理） |
 | `XPANEL_RETENTION_INTERVAL` | `24h` | 清理任务的执行间隔 |
 
+事件中心页面右上角的「清理已处理」按钮等价于只清理事件（默认 30 天前的已处理事件），
+适合日常维护；服务端每天也会自动按上面的窗口清理一次。
+
 手工执行同样的清理，并可顺带回收磁盘：
 
 ```bash

@@ -1035,6 +1035,23 @@ paths:
       summary: Mark all public events as read
       responses:
         '200': { description: Events marked as read }
+  /events/prune:
+    post:
+      summary: Delete settled event history
+      description: >-
+        Removes resolved and dismissed events older than the requested window.
+        Pending events are never deleted. Defaults to 30 days when the window
+        is missing or out of range.
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                olderThanDays: { type: integer, minimum: 1, maximum: 3650, default: 30 }
+      responses:
+        '200': { description: Deleted row count and the applied window }
   /events/{id}/read:
     parameters:
       - name: id

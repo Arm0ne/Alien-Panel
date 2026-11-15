@@ -91,6 +91,15 @@ export function deleteServerBackup(name: string) {
   });
 }
 
+/** 清理已处理的歷史事件（未处理事件不受影响）。 */
+export function pruneEvents(olderThanDays: number) {
+  return request<{ deleted: number; olderThanDays: number }>({
+    url: '/events/prune',
+    method: 'post',
+    data: { olderThanDays }
+  });
+}
+
 export function fetchUsers(params: Api.Central.PageParams = {}) {
   return request<Api.Central.UserListResult>({ url: '/users', params });
 }

@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	centraldb "xpanel-central/backend/internal/db"
 )
 
 // pendingEventFilter returns the shared predicate for operator-actionable
@@ -275,8 +277,13 @@ WHERE event_type = 'new_user_profile_required' AND resource_type = 'user' AND re
 	if dismissed == 0 {
 		return nil
 	}
+	// 只有主入站确实可用时才重新提醒，否则会和 dismissUnusableNewUserProfileEventsTx
+	// 形成「关闭 → 重开 → 再关闭」的每分钟循环。
 	var unpriced int
 	if err := tx.QueryRow(`SELECT COUNT(*) FROM users u
+JOIN user_inbounds ui ON ui.user_id = u.id AND ui.is_primary = 1 AND ui.active_to IS NULL
+JOIN inbounds i ON i.id = ui.inbound_id AND i.deleted_at IS NULL AND i.enable = 1 AND i.kind = 'user'
+JOIN nodes n ON n.id = i.node_id AND n.deleted_at IS NULL AND n.enabled = 1 AND n.type = 'relay'
 WHERE u.id = ? AND u.deleted_at IS NULL
   AND COALESCE(u.billing_type, 'paid') = 'paid'
   AND COALESCE(u.billing_amount, u.monthly_fee, 0) <= 0
@@ -401,4 +408,28 @@ WHERE visibility = 'public' AND acknowledged = 0 AND event_status NOT IN ('resol
 		return
 	}
 	writeSuccess(w, map[string]any{"pendingCount": pending, "unreadCount": unread, "generatedAt": time.Now().UTC().Format(time.RFC3339Nano)})
+}
+
+// pruneEvents 清理已处理（resolved / dismissed）的历史事件。
+// 运营可以用它主动回收事件中心的体积，未处理事件永远不会被删除。
+func (s *Server) pruneEvents(w http.ResponseWriter, r *http.Request) {
+	var payload struct {
+		OlderThanDays int `json:"olderThanDays"`
+	}
+	if err := decodeJSON(r, &payload); err != nil {
+		writeFailure(w, http.StatusBadRequest, validationCode, "invalid prune payload")
+		return
+	}
+	days := payload.OlderThanDays
+	if days < 1 || days > 3650 {
+		days = 30
+	}
+	result, err := centraldb.PruneHistoricalData(r.Context(), s.db, centraldb.RetentionOptions{EventDays: days})
+	if err != nil {
+		s.logger.Error("prune settled events", "error", err)
+		writeFailure(w, http.StatusInternalServerError, internalErrorCode, "清理事件失败")
+		return
+	}
+	s.writeAuditLog(r, "events.prune", "event", "settled", nil, map[string]any{"olderThanDays": days, "deleted": result.Events})
+	writeSuccess(w, map[string]any{"deleted": result.Events, "olderThanDays": days})
 }

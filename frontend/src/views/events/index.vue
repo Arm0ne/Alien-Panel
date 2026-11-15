@@ -8,6 +8,7 @@ import {
   fetchEventSummary,
   fetchEvents,
   markAllEventsRead,
+  pruneEvents,
   markEventRead,
   resetUserFromReplacementEvent,
   rejectUserRenewal,
@@ -201,6 +202,11 @@ function isClientReplacement(row: Api.Central.EventSummary) {
   return row.type === 'client_set_replacement_detected' && row.status !== 'resolved' && row.status !== 'dismissed';
 }
 
+// resolved 与 dismissed 都属于已结束状态，不应再显示处理按钮
+function isOpenEvent(row: Api.Central.EventSummary) {
+  return row.status !== 'resolved' && row.status !== 'dismissed';
+}
+
 function isNewUserProfile(row: Api.Central.EventSummary) {
   return row.type === 'new_user_profile_required' && row.status !== 'resolved' && row.status !== 'dismissed';
 }
@@ -270,7 +276,7 @@ function hasRowActions(row: Api.Central.EventSummary) {
     isRenewal(row) ||
     isNewUserProfile(row) ||
     isClientReplacement(row) ||
-    (row.status !== 'resolved' && Boolean(row.actionType)) ||
+    (isOpenEvent(row) && Boolean(row.actionType)) ||
     (!row.acknowledged && canMarkRead(row)) ||
     (!isRenewal(row) && !isNewUserProfile(row) && !isClientReplacement(row) && hasUserId(row))
   );
@@ -541,6 +547,29 @@ async function retrySync(row: Api.Central.EventSummary) {
   window.$message?.success('同步请求已提交');
 }
 
+// 清理 30 天前的已处理事件，未处理事件不受影响
+function pruneSettledEvents() {
+  window.$dialog?.warning({
+    title: '清理已处理事件',
+    content: '将删除 30 天前已处理（含自动关闭）的事件记录，未处理事件不受影响。此操作不可撤销。',
+    positiveText: '确认清理',
+    negativeText: '取消',
+    maskClosable: false,
+    onPositiveClick: async () => {
+      actionLoading.value = 'prune';
+      const { data, error } = await pruneEvents(30);
+      actionLoading.value = '';
+      if (error || !data) {
+        window.$message?.error('清理事件失败，请稍后重试');
+        return;
+      }
+      window.$message?.success(`已清理 ${data.deleted} 条已处理事件`);
+      notifyEventChanged();
+      void reloadAll();
+    }
+  });
+}
+
 async function readAll() {
   actionLoading.value = 'all';
   const { error } = await markAllEventsRead();
@@ -614,6 +643,9 @@ onMounted(() => {
         </button>
         <button class="e-btn is-soft" type="button" :disabled="actionLoading === 'all'" @click="readAll">
           <SvgIcon icon="mdi:check-all" class="e-btn-ico" />全部标为已读
+        </button>
+        <button class="e-btn is-ghost" type="button" :disabled="actionLoading === 'prune'" @click="pruneSettledEvents">
+          <SvgIcon icon="mdi:delete-sweep-outline" class="e-btn-ico" />清理已处理
         </button>
       </div>
     </header>
@@ -827,7 +859,7 @@ onMounted(() => {
                       关闭
                     </button>
                   </template>
-                  <template v-else-if="row.status !== 'resolved' && row.actionType">
+                  <template v-else-if="isOpenEvent(row) && row.actionType">
                     <button
                       class="e-btn e-btn-xs"
                       type="button"
