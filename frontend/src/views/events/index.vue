@@ -458,6 +458,23 @@ function changePage(page: number) {
   void loadEvents();
 }
 
+// 在「未读」「待处理」这类按状态过滤的标签下，事件处理完就不再属于当前列表，
+// 直接本地移除，避免出现「已读/已处理」还留在未读页、必须翻页才消失的问题。
+function removeFromFilteredList(row: Api.Central.EventSummary) {
+  if (filters.tab === 'all') return false;
+  const index = rows.value.findIndex(item => item.id === row.id);
+  if (index >= 0) rows.value.splice(index, 1);
+  total.value = Math.max(0, total.value - 1);
+  if (filters.tab === 'unread') unreadCount.value = Math.max(0, (unreadCount.value ?? 1) - 1);
+  if (filters.tab === 'pending') pendingCount.value = Math.max(0, (pendingCount.value ?? 1) - 1);
+  // 当前页被清空时回到上一页，保证仍能看到数据
+  if (rows.value.length === 0 && filters.page > 1) {
+    filters.page -= 1;
+    void loadEvents();
+  }
+  return true;
+}
+
 async function readEvent(row: Api.Central.EventSummary) {
   if (row.acknowledged || !canMarkRead(row)) return;
   actionLoading.value = `read:${row.id}`;
@@ -467,8 +484,11 @@ async function readEvent(row: Api.Central.EventSummary) {
     window.$message?.error('标记已读失败');
     return;
   }
-  row.acknowledged = true;
+  if (!removeFromFilteredList(row)) {
+    row.acknowledged = true;
+  }
   notifyEventChanged();
+  void loadStats();
 }
 
 function openRenewalModal(row: Api.Central.EventSummary) {
@@ -610,10 +630,18 @@ async function readAll() {
     window.$message?.error('批量标记已读失败');
     return;
   }
-  const changed = rows.value.filter(row => canMarkRead(row)).length;
-  rows.value.forEach(row => {
-    if (canMarkRead(row)) row.acknowledged = true;
-  });
+  const changed = filters.tab === 'unread' ? total.value : rows.value.filter(row => canMarkRead(row)).length;
+  if (filters.tab === 'unread') {
+    // 未读标签下批量标记后整页都应消失
+    rows.value = [];
+    total.value = 0;
+    filters.page = 1;
+    unreadCount.value = 0;
+  } else {
+    rows.value.forEach(row => {
+      if (canMarkRead(row)) row.acknowledged = true;
+    });
+  }
   window.$message?.success(changed > 0 ? `已标记 ${changed} 条事件为已读` : '当前没有需要标记的未读事件');
   notifyEventChanged();
   void loadStats();
