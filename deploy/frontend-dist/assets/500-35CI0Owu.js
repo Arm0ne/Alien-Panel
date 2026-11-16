@@ -1,1 +1,0 @@
-import{Bi as e,Ki as t,na as n}from"./router-CwtapiFK.js";import{t as r}from"./exception-base-BK4x3Zln.js";var i=t({name:`500`,__name:`index`,setup(t){return(t,i)=>{let a=r;return n(),e(a,{type:`500`})}}});export{i as default};

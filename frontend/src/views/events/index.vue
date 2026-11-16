@@ -578,9 +578,11 @@ async function readAll() {
     window.$message?.error('批量标记已读失败');
     return;
   }
+  const changed = rows.value.filter(row => canMarkRead(row)).length;
   rows.value.forEach(row => {
     if (canMarkRead(row)) row.acknowledged = true;
   });
+  window.$message?.success(changed > 0 ? `已标记 ${changed} 条事件为已读` : '当前没有需要标记的未读事件');
   notifyEventChanged();
   void loadStats();
 }
