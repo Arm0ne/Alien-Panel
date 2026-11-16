@@ -3214,7 +3214,10 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 	case "required":
 		where = append(where, "e.requires_action = 1 AND e.event_status NOT IN ('resolved', 'dismissed')")
 	case "unread":
-		where = append(where, "e.acknowledged = 0 AND e.event_status NOT IN ('resolved', 'dismissed')")
+		// 与 eventSummary 的 unreadCount / markAllEventsRead 保持同一口径：
+		// 只统计通知类未读；需要运营动作的事件归入 pending。
+		where = append(where, `e.acknowledged = 0 AND e.event_status NOT IN ('resolved', 'dismissed')
+  AND e.requires_action = 0 AND NULLIF(TRIM(e.action_type), '') IS NULL`)
 	case "resolved":
 		where = append(where, "e.event_status = 'resolved'")
 	case "open":

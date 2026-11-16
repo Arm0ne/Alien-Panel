@@ -1,0 +1,1 @@
+import{Bi as e,Ki as t,na as n}from"./router-DxRn2447.js";import{t as r}from"./exception-base-DXLGA3Ox.js";var i=t({name:`403`,__name:`index`,setup(t){return(t,i)=>{let a=r;return n(),e(a,{type:`403`})}}});export{i as default};

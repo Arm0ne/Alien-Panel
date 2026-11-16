@@ -1135,7 +1135,11 @@ components:
     Status:
       name: status
       in: query
-      description: For events, use pending, alerts, open, unread, or resolved.
+      description: >-
+        For events, use pending, alerts, open, unread, or resolved.
+        `pending` returns events that need an operator action; `unread` returns
+        notification-style events that are still unacknowledged and matches the
+        unreadCount reported by /events/summary and cleared by /events/read-all.
       schema: { type: string }
     Region:
       name: region

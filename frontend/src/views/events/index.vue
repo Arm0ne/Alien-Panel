@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue';
-import { useRouter } from 'vue-router';
+import { useRoute, useRouter } from 'vue-router';
 import { NDatePicker, NInputNumber, NPagination, NSelect } from 'naive-ui';
 import {
   confirmUserRenewal,
@@ -20,7 +20,7 @@ import SvgIcon from '@/components/custom/svg-icon.vue';
 
 defineOptions({ name: 'EventManagement' });
 
-type EventTab = 'pending' | 'all';
+type EventTab = 'pending' | 'unread' | 'all';
 type TimeRange = 'all' | '1d' | '7d' | '30d';
 
 const loading = ref(false);
@@ -35,6 +35,7 @@ const statsReady = ref(false);
 const statsCapped = ref(false);
 const allCount = ref<number | null>(null);
 const pendingCount = ref<number | null>(null);
+const unreadCount = ref<number | null>(null);
 const renewalTarget = ref<Api.Central.EventSummary | null>(null);
 // 续费确认允许调整金额与收款日期：Agent 给出的只是建议值
 const renewForm = reactive({ amount: 0 as number | null, paidAt: '' as string | null });
@@ -327,7 +328,8 @@ function timeRangeBounds(range: TimeRange): { from?: string; to?: string } {
 async function loadEvents() {
   loading.value = true;
   errorMessage.value = '';
-  const status = filters.tab === 'pending' ? 'pending' : undefined;
+  const status =
+    filters.tab === 'pending' ? 'pending' : filters.tab === 'unread' ? 'unread' : undefined;
   const range = timeRangeBounds(filters.timeRange);
   const { data, error } = await fetchEvents({
     keyword: filters.keyword || undefined,
@@ -367,6 +369,7 @@ async function loadStats() {
 
   allCount.value = data.totalCount;
   pendingCount.value = data.pendingCount;
+  unreadCount.value = data.unreadCount;
   statsCapped.value = false;
 
   const typeCount = (type: string) => data.byType.find(item => item.type === type)?.count ?? 0;
@@ -406,6 +409,13 @@ async function loadStats() {
 async function reloadAll() {
   await Promise.all([loadEvents(), loadStats()]);
 }
+
+// 从铃铛跳转时按 ?tab=unread / ?tab=pending 打开对应标签
+const route = useRoute();
+onMounted(() => {
+  const tab = String(route.query.tab || '');
+  if (tab === 'unread' || tab === 'all') filters.tab = tab as EventTab;
+});
 
 function selectTab(value: EventTab) {
   if (filters.tab === value) return;
@@ -614,6 +624,7 @@ const rangeStart = computed(() => (total.value === 0 ? 0 : (filters.page - 1) * 
 const rangeEnd = computed(() => Math.min(filters.page * filters.page_size, total.value));
 const pendingTabCount = computed(() => pendingCount.value ?? 0);
 const allTabCount = computed(() => allCount.value ?? 0);
+const unreadTabCount = computed(() => unreadCount.value ?? 0);
 const renewAmount = computed(() => {
   if (!renewalTarget.value) return 0;
   const amount = Number(renewalTarget.value.payload?.suggestedAmount || 0);
@@ -730,6 +741,10 @@ onMounted(() => {
         <button type="button" :class="{ 'is-active': filters.tab === 'pending' }" @click="selectTab('pending')">
           待处理
           <span class="e-tab-badge is-warn">{{ pendingTabCount }}</span>
+        </button>
+        <button type="button" :class="{ 'is-active': filters.tab === 'unread' }" @click="selectTab('unread')">
+          未读
+          <span class="e-tab-badge is-neutral">{{ unreadTabCount }}</span>
         </button>
         <button type="button" :class="{ 'is-active': filters.tab === 'all' }" @click="selectTab('all')">
           全部事件

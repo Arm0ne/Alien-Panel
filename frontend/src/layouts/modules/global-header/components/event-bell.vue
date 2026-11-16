@@ -75,6 +75,11 @@ function close() {
   open.value = false;
 }
 
+function openUnread() {
+  close();
+  routerPushByKey('events', { query: { tab: 'unread' } });
+}
+
 function openEvents() {
   close();
   routerPushByKey('events');
@@ -122,7 +127,13 @@ onUnmounted(() => {
     <div class="p-4px">
       <div class="mb-10px flex items-center justify-between">
         <span class="text-16px font-600">待处理事件</span>
-        <span class="text-12px text-gray-500">未读 {{ unreadCount }}</span>
+        <button
+          type="button"
+          class="border-0 bg-transparent p-0 text-12px text-gray-500 cursor-pointer hover:text-primary"
+          @click="openUnread"
+        >
+          未读 {{ unreadCount }}
+        </button>
       </div>
       <NEmpty v-if="pendingEvents.length === 0" description="暂无待处理事件" />
       <NList v-else hoverable>
