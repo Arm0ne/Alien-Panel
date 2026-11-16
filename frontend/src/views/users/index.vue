@@ -502,8 +502,10 @@ function resetInitialOrderForm() {
   initialOrderForm.notes = '';
 }
 
+// 用北京时间（UTC+8）表达自然日：原来的 23:59:59Z 会落到次日 07:59，
+// 月末日期因此被归到下一个月，影响财务月份口径。
 function dayToRFC3339(value: string | null, endOfDay = false) {
-  return value ? `${value}T${endOfDay ? '23:59:59' : '00:00:00'}Z` : '';
+  return value ? `${value}T${endOfDay ? '23:59:59' : '00:00:00'}+08:00` : '';
 }
 
 async function createInitialOrder() {

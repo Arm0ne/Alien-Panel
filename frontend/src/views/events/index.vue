@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue';
 import { useRouter } from 'vue-router';
-import { NPagination, NSelect } from 'naive-ui';
+import { NDatePicker, NInputNumber, NPagination, NSelect } from 'naive-ui';
 import {
   confirmUserRenewal,
   fetchEventStats,
@@ -36,6 +36,18 @@ const statsCapped = ref(false);
 const allCount = ref<number | null>(null);
 const pendingCount = ref<number | null>(null);
 const renewalTarget = ref<Api.Central.EventSummary | null>(null);
+// 续费确认允许调整金额与收款日期：Agent 给出的只是建议值
+const renewForm = reactive({ amount: 0 as number | null, paidAt: '' as string | null });
+
+function todayLocalDate() {
+  const now = new Date();
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+}
+
+// 用北京时间表达自然日，避免 23:59:59Z 落到次日而影响财务月份归属
+function dayToBeijingRFC3339(value: string | null) {
+  return value ? `${value}T12:00:00+08:00` : '';
+}
 const replacementTarget = ref<Api.Central.EventSummary | null>(null);
 
 const filters = reactive({
@@ -451,6 +463,8 @@ async function readEvent(row: Api.Central.EventSummary) {
 
 function openRenewalModal(row: Api.Central.EventSummary) {
   renewalTarget.value = row;
+  renewForm.amount = Number(row.payload?.suggestedAmount || 0) > 0 ? Number(row.payload?.suggestedAmount) : 0;
+  renewForm.paidAt = todayLocalDate();
 }
 
 function closeRenewalModal() {
@@ -462,13 +476,21 @@ async function confirmRenewal(row: Api.Central.EventSummary) {
   const userId = payloadValue(row, 'userId');
   const candidateId = payloadValue(row, 'candidateId') || row.resourceId || '';
   if (!userId || !candidateId) return;
+  if (renewForm.amount === null || !Number.isFinite(renewForm.amount) || renewForm.amount < 0) {
+    window.$message?.warning('请填写有效的续费金额');
+    return;
+  }
+  if (!renewForm.paidAt) {
+    window.$message?.warning('请填写实际收款日期');
+    return;
+  }
   modalSaving.value = true;
   actionLoading.value = row.id;
   const billingCycle = payloadValue(row, 'billingCycle');
-  const suggestedAmount = Number(row.payload?.suggestedAmount || 0);
   const { error } = await confirmUserRenewal(userId, candidateId, {
     billingCycle: billingCycle === 'annual' ? 'annual' : 'monthly',
-    amount: suggestedAmount > 0 ? suggestedAmount : undefined
+    amount: renewForm.amount,
+    paidAt: dayToBeijingRFC3339(renewForm.paidAt)
   });
   actionLoading.value = '';
   modalSaving.value = false;
@@ -1004,11 +1026,19 @@ onMounted(() => {
               </div>
             </div>
 
-            <div class="e-amount">
-              <span class="e-amount-label">建议续费金额</span>
-              <strong v-if="renewAmount > 0">{{ formatMoney(renewAmount) }}</strong>
-              <strong v-else class="e-dim">未提供建议金额</strong>
-              <span class="e-amount-cycle">{{ renewCycleLabel }}</span>
+            <div class="e-grid-2 mt-16">
+              <div class="e-field">
+                <span class="e-field-label">续费金额（CNY）<i class="e-req">*</i></span>
+                <NInputNumber v-model:value="renewForm.amount" :min="0" :max="100000000" :precision="2" size="small" />
+                <span class="e-hint">
+                  Agent 建议 {{ renewAmount > 0 ? formatMoney(renewAmount) : '未提供' }} · {{ renewCycleLabel }}，可在此调整
+                </span>
+              </div>
+              <div class="e-field">
+                <span class="e-field-label">实际收款日期<i class="e-req">*</i></span>
+                <NDatePicker v-model:formatted-value="renewForm.paidAt" type="date" value-format="yyyy-MM-dd" size="small" />
+                <span class="e-hint">决定现金收款归属的月份</span>
+              </div>
             </div>
 
             <div class="e-grid-2 mt-16">
@@ -1367,6 +1397,10 @@ onMounted(() => {
 .e-amount-cycle { margin-left: auto; padding: 2px 8px; border: 1px solid #2a2e35; border-radius: 6px; background: #1d2026; font-size: 12px; color: var(--e-text-2); }
 
 .e-grid-2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+
+.e-req { font-style: normal; color: #f3656f; }
+
+.e-hint { display: block; margin-top: 4px; font-size: 11.5px; line-height: 1.6; color: var(--e-text-4); }
 .e-field { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
 .e-field-label { font-size: 12px; color: #b0b6c1; }
 

@@ -1198,10 +1198,21 @@ components:
         freeReason: { type: string, maxLength: 200 }
     RenewalActionRequest:
       type: object
+      description: >-
+        Every field is optional. `amount` and `paidAt` override the values
+        suggested by the Agent, so an operator can correct the charged amount
+        or the actual payment date before the immutable record is created.
       properties:
         billingCycle: { type: string, enum: [monthly, annual] }
-        amount: { type: number, minimum: 0, maximum: 100000000 }
-        paidAt: { type: string, format: date-time }
+        amount:
+          type: number
+          minimum: 0
+          maximum: 100000000
+          description: Charged amount; defaults to the Agent suggestion.
+        paidAt:
+          type: string
+          format: date-time
+          description: Actual payment timestamp (RFC3339); defaults to now.
         notes: { type: string, maxLength: 2000 }
     RenewalRejectRequest:
       type: object

@@ -453,7 +453,7 @@ b5832f74f54c023ea2c5ed89f5a4f6cc25348f6f84c6d658ba018f34817bd3b7  frontend/src/v
 776f3999d5c2e865498445a016da2111ac2e48fe6492ef70962a0eba71dc3164  frontend/src/views/_builtin/login/index.vue
 fce2e98a53458926d12200d7db3da0e40d2e76ee1386c61b31583bdaa63e3490  frontend/src/views/_builtin/login/modules/pwd-login.vue
 a53021021bc09ab64ea7285b55601a979e07878effcf41a0f07791423fdf294a  frontend/src/views/dashboard/index.vue
-5a59ce4ecbd7d0003e34b6238e22183466417632e2b734db727df92f56638f12  frontend/src/views/events/index.vue
+2ca157f3a9508764dd33b12f454dd521f4cd64491e564ae0b95c07d40c78c9c8  frontend/src/views/events/index.vue
 3680424a622514c01636f9bddd68348f45c3be85f335fdab8b07a77a95d0f283  frontend/src/views/exit-ips/index.vue
 10314d4a69d23f4d6bca77ed21f11a5828d3247bff63b89e54fe2bfed4a1875e  frontend/src/views/finance/index.vue
 48882adea17106d523047db97993238c572ae8815295d11ba6041b424f1fb357  frontend/src/views/nodes-detail/[id].vue
