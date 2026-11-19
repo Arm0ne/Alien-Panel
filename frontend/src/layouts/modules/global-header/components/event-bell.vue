@@ -15,6 +15,11 @@ const open = ref(false);
 let pollTimer: ReturnType<typeof setInterval> | undefined;
 const knownIds = new Set<string>();
 const alertedIds = new Set(sessionStg.get('eventAlertedIds') || []);
+// 首次拿到事件列表只建立基线，不弹窗：进入页面前就存在的待处理事件不应打扰运营。
+let baselineReady = false;
+// 只提醒最近发生的事件。后台标签页的轮询会被浏览器节流，期间累积的旧事件
+// 不应该在下次刷新（例如保存用户资料）时突然弹窗。
+const ALERT_WINDOW_MS = 10 * 60 * 1000;
 
 function formatDate(value: string) {
   const date = new Date(value);
@@ -30,10 +35,18 @@ async function readPendingEvents() {
 }
 
 function alertPendingEvents(items: Api.Central.EventSummary[]) {
-  const newItems = items.filter(item => item.requiresAction && !knownIds.has(item.id) && !alertedIds.has(item.id));
-  const shouldAlert = newItems.length > 0;
+  const unseen = items.filter(item => item.requiresAction && !knownIds.has(item.id) && !alertedIds.has(item.id));
   items.forEach(item => knownIds.add(item.id));
-  if (!shouldAlert) return;
+  if (!baselineReady) {
+    baselineReady = true;
+    return;
+  }
+  const now = Date.now();
+  const newItems = unseen.filter(item => {
+    const occurredAt = Date.parse(item.occurredAt || '');
+    return Number.isNaN(occurredAt) || now - occurredAt <= ALERT_WINDOW_MS;
+  });
+  if (newItems.length === 0) return;
   const count = newItems.length;
   newItems.forEach(item => alertedIds.add(item.id));
   sessionStg.set('eventAlertedIds', [...alertedIds].slice(-100));
